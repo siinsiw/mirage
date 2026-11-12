@@ -235,6 +235,15 @@ func droppedOnTheWay(err error) bool {
 	if errors.Is(err, ErrFiltered) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
+	// Something that is not TLS at all came back - a filter's block page
+	// injected in place of the ServerHello. Measured on 2026-11-12 on a home
+	// line in Iran: a hello naming *.totallyacdn.com got exactly this 0.3 s
+	// in, while the same address without a name shook hands normally. Not
+	// retrying here would lose Windscribe on that line altogether.
+	var rh tls.RecordHeaderError
+	if errors.As(err, &rh) {
+		return true
+	}
 	// A reset arrives as the socket's own error, wrapped in *net.OpError -
 	// ECONNRESET on Unix, WSAECONNRESET on Windows, and neither is spelled
 	// the same way, so the wrapper is what is checked. Nothing verify returns

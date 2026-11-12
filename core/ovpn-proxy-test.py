@@ -667,6 +667,15 @@ def test_sni_fallback():
     check('a named handshake that works keeps being named', e.asked,
           ['nl-005.totallyacdn.com', 'nl-005.totallyacdn.com'])
 
+    def block_page():
+        # What OpenSSL raises when a filter answers the hello with HTTP.
+        err = ssl.SSLError(1, '[SSL: WRONG_VERSION_NUMBER] wrong version number')
+        err.reason = 'WRONG_VERSION_NUMBER'
+        return err
+    e = stubbed('ch-017.totallyacdn.com', block_page)
+    check('a block page in place of the ServerHello falls back and connects',
+          (e.connect(), e.asked), ('tls', ['ch-017.totallyacdn.com', None]))
+
     e = stubbed('de-fra.prod.surfshark.com', ConnectionResetError)
     e.connect()
     check('a Surfshark exit is asked once, without a name', e.asked, [None])

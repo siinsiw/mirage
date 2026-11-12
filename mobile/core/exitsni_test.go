@@ -154,6 +154,11 @@ func trustOnly(pool *x509.CertPool) func() {
 type standIn struct {
 	ln              net.Listener
 	named, nameless atomic.Int32
+	// injectNamed answers a named hello with a plain-HTTP block page instead
+	// of resetting it - what Iran's filtering does on a home line (measured
+	// 2026-11-12: "wrong version number" 0.3 s into a hello naming
+	// *.totallyacdn.com, while the same address without a name shook hands).
+	injectNamed bool
 }
 
 type replayConn struct {
@@ -197,6 +202,10 @@ func (s *standIn) serve(c net.Conn, cert tls.Certificate, cutNamed bool) {
 	hello := append(head, body...)
 	if sniFrom(hello) != "" {
 		s.named.Add(1)
+		if s.injectNamed {
+			_, _ = c.Write([]byte("HTTP/1.1 403 Forbidden\r\nLocation: http://10.10.34.36/\r\n\r\n"))
+			return
+		}
 		if cutNamed {
 			if tcp, ok := c.(*net.TCPConn); ok {
 				_ = tcp.SetLinger(0) // close with a reset, not a FIN
@@ -246,6 +255,24 @@ func TestCutNamedHandshakeFallsBackToNameless(t *testing.T) {
 	conn.Close()
 	if n, m := s.named.Load(), s.nameless.Load(); n != 1 || m != 2 {
 		t.Fatalf("the second dial asked with the name again: %d named, %d nameless", n, m)
+	}
+}
+
+func TestBlockPageOnNamedHandshakeFallsBackToNameless(t *testing.T) {
+	const name = "ch-017.totallyacdn.com"
+	cert, pool := testCert(t, name)
+	defer trustOnly(pool)()
+	s := startStandIn(t, cert, false)
+	s.injectNamed = true
+	e := s.exit(name)
+
+	conn, err := e.Dial(3 * time.Second)
+	if err != nil {
+		t.Fatalf("a line that answers the named hello with a block page left no way in: %v", err)
+	}
+	conn.Close()
+	if n, m := s.named.Load(), s.nameless.Load(); n != 1 || m != 1 {
+		t.Fatalf("wanted one named hello then one nameless, got %d named and %d nameless", n, m)
 	}
 }
 

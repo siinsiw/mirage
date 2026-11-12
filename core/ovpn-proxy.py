@@ -414,6 +414,14 @@ def cut_on_the_way(e):
         return True
     if not getattr(e, 'during_tls', False):
         return False
+    # WRONG_VERSION_NUMBER and its kin: something that is not TLS came back -
+    # a filter's block page injected in place of the ServerHello. Measured on
+    # 2026-11-12 on a home line in Iran: a hello naming *.totallyacdn.com got
+    # this 0.3 s in, while the same address without a name shook hands.
+    if isinstance(e, ssl.SSLError) and getattr(e, 'reason', None) in (
+            'WRONG_VERSION_NUMBER', 'UNKNOWN_PROTOCOL', 'HTTP_REQUEST',
+            'RECORD_LAYER_FAILURE', 'PACKET_LENGTH_TOO_LONG'):
+        return True
     return isinstance(e, (ConnectionError, ssl.SSLEOFError,
                           ssl.SSLZeroReturnError, socket.timeout,
                           TimeoutError))
