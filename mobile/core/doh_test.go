@@ -13,12 +13,13 @@ import (
 // comes back as a machine on your own LAN has to be refused rather than
 // pinned. 10.10.34.35 is the address this repo was written against.
 func TestForgedAddressesAreRefused(t *testing.T) {
-	for _, s := range []string{"10.10.34.35", "127.0.0.1", "192.168.1.1", "0.0.0.0", "169.254.1.1"} {
+	for _, s := range []string{"10.10.34.35", "127.0.0.1", "192.168.1.1", "0.0.0.0", "169.254.1.1",
+		"100.64.0.1", "100.127.255.254", "198.18.0.1", "198.19.255.1", "240.0.0.1", "255.255.255.255"} {
 		if IsPublic(netip.MustParseAddr(s)) {
 			t.Errorf("%s was accepted as a public exit address", s)
 		}
 	}
-	for _, s := range []string{"62.197.152.149", "146.70.160.237", "1.1.1.1"} {
+	for _, s := range []string{"62.197.152.149", "146.70.160.237", "1.1.1.1", "100.128.0.1", "198.20.0.1"} {
 		if !IsPublic(netip.MustParseAddr(s)) {
 			t.Errorf("%s was refused, but it is a real public address", s)
 		}

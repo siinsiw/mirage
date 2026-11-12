@@ -235,6 +235,17 @@ def test_worker_carries_a_listed_connect_straight():
     assert b'hello from the site' in got, got
 
 
+def test_tells_an_iranian_server_address():
+    # The notice beside "Checking the exits" asks this of the user's server.
+    if not split.iran_lists()[1]:
+        print('  (skipped: lists/ is not here)')
+        return
+    assert split.in_iran(['2.144.0.1']) is True
+    assert split.in_iran(['8.8.8.8', '203.0.113.7']) is False
+    assert split.in_iran(['not an address']) is False
+    assert split.in_iran([]) is False
+
+
 if __name__ == '__main__':
     for name, fn in list(globals().items()):
         if name.startswith('test_') and callable(fn):

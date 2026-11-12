@@ -96,11 +96,50 @@ type TunnelServer struct {
 
 	seenPin atomic.Value // string: the certificate the server last showed
 
+	// learnt is the pin taken on first use, when Pin was empty: the
+	// certificate a bare handshake was shown before anything else was sent.
+	// Every connection after it - the one that carries the password included -
+	// has to show the same one. pinMu keeps two first dials from each taking
+	// a different answer.
+	learnt atomic.Value // string
+	pinMu  sync.Mutex
+
 	// Session is the multiplexed session, held between CONNECTs. Nil until
 	// the first one, and dropped whenever it breaks.
 	mu   sync.Mutex
 	sess *smux.Session
 	mode TunnelMode
+
+	// closed is set by Close and never cleared: a server that was stopped
+	// does not dial again, however late a connection that was already on its
+	// way asks it to. done ends a dial in flight when it is closed.
+	closed   atomic.Bool
+	doneOnce sync.Once
+	done     chan struct{}
+}
+
+// ErrServerClosed is a connection asked of a server that was already stopped.
+var ErrServerClosed = errors.New("the connection to the server was stopped")
+
+// stopped is closed when the server is.
+func (t *TunnelServer) stopped() chan struct{} {
+	t.doneOnce.Do(func() { t.done = make(chan struct{}) })
+	return t.done
+}
+
+// bounded is ctx, cut short when the server is closed - so Close does not
+// wait out a dial to an edge that is not answering.
+func (t *TunnelServer) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := t.stopped()
+	go func() {
+		select {
+		case <-stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
 }
 
 // tlsPort is the port to dial: the server's own, or 443 when none is set.
@@ -128,9 +167,22 @@ func NewTunnelServer(domain, password string, edges []string, mode TunnelMode) *
 // list is in the order they were timed, so the first is the quickest and the
 // rest are what to fall back to.
 func (t *TunnelServer) dialEdges(ctx context.Context, timeout time.Duration) (net.Conn, error) {
+	if t.closed.Load() {
+		return nil, ErrServerClosed
+	}
+	ctx, cancel := t.bounded(ctx)
+	defer cancel()
+
 	addrs := t.Edges
 	if len(addrs) == 0 {
 		addrs = []string{t.Domain}
+	}
+
+	// A server by address with no pin yet: its certificate is taken first,
+	// on a handshake that carries nothing, and only then is a connection
+	// made that sends the password - held to that same certificate.
+	if err := t.learnPin(ctx, addrs, timeout); err != nil {
+		return nil, err
 	}
 
 	var last error
@@ -204,12 +256,72 @@ func (t *TunnelServer) SeenPin() string {
 	return s
 }
 
+// pin is the certificate to hold an address to: the one configured, or the
+// one first use took. "" only before either exists.
+func (t *TunnelServer) pin() string {
+	if t.Pin != "" {
+		return t.Pin
+	}
+	s, _ := t.learnt.Load().(string)
+	return s
+}
+
 // tlsConfig is a CA's word for a named server, and the pin for an address.
 func (t *TunnelServer) tlsConfig() *tls.Config {
 	if !t.IsAddress() {
 		return &tls.Config{ServerName: t.Domain}
 	}
-	return PinnedTLS(t.Pin, func(seen string) { t.seenPin.Store(seen) })
+	return PinnedTLS(t.pin(), func(seen string) { t.seenPin.Store(seen) })
+}
+
+// learnPin is SSH's first-connect rule done in the right order. With no pin,
+// the certificate used to be taken during the very handshake whose
+// connection then carried the tunnel password - so whatever answered first
+// was handed the password in the same breath as it was trusted. Here the
+// certificate is read on a TLS handshake of its own, which sends nothing
+// but a ClientHello and is closed at once; it becomes the pin, and the
+// connection that authenticates is refused unless it shows the same one.
+//
+// Nothing to do for a server by name (a CA vouches for it) or one already
+// pinned.
+func (t *TunnelServer) learnPin(ctx context.Context, addrs []string, timeout time.Duration) error {
+	if !t.IsAddress() || t.pin() != "" {
+		return nil
+	}
+	t.pinMu.Lock()
+	defer t.pinMu.Unlock()
+	if t.pin() != "" {
+		return nil
+	}
+	var last error
+	for _, addr := range addrs {
+		raw, err := (&net.Dialer{Timeout: timeout}).DialContext(
+			ctx, "tcp", net.JoinHostPort(addr, strconv.Itoa(tlsPort(t.Port))))
+		if err != nil {
+			last = fmt.Errorf("%s: %w", addr, err)
+			continue
+		}
+		var seen string
+		conn := tls.Client(raw, PinnedTLS("", func(s string) { seen = s }))
+		hctx, cancel := context.WithTimeout(ctx, timeout)
+		err = conn.HandshakeContext(hctx)
+		cancel()
+		conn.Close()
+		if err != nil || seen == "" {
+			if err == nil {
+				err = errors.New("the server showed no certificate")
+			}
+			last = fmt.Errorf("%s: %w", addr, err)
+			continue
+		}
+		t.learnt.Store(seen)
+		t.seenPin.Store(seen)
+		return nil
+	}
+	if last == nil {
+		last = errors.New("no address to take the certificate from")
+	}
+	return last
 }
 
 // PinnedTLS trusts exactly one certificate: the one whose SHA-256 is pin,
@@ -242,6 +354,12 @@ func (t *TunnelServer) session(ctx context.Context, timeout time.Duration) (*smu
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// Refused once closed, before anything else: a connection the stack was
+	// still carrying when the tunnel stopped would otherwise find no session
+	// and dial a fresh one - a websocket nobody would ever close again.
+	if t.closed.Load() {
+		return nil, ErrServerClosed
+	}
 	if t.sess != nil && !t.sess.IsClosed() {
 		return t.sess, nil
 	}
@@ -262,6 +380,12 @@ func (t *TunnelServer) session(ctx context.Context, timeout time.Duration) (*smu
 	if err != nil {
 		conn.Close()
 		return nil, err
+	}
+	// Closed while the dial was under way: Close has already been past the
+	// session it could see, so this one is ended here instead.
+	if t.closed.Load() {
+		sess.Close()
+		return nil, ErrServerClosed
 	}
 	t.sess = sess
 	return sess, nil
@@ -319,6 +443,9 @@ func (t *TunnelServer) Open(target string, timeout time.Duration) (net.Conn, []b
 // http.ReadResponse drains a 200 that has no body and takes the tunnel's
 // first bytes with it. That was measured once already; see exit.go.
 func (t *TunnelServer) connect(conn net.Conn, target string) ([]byte, error) {
+	if err := checkTarget(target); err != nil {
+		return nil, err
+	}
 	auth := base64.StdEncoding.EncodeToString([]byte("relay:" + t.Password))
 	req := "CONNECT " + target + " HTTP/1.1\r\n" +
 		"Host: " + target + "\r\n" +
@@ -365,8 +492,22 @@ func (t *TunnelServer) connect(conn net.Conn, target string) ([]byte, error) {
 	return nil, nil
 }
 
-// Close ends the session. Safe to call twice.
+// Close ends the session for good: nothing dials through this server after
+// it, and a dial already under way is cut short. Safe to call twice. To drop
+// a stalled session and carry on, Reset.
+//
+// The flag goes up before the lock is taken, so a session() holding the lock
+// for a dial sees it the moment that dial ends.
 func (t *TunnelServer) Close() error {
+	if t.closed.CompareAndSwap(false, true) {
+		close(t.stopped())
+	}
+	return t.Reset()
+}
+
+// Reset drops the session, so the next connection dials a fresh one. What a
+// stalled path needs; unlike Close, it leaves the server usable.
+func (t *TunnelServer) Reset() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.sess == nil {

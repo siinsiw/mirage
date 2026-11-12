@@ -52,11 +52,19 @@ var Resolvers = map[string][]string{
 var reserved = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("10.0.0.0/8"),
+	// Carrier-grade NAT: an address inside some carrier's network, which is
+	// where a line that forges answers is just as able to point a name.
+	netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("127.0.0.0/8"),
 	netip.MustParsePrefix("169.254.0.0/16"),
 	netip.MustParsePrefix("172.16.0.0/12"),
+	// Benchmarking (RFC 2544): never routed on the internet, and used by some
+	// middleboxes as their own fake answers.
+	netip.MustParsePrefix("198.18.0.0/15"),
 	netip.MustParsePrefix("192.168.0.0/16"),
+	// Multicast, then the old class E and broadcast above it.
 	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
 }
 
 // IsPublic is whether an address is one a real exit could be at.

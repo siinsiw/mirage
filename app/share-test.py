@@ -75,22 +75,194 @@ def test_engine_does_not_restart_a_worker_already_right():
     assert got == {'applied': 'now', 'moved': False}, got
 
 
-def test_worker_accepts_private_and_refuses_public():
+def test_worker_accepts_only_its_own_subnets():
     px = load_worker()
-    for ok in ('127.0.0.1', '127.5.5.5', '10.0.0.7', '10.255.255.255',
-               '172.16.0.1', '172.31.255.254', '192.168.1.20',
-               '100.64.0.1', '100.127.255.254', '169.254.10.10',
-               '::ffff:192.168.1.20', '::1'):
-        # ::1 is IPv6 loopback, which is not in the IPv4 table; the worker is
-        # an IPv4 socket and never sees it, so it is not required to pass.
-        if ok == '::1':
-            continue
-        assert px.client_allowed(ok), ok
-    for bad in ('8.8.8.8', '1.1.1.1', '172.15.255.255', '172.32.0.1',
-                '100.63.255.255', '100.128.0.0', '192.169.0.1',
-                '11.0.0.1', '169.253.0.1', '::ffff:8.8.8.8',
-                '2001:db8::1', '', 'not an address', None):
-        assert not px.client_allowed(bad), bad
+    import ipaddress
+    # This PC on a home Wi-Fi and an office LAN.
+    nets = (ipaddress.ip_network('192.168.1.0/24'),
+            ipaddress.ip_network('10.20.0.0/16'))
+    for ok in ('127.0.0.1', '127.5.5.5', '192.168.1.20', '192.168.1.254',
+               '10.20.3.4', '::ffff:192.168.1.20'):
+        assert px.client_allowed(ok, nets), ok
+    # Private, but not a network this PC is on; CGNAT and link-local are no
+    # longer anyone's LAN; public is never.
+    for bad in ('192.168.2.20', '10.21.0.1', '10.0.0.7', '172.16.0.1',
+                '100.64.0.1', '100.127.255.254', '169.254.10.10',
+                '8.8.8.8', '1.1.1.1', '::ffff:8.8.8.8', '2001:db8::1',
+                '::1', '', 'not an address', None):
+        assert not px.client_allowed(bad, nets), bad
+    # No adapters read: only the loopback gets in.
+    assert px.client_allowed('127.0.0.1', ())
+    assert not px.client_allowed('192.168.1.20', ())
+
+
+def test_only_private_subnets_count_as_local():
+    px = load_worker()
+    real = px._windows_subnets if os.name == 'nt' else px._posix_subnets
+    fake = [('192.168.1.20', 24), ('100.80.1.1', 10), ('169.254.3.4', 16),
+            ('8.8.4.4', 24), ('10.0.0.5', 0), ('172.20.1.2', 16),
+            ('127.0.0.1', 8)]
+    try:
+        if os.name == 'nt':
+            px._windows_subnets = lambda: fake
+        else:
+            px._posix_subnets = lambda: fake
+        got = {str(n) for n in px.local_subnets(fresh=True)}
+    finally:
+        if os.name == 'nt':
+            px._windows_subnets = real
+        else:
+            px._posix_subnets = real
+        px._SUBNETS.update(at=0.0, nets=())
+    assert got == {'192.168.1.0/24', '172.20.0.0/16'}, got
+
+
+def test_this_machine_really_has_subnets():
+    # The real enumeration, on the machine running the test. A ctypes struct
+    # that misreads the address would leave this empty, and every phone
+    # would be refused with sharing switched on.
+    px = load_worker()
+    raw = px.local_subnets(raw=True)
+    import ipaddress
+    usable = [a for a, _ in raw
+              if not ipaddress.ip_address(a).is_loopback]
+    if not usable:
+        print('  (skipped: no IPv4 network adapter here)')
+        return
+    for addr, prefix in raw:
+        ipaddress.ip_address(addr)
+        assert 0 <= prefix <= 32, (addr, prefix)
+    private = [a for a in usable
+               if any(ipaddress.ip_address(a) in n for n in px.LAN_PRIVATE)]
+    if private:
+        nets = px.local_subnets(fresh=True)
+        assert nets, raw
+        assert any(ipaddress.ip_address(private[0]) in n for n in nets)
+        assert px.client_allowed(private[0])
+    assert set(usable) <= px.own_addresses()
+
+
+def test_a_shared_client_cannot_be_taken_to_this_machine():
+    px = load_worker()
+    own = {'192.168.1.20'}
+    for host in ('127.0.0.1', '[::1]', 'localhost', 'LOCALHOST.', 'x.localhost',
+                 '0.0.0.0', '169.254.169.254', '192.168.1.20', '224.0.0.1',
+                 '::ffff:127.0.0.1', ''):
+        assert px.target_is_this_machine(host, own=own), host
+    for host in ('example.com', '8.8.8.8', '192.168.1.1', '10.0.0.1'):
+        assert not px.target_is_this_machine(host, own=own), host
+
+
+def test_the_share_password_is_asked_for():
+    px = load_worker()
+    import base64 as b64
+    px.LAN_PASSWORD = 'correct horse'
+    try:
+        def head(user, pw):
+            token = b64.b64encode(f'{user}:{pw}'.encode()).decode()
+            return (b'CONNECT example.com:443 HTTP/1.1\r\nHost: example.com\r\n'
+                    b'Proxy-Authorization: Basic ' + token.encode())
+        assert px.lan_password_ok(px.basic_password(head('phone', 'correct horse')))
+        # Any user name; only the password counts.
+        assert px.lan_password_ok(px.basic_password(head('', 'correct horse')))
+        assert not px.lan_password_ok(px.basic_password(head('phone', 'wrong')))
+        assert not px.lan_password_ok(px.basic_password(
+            b'CONNECT example.com:443 HTTP/1.1\r\nHost: example.com'))
+        assert not px.lan_password_ok(None)
+        px.LAN_PASSWORD = None
+        # No password set: nothing matches, not even an empty one.
+        assert not px.lan_password_ok('')
+    finally:
+        px.LAN_PASSWORD = None
+
+
+def test_socks5_from_the_lan_needs_the_password():
+    px = load_worker()
+    import socket as so
+    import struct as st
+
+    def run(greeting, password):
+        a, b = so.socketpair()
+        try:
+            req = (b'\x05\x01\x00\x03' + bytes([11]) + b'example.com'
+                   + st.pack('!H', 443))
+            a.sendall(greeting(password) + req)
+            try:
+                got = px.socks_target(b, need_password=True)
+            except PermissionError:
+                got = None
+            a.settimeout(0.3)
+            said = b''
+            while True:
+                try:
+                    chunk = a.recv(64)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                said += chunk
+            return got, said
+        finally:
+            a.close()
+            b.close()
+
+    def with_pw(pw):
+        p = pw.encode()
+        return b'\x05\x01\x02' + b'\x01\x05phone' + bytes([len(p)]) + p
+
+    px.LAN_PASSWORD = 'correct horse'
+    try:
+        got, said = run(with_pw, 'correct horse')
+        assert got == ('example.com', 443) and said.startswith(b'\x05\x02\x01\x00')
+        got, said = run(with_pw, 'nope')
+        assert got is None and said == b'\x05\x02\x01\x01'
+        # A client offering no authentication is told none is acceptable.
+        got, said = run(lambda _: b'\x05\x01\x00', '')
+        assert got is None and said == b'\x05\xff'
+    finally:
+        px.LAN_PASSWORD = None
+
+
+def test_worker_will_not_share_without_a_password():
+    px = load_worker()
+    old = os.environ.pop(px.LAN_PASSWORD_ENV, None)
+    try:
+        for value in (None, 'short'):
+            if value:
+                os.environ[px.LAN_PASSWORD_ENV] = value
+            try:
+                px.serve('0.0.0.0', 1, None, True)
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError(f'served on the LAN with {value!r}')
+    finally:
+        os.environ.pop(px.LAN_PASSWORD_ENV, None)
+        if old is not None:
+            os.environ[px.LAN_PASSWORD_ENV] = old
+
+
+def test_engine_refuses_to_share_without_a_password():
+    assert not engine.lan_password_ok(None)
+    # The phone apps' rule exactly: 8-128 characters of printable ASCII,
+    # 0x20-0x7E. Window and worker agree because they are the same function.
+    px = load_worker()
+    assert engine.lan_password_ok is not None
+    for bad in (None, '', '1234567', 'x' * 129, '12345678\n', '1234\t5678',
+                'رمزعبور12345', 'pässwörd1', '12345678\x7f', 12345678):
+        assert not engine.lan_password_ok(bad), bad
+        assert not px.lan_password_valid(bad), bad
+    for good in ('12345678', 'correct horse battery', ' 12345678 ',
+                 'x' * 128, '~!@#$%^&*()_+{}|:"<>?`-=[]\\;\',./'):
+        assert engine.lan_password_ok(good), good
+        assert px.lan_password_valid(good), good
+    e = engine.Engine(None, port=8877, lan_share=True)
+    try:
+        e._spawn('1.2.3.4', 'h.example')
+    except RuntimeError as err:
+        assert str(err).startswith('share-needs-password'), err
+    else:
+        raise AssertionError('a worker was started to share with no password')
 
 
 def test_worker_knows_a_loopback_listen_from_a_shared_one():

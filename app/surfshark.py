@@ -311,6 +311,11 @@ def config_text(hostname, template=None):
     own job.
     """
     if template:
+        # The template is whatever .ovpn was already in the folder, so it is
+        # copied without anything that would run a program - see
+        # pin.strip_script_directives.
+        import pin
+        template = pin.strip_script_directives(template)[0]
         return REMOTE.sub(
             lambda m: f'{m.group(1)}{hostname}{m.group(3)}', template, count=1)
     return ('# Surfshark exit, written from the published cluster list.\n'

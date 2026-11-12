@@ -14,11 +14,18 @@ on:
     # the second to finish would find its release already taken.
     tags: ['android-v*']
 
+# Nothing by default; each job is given what it needs and no more. Only
+# publish writes, and it runs nothing from the repository - it attaches a
+# file the build made.
+permissions: {}
+
 jobs:
   # The tag names the version the phone will show, so it has to be the one
   # the build carries: android-v0.2.0 releases versionName 0.2.0 or nothing.
   version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: tag matches versionName
@@ -28,8 +35,11 @@ jobs:
           echo "tag $want, build.gradle.kts $have"
           test "$want" = "$have"
 
+  # The called workflow can have no more than this job is given: a checkout.
   build:
     needs: version
+    permissions:
+      contents: read
     uses: ./.github/workflows/android.yml
     with:
       release: true
@@ -61,8 +71,7 @@ jobs:
             apps, open it. Configs and the sign-in go in from inside the app;
             no cable is needed.
 
-            Signed with the release key when one is configured for this
-            repository, and with the debug key otherwise - the build log says
-            which. A build signed with a different key cannot be installed
-            over this one; it has to be uninstalled first, and that takes the
-            pinned folder with it.
+            Signed with this repository's release key; a release is not
+            built without it. A build signed with a different key cannot be
+            installed over this one; it has to be uninstalled first, and that
+            takes the pinned folder with it.

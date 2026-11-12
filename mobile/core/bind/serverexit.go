@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ERelay/ovpn-pin/mobile/core"
+	"github.com/siinsiw/ovpn-pin/mobile/core"
 )
 
 // ExitFor is the provider exit server + exit leaves by, for a pick: a
@@ -60,8 +60,11 @@ const goodUpload = 64 << 10
 // chosen by hand.
 //
 // The Result's TookMs is the measured upload, in KB/s.
+//
+// verify is SetServerExit's: whether the server checks each exit's
+// certificate against the exit's pinned name.
 func (c *Client) BestServerExit(cfg *ServerConfig, apiPassword, code, ssUser, ssPassword,
-	wsUser, wsPassword string, tries, timeoutMs int) (*Result, error) {
+	wsUser, wsPassword string, verify bool, tries, timeoutMs int) (*Result, error) {
 
 	if cfg == nil || cfg.Domain == "" {
 		return nil, errors.New("no server configured")
@@ -95,7 +98,7 @@ func (c *Client) BestServerExit(cfg *ServerConfig, apiPassword, code, ssUser, ss
 			continue
 		}
 		tries--
-		if err := core.SetExit(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, s.Addr, user, pass, s.File, 15*time.Second); err != nil {
+		if err := core.SetExit(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, hopFor(s, user, pass, verify), 15*time.Second); err != nil {
 			return nil, err // the server itself refused: no other exit will fare better
 		}
 		multi := *cfg
@@ -121,11 +124,18 @@ func (c *Client) BestServerExit(cfg *ServerConfig, apiPassword, code, ssUser, ss
 		return nil, last
 	}
 	// The best was not the last one set: put it back.
-	if err := core.SetExit(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, best.s.Addr, best.user, best.pass,
-		best.s.File, 15*time.Second); err != nil {
+	if err := core.SetExit(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, hopFor(best.s, best.user, best.pass, verify),
+		15*time.Second); err != nil {
 		return nil, err
 	}
 	s := best.s
 	return &Result{Addr: s.Addr, Name: s.Name, Path: s.Path, File: s.File, Provider: s.Provider,
 		TookMs: int(best.rate / 1024)}, nil
+}
+
+// hopFor is one catalogue exit as the server is to dial it: its address, the
+// name its certificate serves, the credential, and the file as the node's
+// label.
+func hopFor(s core.Server, user, pass string, verify bool) core.ExitHop {
+	return core.ExitHop{IP: s.Addr, Hostname: s.Name, User: user, Password: pass, Node: s.File, Verify: verify}
 }

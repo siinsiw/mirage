@@ -247,6 +247,26 @@ def owners_path():
     return os.path.join(paths.STATE_DIR, 'owners.tsv')
 
 
+# What an owner's name may not carry. These names come from a lookup service
+# on the internet - whatever a hosting company typed into its WHOIS record -
+# and from here they become chip labels, -Landlord arguments to an elevated
+# script, and keys the script matches against. Quotes of every kind (the
+# ones PowerShell treats as quotes, and their double cousins) and control
+# characters are taken out before any of that; escaping is still done where
+# they are used, this is so that nothing depends on it.
+OWNER_DROP = re.compile('[\'"`‘’‚‛“”„‟'
+                        '′″´]'
+                        '|[\x00-\x1f\x7f-\x9f​-‏ -‮'
+                        '⁦-⁩﻿]')
+
+
+def clean_owner(text):
+    """An owner or ASN as it may be shown and passed on: no quotes, no
+    control or direction-changing characters, single spaces, and short."""
+    text = OWNER_DROP.sub('', str(text or ''))
+    return ' '.join(text.split())[:120]
+
+
 def owner_cache():
     """ip -> what is known about it. Missing file means nothing is known,
     which is a fine answer and not an error."""
@@ -262,9 +282,10 @@ def owner_cache():
         cell = row.split('\t')
         if len(cell) < 3 or not cell[0]:
             continue
-        out[cell[0]] = {'asn': cell[1], 'owner': cell[2],
-                        'country': cell[3] if len(cell) > 3 else '',
-                        'city': cell[4] if len(cell) > 4 else ''}
+        out[cell[0]] = {'asn': clean_owner(cell[1]),
+                        'owner': clean_owner(cell[2]),
+                        'country': clean_owner(cell[3]) if len(cell) > 3 else '',
+                        'city': clean_owner(cell[4]) if len(cell) > 4 else ''}
     return out
 
 
@@ -442,7 +463,9 @@ def other_vpn():
     lib = library_path()
     if not os.path.isfile(lib):
         return None
-    command = (f". '{lib}' -AsLibrary; "
+    # Through _ps_string like every other value spliced into PowerShell: a
+    # folder called O'Brien (or O’Brien) would otherwise end the literal.
+    command = ('. ' + _ps_string(lib) + ' -AsLibrary; '
                "$h = Get-DefaultHop; "
                "if ($h -and $h.IsTunnel) { "
                "  @{alias=$h.Alias; description=$h.Description} "
@@ -464,12 +487,12 @@ def other_vpn():
         return None
 
 
-def look_up_owners(folder, timeout=600):
+def look_up_owners(folder, timeout=None):
     """Fill the cache for the addresses in a folder that are not in it yet.
 
     Needs the network and no administrator rights, so it is a plain call
-    rather than anything elevated. The lookup, the batching and the five
-    second wait between requests are the pinner's - dot-sourced, not written
+    rather than anything elevated. The lookup (over HTTPS, one address at a
+    time) and the wait between requests are the pinner's - dot-sourced, not written
     again here, so the app and the scripts cannot end up with two ideas of
     who owns an address.
 
@@ -487,8 +510,15 @@ def look_up_owners(folder, timeout=600):
                       if ip and ip not in cache})
     if not missing:
         return {'ok': True, 'asked': 0, 'unknown': landlords(folder)[1]}
+    if timeout is None:
+        # The lookup is one HTTPS request per address now, a quarter of a
+        # second apart, rather than one per hundred: about a second each on
+        # a slow line. A flat ten minutes cut a 600-address folder off
+        # halfway, so it grows with the folder - two seconds an address,
+        # never less than the old ten minutes.
+        timeout = max(600, 60 + 2 * len(missing))
 
-    command = (f". '{lib}' -AsLibrary; "
+    command = ('. ' + _ps_string(lib) + ' -AsLibrary; '
                "$ips = @(" + ','.join(_ps_string(ip) for ip in missing) + "); "
                "Get-IpOwner $ips $null | Out-Null; "
                "Save-OwnerCache")
@@ -554,9 +584,71 @@ Set-Content -LiteralPath $done -Value $text -Encoding ascii
 '''
 
 
+# The characters PowerShell reads as a single quote. Not only the ASCII one:
+# its tokenizer also takes the typographic ones - U+2018, U+2019, U+201A and
+# U+201B - as opening and closing a single-quoted string. So a company name
+# like "O’Brien Hosting", with the apostrophe every word processor and many
+# a WHOIS record types, used to close the literal and run the rest of the
+# name as code in an elevated script. Each is doubled, the same way the
+# ASCII one is; doubled, PowerShell reads it as one literal character.
+PS_SINGLE_QUOTES = ("'", '‘', '’', '‚', '‛')
+
+
 def _ps_string(value):
-    """A PowerShell single-quoted literal, which escapes one character."""
-    return "'" + str(value).replace("'", "''") + "'"
+    """A PowerShell single-quoted literal: every kind of single quote
+    PowerShell recognises is doubled, and nothing else needs escaping."""
+    text = str(value)
+    for q in PS_SINGLE_QUOTES:
+        text = text.replace(q, q + q)
+    return "'" + text + "'"
+
+
+def elevated(script, folder, stem):
+    """A script for an elevated PowerShell, and the arguments that run it
+    only if it is still the script that was written.
+
+    Anything this user can write, malware running as this user can rewrite -
+    and a file in .state handed to `powershell -File` behind a UAC prompt is
+    a way to have the prompt approve something else. So the file gets a name
+    nobody can guess in advance, and the elevated side is not told to run
+    it: it is told to read it once, compare its SHA-256 with the hash taken
+    here from the text in memory, delete it, and run exactly the bytes it
+    compared. A file swapped at any point before that read fails the check
+    (exit 87) and nothing runs; one swapped after it is never read again.
+
+    Returns (argv, path): the PowerShell arguments, for -ArgumentList or a
+    direct start, and the file - which the caller removes if the elevated
+    side never ran (a refused prompt).
+    """
+    import base64
+    import hashlib
+    import secrets
+    os.makedirs(folder, exist_ok=True)
+    data = script.encode('utf-8')
+    digest = hashlib.sha256(data).hexdigest().upper()
+    path = os.path.join(folder, f'{stem}-{secrets.token_hex(12)}.ps1')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                 | getattr(os, 'O_BINARY', 0), 0o600)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(data)
+    boot = (f'$p={_ps_string(path)};'
+            '$b=[IO.File]::ReadAllBytes($p);'
+            'Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue;'
+            '$h=[BitConverter]::ToString([Security.Cryptography.SHA256]::'
+            "Create().ComputeHash($b)).Replace('-','');"
+            f"if($h -ne '{digest}'){{exit 87}};"
+            '&([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($b)))')
+    encoded = base64.b64encode(boot.encode('utf-16-le')).decode('ascii')
+    return (['-NoProfile', '-ExecutionPolicy', 'Bypass',
+             '-WindowStyle', 'Hidden', '-EncodedCommand', encoded], path)
+
+
+def discard(path):
+    """Remove a script elevated() wrote, when nothing ran it."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def _win_arg(value):
@@ -598,6 +690,13 @@ class Sweep:
         self.error = None
         self.into = None
         self.sites = []
+        # Set by the window from its settings before a run. no_owner: the
+        # person has said not to send exit addresses to the IP-owner lookup,
+        # so the script is told -NoOwner. verify_exit: whether the user's
+        # server checks each exit's certificate on the tunnel route (see
+        # px.exit_tls); None leaves tunnel.json to say.
+        self.no_owner = False
+        self.verify_exit = None
 
     #-- before it starts --------------------------------------------------
 
@@ -847,7 +946,14 @@ class Sweep:
         # is right at a terminal and a hang behind a window. The choosing
         # happens in the sheet, and only the answer is handed over.
         if chosen:
-            argv += ['-Landlord', ','.join(chosen)]
+            # Cleaned the way the chips were (clean_owner), whatever the page
+            # sent back: these land in an elevated script's command line.
+            names = [clean_owner(c) for c in chosen]
+            argv += ['-Landlord', ','.join(n for n in names if n)]
+        if self.no_owner:
+            # The person turned the IP-owner lookup off: the script must not
+            # send exit addresses to the lookup service either.
+            argv += ['-NoOwner']
         scope_flag = {'location': '-OnePer',
                       'company': '-OnePerLandlord',
                       'company-location': '-OnePerLandlordLocation'}.get(scope)
@@ -879,14 +985,23 @@ class Sweep:
             stop=_ps_string(self._stop_path()),
             argv=_ps_array(argv),
             mark=OPENVPN_LOG_MARK)
-        with open(self._wrapper_path(), 'w', encoding='utf-8') as f:
-            f.write(wrapper)
+
+        # No configs that run scripts go in front of an elevated openvpn. A
+        # pinned file carrying `up` and `script-security 2` would otherwise
+        # be a program run as administrator by the sweep - see
+        # pin.strip_script_directives.
+        try:
+            import pin
+            pin.sanitize_folder(folder)
+        except Exception:
+            pass
 
         emit({'phase': 'elevating', 'total': total})
 
-        raise_it = ("Start-Process powershell -Verb RunAs -WindowStyle Hidden "
-                    "-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass',"
-                    "'-File'," + _ps_string(self._wrapper_path()) + ")")
+        # Hash-checked by the elevated side before it runs (see elevated).
+        elevate_argv, script = elevated(wrapper, paths.STATE_DIR, 'sweep-run')
+        raise_it = ('Start-Process powershell -Verb RunAs -WindowStyle Hidden '
+                    '-ArgumentList ' + _ps_array(elevate_argv))
         try:
             done = subprocess.run(
                 ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
@@ -894,10 +1009,12 @@ class Sweep:
                 capture_output=True, text=True, timeout=180,
                 creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0)
         except (OSError, subprocess.SubprocessError) as e:
+            discard(script)
             self._finish(emit, error=f'could not start the test: {e}')
             return
         if done.returncode != 0:
             # The one that actually happens: the UAC prompt was dismissed.
+            discard(script)
             self._finish(emit, error='Administrator rights were refused, so '
                                      'nothing was tested.')
             return
@@ -927,6 +1044,10 @@ class Sweep:
                                      'your tunnel is. Fill the domain and the '
                                      'passwords in above.')
             return
+        if self.verify_exit is not None:
+            # The window's switch for this server, over whatever tunnel.json
+            # says: it is the one the person can see.
+            saved = dict(saved, verifyExit=bool(self.verify_exit))
 
         mode = 'single' if through == 'server' else 'multi'
         if not px.tunnel_listening(mode):

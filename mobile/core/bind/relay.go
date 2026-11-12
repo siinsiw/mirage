@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ERelay/ovpn-pin/mobile/core"
+	"github.com/siinsiw/ovpn-pin/mobile/core"
 )
 
 // Progress is what the phone implements to hear how a race is going. It is
@@ -419,9 +419,11 @@ func SetProtector(p Protector) {
 
 // StartTunnel begins carrying everything through one exit.
 //
-// fd is what VpnService.Builder.establish() returned. It stays the caller's:
-// the tunnel duplicates it, and Android is the one that has to tear the
-// interface down, so StopTunnel does not close it.
+// fd is what VpnService.Builder.establish() returned, and it is handed over,
+// not lent: the tunnel does not duplicate it and closes it when it ends (see
+// core.StartTunnel). So the caller passes ParcelFileDescriptor.detachFd(),
+// not getFd(), and does not close it afterwards - holding it on both sides is
+// what Android's fdsan kills the process for. StopTunnel is what closes it.
 //
 // Called after Race has chosen, with the winner's address and name - rather
 // than taking a Result, because a Result that came back from a previous run
@@ -452,8 +454,6 @@ func (c *Client) StartTunnel(fd int, mtu int, addr, name, provider string) error
 	return nil
 }
 
-// StopTunnel ends it. Safe when nothing is running, because the phone's
-// service lifecycle will call this from more than one place.
 // StartServerTunnel carries the phone's traffic through the user's own server
 // instead of through a provider's exit.
 //
@@ -483,25 +483,33 @@ func (c *Client) StartServerTunnel(fd int, mtu int, cfg *ServerConfig) error {
 	return nil
 }
 
+// StopTunnel ends it. Safe when nothing is running, because the phone's
+// service lifecycle will call this from more than one place.
+//
+// The order is what keeps a stopped server stopped:
+//
+//  1. The Client lets go of everything at once, under its lock - so a
+//     ResetServer, SwitchExit or second StopTunnel arriving now finds
+//     nothing to act on, rather than half of it.
+//  2. LAN sharing, whose connections borrow the way about to close.
+//  3. SetLive(nil), so nothing starts a fetch through a way that is
+//     halfway shut.
+//  4. The server, for good (core.TunnelServer.Close): its session is ended
+//     and it refuses to dial again. Connections the stack is still
+//     carrying, which used to find no session and quietly dial a new one -
+//     a websocket nobody would ever close, holding the radio awake - now get
+//     an error instead.
+//  5. The stack, which ends those connections and closes the tun.
 func (c *Client) StopTunnel() error {
 	c.mu.Lock()
 	t, srv, lan := c.tunnel, c.server, c.lan
 	c.tunnel, c.server, c.lan = nil, nil, nil
 	c.mu.Unlock()
 
-	// First: a shared device's connections go through the way that is about
-	// to be closed, and would otherwise fail one by one.
 	if lan != nil {
 		lan.Close()
 	}
-
-	// Before either is closed, so nothing starts a fetch through a way out
-	// that is halfway shut.
 	core.SetLive(nil)
-
-	// The session first, then the stack. A smux session left open holds a
-	// websocket open, and a websocket left open holds the phone's radio awake
-	// for as long as its keepalive keeps saying something.
 	if srv != nil {
 		srv.Close()
 	}
@@ -598,12 +606,15 @@ func (c *Client) SwitchExit(addr, name, provider string) error {
 // is not closed until smux's keepalive gives up on it, and until then every
 // stream is opened on a corpse. Closing it here costs one dial, which the
 // next connection pays.
+//
+// Reset, not Close: Close is for good (see StopTunnel), and a server closed
+// here would refuse every connection after it while the tunnel stayed up.
 func (c *Client) ResetServer() {
 	c.mu.Lock()
 	srv := c.server
 	c.mu.Unlock()
 	if srv != nil {
-		srv.Close()
+		srv.Reset()
 	}
 }
 

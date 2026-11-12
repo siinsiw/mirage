@@ -7,11 +7,21 @@
 # page - so they go in through the same settings the window writes.
 #
 #     ./setup-phone.sh                       # app + configs + credentials
-#     ./setup-phone.sh --tunnel DOMAIN PW    # and the server, saved on device
+#     ./setup-phone.sh --tunnel DOMAIN       # and the server, saved on device
+#
+# The server's passwords are not arguments: an argument is in the shell's
+# history and in every process listing while it runs. They come from the
+# environment, or are asked for:
+#
+#     RELAY_TUNNEL_PASSWORD=...  RELAY_API_PASSWORD=...  ./setup-phone.sh --tunnel DOMAIN
+#     ./setup-phone.sh --tunnel DOMAIN       # prompts, without echoing
 #
 # Nothing here is secret to the phone that was not already secret to this
 # machine: the same two files are on both. What it does avoid is typing a
-# twenty-character password into a phone keyboard once per reinstall.
+# twenty-character password into a phone keyboard once per reinstall. And
+# none of it lands on the phone's shared storage: the credential and the
+# passwords go into the app's private folder through run-as, and the app
+# moves them into its encrypted store the next time it starts.
 set -euo pipefail
 
 # Git Bash rewrites anything that looks like a Unix path into a Windows one
@@ -32,10 +42,32 @@ FILES="/sdcard/Android/data/$APP_ID/files"
 
 domain=""; password=""; api_password=""
 if [ "${1:-}" = "--tunnel" ]; then
-    domain="${2:-}"; password="${3:-}"; api_password="${4:-}"
-    [ -n "$domain" ] && [ -n "$password" ] || {
-        echo "--tunnel wants a domain and a password" >&2; exit 2; }
+    domain="${2:-}"
+    [ -n "$domain" ] || { echo "--tunnel wants a domain" >&2; exit 2; }
+    if [ $# -gt 2 ]; then
+        echo "--tunnel takes the domain only. Passwords on the command line end up in the" >&2
+        echo "shell's history and in process listings; set RELAY_TUNNEL_PASSWORD (and" >&2
+        echo "RELAY_API_PASSWORD), or leave them out and type them when asked." >&2
+        exit 2
+    fi
+    password="${RELAY_TUNNEL_PASSWORD:-}"
+    api_password="${RELAY_API_PASSWORD:-}"
+    if [ -z "$password" ]; then
+        [ -t 0 ] || { echo "no RELAY_TUNNEL_PASSWORD, and no terminal to ask on" >&2; exit 2; }
+        read -rs -p "  tunnel password: " password; echo
+        read -rs -p "  API password (Enter for none): " api_password; echo
+    fi
+    [ -n "$password" ] || { echo "--tunnel wants a tunnel password" >&2; exit 2; }
 fi
+
+# For text going inside an XML element: the five characters XML gives
+# meaning to. A password with an & or a < in it used to produce a file
+# Android could not parse - and then every setting in it was lost, not only
+# that one.
+xml_escape() {
+    printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
+        -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"
+}
 
 [ -f "$APK" ] || {
     echo "build it first:" >&2
@@ -66,12 +98,23 @@ else
     echo "  configs  none in $ROOT/pinned - the provider half will have nothing to race"
 fi
 
+# Into the app's private folder, not onto /sdcard, and through stdin so the
+# password is never on a command line. The app reads it into its encrypted
+# store and deletes the file the next time it starts (Accounts.adopt). run-as
+# works on a debuggable build only; a release build gets its account typed in.
 if [ -f "$ROOT/.ovpn-auth" ]; then
-    adb push "$ROOT/.ovpn-auth" "$FILES/auth" >/dev/null
-    echo "  auth     pushed"
+    if adb shell "run-as $APP_ID sh -c 'umask 077 && mkdir -p no_backup && cat > no_backup/auth'" \
+        < "$ROOT/.ovpn-auth" 2>/dev/null; then
+        auth_handed=1
+        echo "  auth     handed to the app"
+    else
+        echo "  auth     run-as refused - add the account in the app: Settings → Accounts" >&2
+    fi
 else
     echo "  auth     no $ROOT/.ovpn-auth"
 fi
+# One left on shared storage by an older version of this script goes too.
+adb shell rm -f "$FILES/auth" "$FILES/auth-windscribe" >/dev/null 2>&1 || true
 
 # -- the server half --------------------------------------------------------
 #
@@ -79,25 +122,33 @@ fi
 # makes that possible without root, and it works only on a debuggable build -
 # which this is, and a release build would not be. So this is a development
 # convenience and says so rather than pretending to be a feature.
+#
+# The passwords are only passing through relay.xml: the app moves them into
+# its encrypted store and out of the file the next time it starts (Keys.migrate).
+# The file goes to the phone through stdin, like the credential above.
 
 if [ -n "$domain" ]; then
     xml="<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
 <map>
-    <string name=\"tunnelDomain\">$domain</string>
-    <string name=\"tunnelPassword\">$password</string>
-    <string name=\"tunnelApiPassword\">$api_password</string>
+    <string name=\"tunnelDomain\">$(xml_escape "$domain")</string>
+    <string name=\"tunnelPassword\">$(xml_escape "$password")</string>
+    <string name=\"tunnelApiPassword\">$(xml_escape "$api_password")</string>
     <string name=\"mode\">single</string>
 </map>"
-    if adb shell "run-as $APP_ID sh -c 'mkdir -p shared_prefs && cat > shared_prefs/relay.xml'" \
+    if adb shell "run-as $APP_ID sh -c 'umask 077 && mkdir -p shared_prefs && cat > shared_prefs/relay.xml'" \
         <<<"$xml" 2>/dev/null; then
         echo "  tunnel   $domain saved on the phone"
-        # The app has to be restarted to read a preferences file changed
-        # underneath it.
-        adb shell am force-stop "$APP_ID" >/dev/null 2>&1 || true
     else
         echo "  tunnel   could not write preferences (run-as refused)" >&2
         echo "           put the domain and password in Settings on the phone" >&2
     fi
+    unset xml password api_password
+fi
+
+# The app has to be restarted to read files changed underneath it - and to
+# move what was just handed over into its encrypted store.
+if [ -n "$domain" ] || [ -n "${auth_handed:-}" ]; then
+    adb shell am force-stop "$APP_ID" >/dev/null 2>&1 || true
 fi
 
 echo

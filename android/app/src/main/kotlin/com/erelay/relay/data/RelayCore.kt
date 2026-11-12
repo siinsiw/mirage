@@ -21,9 +21,11 @@ import androidx.core.content.ContextCompat
 import com.erelay.relay.Accounts
 import com.erelay.relay.AppFiles
 import com.erelay.relay.Import
+import com.erelay.relay.Keys
 import com.erelay.relay.Pin
 import com.erelay.relay.Providers
 import com.erelay.relay.RelayVpnService
+import com.erelay.relay.ServerPin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -69,7 +71,7 @@ data class Said(val ok: Boolean, val text: String = "") {
  */
 class RelayCore(private val app: Application) {
 
-    private val prefs = app.getSharedPreferences("relay", Context.MODE_PRIVATE)
+    private val prefs = app.getSharedPreferences(Keys.FILE, Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val io = Dispatchers.IO
 
@@ -113,20 +115,41 @@ class RelayCore(private val app: Application) {
 
     private val _way = MutableStateFlow(Way.of(prefs.getString("mode", "surfshark")))
     val way: StateFlow<Way> = _way.asStateFlow()
-    private val _allowLan = MutableStateFlow(prefs.getBoolean("allowLan", true))
+    private val _allowLan = MutableStateFlow(prefs.getBoolean(Keys.ALLOW_LAN, true))
     val allowLan: StateFlow<Boolean> = _allowLan.asStateFlow()
-    private val _lanShare = MutableStateFlow(prefs.getBoolean("lanShare", false))
+    private val _lanShare = MutableStateFlow(prefs.getBoolean(Keys.LAN_SHARE, false))
     /** Settings → Share this connection: whether to offer the tunnel to the Wi-Fi it is on. */
     val lanShare: StateFlow<Boolean> = _lanShare.asStateFlow()
-    private val _lanSharePort = MutableStateFlow(prefs.getInt("lanSharePort", 8877))
+    private val _lanSharePort = MutableStateFlow(prefs.getInt(Keys.LAN_SHARE_PORT, 8877))
     val lanSharePort: StateFlow<Int> = _lanSharePort.asStateFlow()
-    private val _lanSharePassword = MutableStateFlow(prefs.getString("lanSharePassword", "").orEmpty())
+    // Empty until init has read it out of the secret store, off the main thread.
+    private val _lanSharePassword = MutableStateFlow("")
     val lanSharePassword: StateFlow<String> = _lanSharePassword.asStateFlow()
     private val _lanState = MutableStateFlow(LanShareState())
     /** What the core says the share is doing right now; refreshed while the screen is visible. */
     val lanState: StateFlow<LanShareState> = _lanState.asStateFlow()
-    private val _tunnel = MutableStateFlow(readTunnel())
+    // Without its passwords until init has asked the secret store, which is a
+    // keystore operation and not for the main thread this constructor runs
+    // on. The window shows its loading screen until then anyway.
+    private val _tunnel = MutableStateFlow(TunnelPlan(domain = prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty()))
     val tunnel: StateFlow<TunnelPlan> = _tunnel.asStateFlow()
+
+    private val _tunnelVerify = MutableStateFlow(
+        Keys.verifyExit(app, prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty()))
+    /**
+     * Server + exit, for the server set up now: check the exit the server is
+     * pointed at before using it. Kept per server and on by default (see
+     * Keys.verifyExit); Settings asks before it is turned off.
+     */
+    val tunnelVerify: StateFlow<Boolean> = _tunnelVerify.asStateFlow()
+    private val _serverInIran = MutableStateFlow<Boolean?>(null)
+    /**
+     * Whether the server set up now is at an Iranian address: true, false,
+     * or null while unknown - not asked yet, or the core could not tell.
+     * Only true shows Settings' notice.
+     */
+    val serverInIran: StateFlow<Boolean?> = _serverInIran.asStateFlow()
+    @Volatile private var inIranFor = ""
 
     // Up here with the rest of the state rather than beside the functions
     // that use them, because readService() runs from init and resets one of
@@ -146,7 +169,9 @@ class RelayCore(private val app: Application) {
 
     // Up here for the same reason as the split's: declared below init, a
     // property is still unset when something launched from init gets to it.
-    private val _export = MutableStateFlow(readExport(ExportRun()))
+    // Read in full by init, off the main thread: whether it is ready depends
+    // on the tunnel password, which is in the secret store.
+    private val _export = MutableStateFlow(ExportRun())
     /** Settings → Share with other devices: whether it can run, how it is going, what it made last. */
     val export: StateFlow<ExportRun> = _export.asStateFlow()
     private val _exportPicks = MutableStateFlow(prefLines("exportPicks"))
@@ -285,7 +310,14 @@ class RelayCore(private val app: Application) {
             ContextCompat.RECEIVER_NOT_EXPORTED)
         readService()
         scope.launch {
-            Accounts.adopt(app)
+            // First: passwords out of relay.xml and credentials off shared
+            // storage, into the secret store - which this also opens, so the
+            // first tap that needs it does not pay for the keystore.
+            Keys.migrate(app)
+            _lanShare.value = prefs.getBoolean(Keys.LAN_SHARE, false)
+            _lanSharePassword.value = Keys.secret(app, Keys.LAN_SHARE_PASSWORD)
+            _tunnel.value = readTunnel()
+            _export.update { readExport(it) }
             refreshList()
             refreshAccounts()
             refreshDead()
@@ -371,18 +403,21 @@ class RelayCore(private val app: Application) {
     private fun startSeenAs() {
         val addr = RelayVpnService.exitAddress
         val name = RelayVpnService.exitName
+        val provider = RelayVpnService.exitProvider
         if (addr.isEmpty() || seenFor == addr) return
-        val creds = credentials(
-            if (RelayVpnService.exitProvider == Accounts.WINDSCRIBE) Accounts.WINDSCRIBE
-            else Accounts.SURFSHARK) ?: credentials(Accounts.SURFSHARK)
         seenFor = addr
         _seen.value = null
         _seenFailed.value = false
         scope.launch {
+            // In here rather than above: this runs from the status broadcast,
+            // on the main thread, and the credential is in the secret store.
+            val creds = credentials(
+                if (provider == Accounts.WINDSCRIBE) Accounts.WINDSCRIBE
+                else Accounts.SURFSHARK) ?: credentials(Accounts.SURFSHARK)
             val json = try {
                 // The user's own server: asked through the tunnel that is up,
                 // because a server is not a provider exit to rebuild.
-                if (RelayVpnService.exitProvider.isEmpty()) Relay.seenAsLiveJSON(20000L)
+                if (provider.isEmpty()) Relay.seenAsLiveJSON(20000L)
                 else if (creds == null) "{}"
                 else Relay.seenAsJSON(addr, name, creds.first, creds.second, 20000L)
             } catch (e: Exception) {
@@ -395,14 +430,9 @@ class RelayCore(private val app: Application) {
                 _seenFailed.value = true
             } else {
                 _seen.value = place
-                try {
-                    app.startService(Intent(app, RelayVpnService::class.java)
-                        .setAction(RelayVpnService.ACTION_SEEN)
-                        .putExtra(RelayVpnService.EXTRA_SEEN_COUNTRY, place.country))
-                } catch (e: Exception) {
-                    // The notification keeps the claimed country; nothing else depends on it.
-                    Log.w(RelayVpnService.TAG, "seen: ${e.message}")
-                }
+                // A call, not a start intent: see noteSeen. The notification
+                // keeps the claimed country if the service has gone meanwhile.
+                RelayVpnService.noteSeen(place.country)
             }
         }
     }
@@ -650,21 +680,53 @@ class RelayCore(private val app: Application) {
      * consent dialog, so nobody grants a VPN to an app that then says it had
      * nothing to connect to.
      */
-    fun ready(): Said = when (_way.value) {
-        Way.PROVIDER -> when {
-            AppFiles.count(AppFiles.pinned(app)) == 0 ->
-                Said.no("No servers yet. Get them under Settings → Accounts, " +
-                    "or import a folder of configs under Settings → Servers.")
-            credentials(Accounts.SURFSHARK) == null && credentials(Accounts.WINDSCRIBE) == null ->
-                Said.no("No account yet. Add one under Settings → Accounts.")
-            else -> Said.OK
+    suspend fun ready(): Said = withContext(io) {
+        // A folder listing and the secret store: not for the main thread,
+        // which is where the Connect button and the tile ask from.
+        when (_way.value) {
+            Way.PROVIDER -> when {
+                AppFiles.count(AppFiles.pinned(app)) == 0 ->
+                    Said.no("No servers yet. Get them under Settings → Accounts, " +
+                        "or import a folder of configs under Settings → Servers.")
+                credentials(Accounts.SURFSHARK) == null && credentials(Accounts.WINDSCRIBE) == null ->
+                    Said.no("No account yet. Add one under Settings → Accounts.")
+                else -> Said.OK
+            }
+            else -> if (_tunnel.value.ready) Said.OK
+                else Said.no("Set the domain and passwords under Settings → Your own tunnel first.")
         }
-        else -> if (_tunnel.value.ready) Said.OK
-            else Said.no("Set the domain and passwords under Settings → Your own tunnel first.")
     }
 
-    fun connect(code: String): Said {
-        ready().let { if (!it.ok) return it }
+    /**
+     * [connect] for a caller with no coroutine of its own - the tile. The
+     * work is done on [io]; [done] is called on the main thread.
+     */
+    fun connectThen(code: String, done: (Said) -> Unit) {
+        scope.launch {
+            val said = try {
+                connect(code)
+            } catch (e: Exception) {
+                Said.no(e.message ?: e.toString())
+            }
+            withContext(Dispatchers.Main) { done(said) }
+        }
+    }
+
+    /**
+     * Start the service toward [code].
+     *
+     * Suspends, and does its work on [io]: the catalogue it reads the pick's
+     * configs from is the core loading a folder, and the accounts are in the
+     * secret store. It used to run on the main thread from the Connect button
+     * and the tile - a folder scan inside a tap. The state the window draws
+     * from is a StateFlow, safe to set from here.
+     *
+     * Nothing secret goes in the intent. The service reads the accounts and
+     * the server's passwords itself, which is also how it reconnects when
+     * Android restarts it with no intent at all.
+     */
+    suspend fun connect(code: String): Said = withContext(io) {
+        ready().let { if (!it.ok) return@withContext it }
         val intent = Intent(app, RelayVpnService::class.java)
             .setAction(RelayVpnService.ACTION_START)
         val way = _way.value
@@ -677,10 +739,8 @@ class RelayCore(private val app: Application) {
             // every Surfshark exit was asked with the wrong one and refused -
             // hidden in a country race by the Windscribe exits beside it, and
             // the whole answer for a Surfshark city or server picked alone.
-            val surfshark = credentials(Accounts.SURFSHARK)
-            val windscribe = credentials(Accounts.WINDSCRIBE)
-            if (surfshark == null && windscribe == null) {
-                return Said.no("No account yet. Add one under Settings → Accounts.")
+            if (credentials(Accounts.SURFSHARK) == null && credentials(Accounts.WINDSCRIBE) == null) {
+                return@withContext Said.no("No account yet. Add one under Settings → Accounts.")
             }
             // The exact configs behind the row that was tapped, read off the
             // same catalogue that drew it. The service used to be handed only
@@ -700,53 +760,29 @@ class RelayCore(private val app: Application) {
                 else -> ""
             }
             if (code != "auto" && only.isBlank()) {
-                return Said.no("Nothing is left behind that pick - its servers were re-pinned " +
+                return@withContext Said.no("Nothing is left behind that pick - its servers were re-pinned " +
                     "or set aside. Pick it again from the list.")
             }
             intent
                 .putExtra(RelayVpnService.EXTRA_PROVIDER, "surfshark")
-                .putExtra(RelayVpnService.EXTRA_USER, surfshark?.first.orEmpty())
-                .putExtra(RelayVpnService.EXTRA_PASSWORD, surfshark?.second.orEmpty())
                 .putExtra(RelayVpnService.EXTRA_CONFIG_DIR, AppFiles.pinned(app).absolutePath)
                 .putExtra(RelayVpnService.EXTRA_COUNTRY, code)
-            windscribe?.let { (user, password) ->
-                intent.putExtra(RelayVpnService.EXTRA_WS_USER, user)
-                    .putExtra(RelayVpnService.EXTRA_WS_PASSWORD, password)
-            }
             if (only.isNotBlank()) intent.putExtra(RelayVpnService.EXTRA_ONLY, only)
         } else {
-            val domain = prefs.getString("tunnelDomain", "").orEmpty()
-            val password = prefs.getString("tunnelPassword", "").orEmpty()
-            intent
-                .putExtra(RelayVpnService.EXTRA_PROVIDER, way.key)
-                .putExtra(RelayVpnService.EXTRA_DOMAIN, domain)
-                .putExtra(RelayVpnService.EXTRA_TUNNEL_PASSWORD, password)
-                .putExtra(RelayVpnService.EXTRA_EDGES, prefs.getString("tunnelEdges", "").orEmpty())
-                .putExtra(RelayVpnService.EXTRA_PIN, prefs.getString("tunnelPin", "").orEmpty())
-            if (way == Way.SERVER_EXIT) {
-                // The location picked, and every provider account on file:
-                // the server leaves by that place's exit, opened with that
-                // exit's own provider's credential, sent as it connects.
-                intent
-                    .putExtra(RelayVpnService.EXTRA_COUNTRY, code)
-                    .putExtra(RelayVpnService.EXTRA_API_PASSWORD,
-                        prefs.getString("tunnelApiPassword", "").orEmpty())
-                credentials(Accounts.SURFSHARK)?.let { (user, password) ->
-                    intent.putExtra(RelayVpnService.EXTRA_USER, user)
-                        .putExtra(RelayVpnService.EXTRA_PASSWORD, password)
-                }
-                credentials(Accounts.WINDSCRIBE)?.let { (user, password) ->
-                    intent.putExtra(RelayVpnService.EXTRA_WS_USER, user)
-                        .putExtra(RelayVpnService.EXTRA_WS_PASSWORD, password)
-                }
-            }
+            // The server - its address, passwords, edges and pin - is read by
+            // the service from the settings. What the window adds is which
+            // path to ask for and, for server + exit, the location picked:
+            // the server leaves by that place's exit, opened with that exit's
+            // own provider's credential, sent as it connects.
+            intent.putExtra(RelayVpnService.EXTRA_PROVIDER, way.key)
+            if (way == Way.SERVER_EXIT) intent.putExtra(RelayVpnService.EXTRA_COUNTRY, code)
         }
         connecting = true
         // This one is built from the split as it is now.
         _splitPending.value = false
         _conn.update { it.copy(mode = Mode.BUSY, failure = null, asked = 0, total = 0) }
         ContextCompat.startForegroundService(app, intent)
-        return Said.OK
+        Said.OK
     }
 
     fun disconnect() {
@@ -1069,27 +1105,31 @@ class RelayCore(private val app: Application) {
     // -- the user's own server --------------------------------------------------------
 
     private fun edgeList(): List<String> =
-        prefs.getString("tunnelEdges", "").orEmpty().lines().map { it.trim() }.filter { it.isNotEmpty() }
+        prefs.getString(Keys.TUNNEL_EDGES, "").orEmpty().lines().map { it.trim() }.filter { it.isNotEmpty() }
 
     /**
      * Where the server takes TLS. 443 unless its key said otherwise, and 443
      * for an install that predates the setting - the pref is simply missing.
      */
-    private fun tunnelPort(): Long = prefs.getInt("tunnelPort", 443).toLong()
+    private fun tunnelPort(): Long = prefs.getInt(Keys.TUNNEL_PORT, 443).toLong()
 
-    private fun hasSs() = !prefs.getString("tunnelSsPassword", "").isNullOrEmpty()
+    // The server's passwords, out of the secret store (see Keys). Every
+    // caller is on [io]: the store is a keystore operation the first time.
+    private fun secret(key: String): String = Keys.secret(app, key)
 
-    private fun viaSs() = hasSs() && prefs.getString("tunnelTransport", "") == "ss"
+    private fun hasSs() = secret(Keys.TUNNEL_SS_PASSWORD).isNotEmpty()
+
+    private fun viaSs() = hasSs() && prefs.getString(Keys.TUNNEL_TRANSPORT, "") == "ss"
 
     private fun readTunnel() = TunnelPlan(
-        domain = prefs.getString("tunnelDomain", "").orEmpty(),
-        hasPassword = !prefs.getString("tunnelPassword", "").isNullOrEmpty(),
-        hasApiPassword = !prefs.getString("tunnelApiPassword", "").isNullOrEmpty(),
+        domain = prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty(),
+        hasPassword = secret(Keys.TUNNEL_PASSWORD).isNotEmpty(),
+        hasApiPassword = secret(Keys.TUNNEL_API_PASSWORD).isNotEmpty(),
         edges = edgeList(),
-        pin = prefs.getString("tunnelPin", "").orEmpty(),
+        pin = prefs.getString(Keys.TUNNEL_PIN, "").orEmpty(),
         transport = if (viaSs()) "ss" else "ws",
         hasSs = hasSs(),
-        ssPort = prefs.getInt("tunnelSsPort", 0),
+        ssPort = prefs.getInt(Keys.TUNNEL_SS_PORT, 0),
     )
 
     /**
@@ -1116,39 +1156,54 @@ class RelayCore(private val app: Application) {
         val exportId = shared?.optString("id").orEmpty()
         // Links made for another server - or for this one before it was
         // installed again, with new ids - no longer open anything.
-        val stale = key.optString("host") != prefs.getString("tunnelDomain", "") ||
-            exportId != prefs.getString("tunnelExportId", "") ||
-            key.optInt("port", 443) != prefs.getInt("tunnelPort", 443)
+        // A key is typed input too - pasted rather than typed - and its host
+        // and passwords end up in the install command and on the server's
+        // paths like anything typed in the fields. Held to the same rule, and
+        // refused whole rather than half taken.
+        (Keys.hostProblem(key.optString("host"))
+            ?: Keys.serverPasswordProblem(key.optString("password"), "The key's tunnel password")
+            // An older installer's key may have no API password; that is
+            // allowed, as it was - export says so when it needs one.
+            ?: key.optString("apiPassword").takeIf { it.isNotEmpty() }
+                ?.let { Keys.serverPasswordProblem(it, "The key's API password") }
+            ?: ss?.let { Keys.serverPasswordProblem(it.optString("password"), "The key's Shadowsocks password") }
+            )?.let { return@withContext Said.no(it) }
+        val stale = key.optString("host") != prefs.getString(Keys.TUNNEL_DOMAIN, "") ||
+            exportId != prefs.getString(Keys.TUNNEL_EXPORT_ID, "") ||
+            key.optInt("port", 443) != prefs.getInt(Keys.TUNNEL_PORT, 443)
+        // The three passwords first, into the secret store (on [io], like
+        // all of importKey: the store is keystore work); the rest after.
+        Keys.putSecret(app, Keys.TUNNEL_PASSWORD, key.optString("password"))
+        Keys.putSecret(app, Keys.TUNNEL_API_PASSWORD, key.optString("apiPassword"))
+        Keys.putSecret(app, Keys.TUNNEL_SS_PASSWORD, ss?.optString("password"))
         prefs.edit().apply {
             if (shared != null) {
-                putString("tunnelExportId", exportId)
-                putInt("tunnelExportSlots", shared.optInt("slots"))
+                putString(Keys.TUNNEL_EXPORT_ID, exportId)
+                putInt(Keys.TUNNEL_EXPORT_SLOTS, shared.optInt("slots"))
             } else {
-                remove("tunnelExportId"); remove("tunnelExportSlots")
+                remove(Keys.TUNNEL_EXPORT_ID); remove(Keys.TUNNEL_EXPORT_SLOTS)
             }
-            if (stale) remove("exportLast")
-            putString("tunnelDomain", key.optString("host"))
-            putString("tunnelPassword", key.optString("password"))
-            putString("tunnelApiPassword", key.optString("apiPassword"))
+            if (stale) remove(Keys.EXPORT_LAST)
+            putString(Keys.TUNNEL_DOMAIN, key.optString("host"))
             // The key's pin is the server's own word for its certificate, so
             // even the first connection is checked against it.
-            putString("tunnelPin", key.optString("pin"))
+            putString(Keys.TUNNEL_PIN, key.optString("pin"))
             // Always written, so a key with no port (443) cannot inherit the
             // port of whichever server was pasted before it.
-            putInt("tunnelPort", key.optInt("port", 443))
-            remove("tunnelEdges")
+            putInt(Keys.TUNNEL_PORT, key.optInt("port", 443))
+            remove(Keys.TUNNEL_EDGES)
             if (ss != null) {
-                putString("tunnelSsMethod", ss.optString("method"))
-                putString("tunnelSsPassword", ss.optString("password"))
-                putInt("tunnelSsPort", ss.optInt("port"))
-                putInt("tunnelSsExitPort", ss.optInt("exitPort"))
-                putString("tunnelTransport", "ss")
+                putString(Keys.TUNNEL_SS_METHOD, ss.optString("method"))
+                putInt(Keys.TUNNEL_SS_PORT, ss.optInt("port"))
+                putInt(Keys.TUNNEL_SS_EXIT_PORT, ss.optInt("exitPort"))
+                putString(Keys.TUNNEL_TRANSPORT, "ss")
             } else {
-                remove("tunnelSsMethod"); remove("tunnelSsPassword")
-                remove("tunnelSsPort"); remove("tunnelSsExitPort")
-                putString("tunnelTransport", "ws")
+                remove(Keys.TUNNEL_SS_METHOD)
+                remove(Keys.TUNNEL_SS_PORT); remove(Keys.TUNNEL_SS_EXIT_PORT)
+                putString(Keys.TUNNEL_TRANSPORT, "ws")
             }
         }.apply()
+        serverChanged()
         _tunnel.value = readTunnel()
         _export.update { readExport(it) }
         Said(true, "Set up for ${key.optString("host")}" +
@@ -1156,14 +1211,14 @@ class RelayCore(private val app: Application) {
     }
 
     /** Shadowsocks or the WebSocket, for a server whose key offered both. */
-    fun setTunnelTransport(transport: String): Said {
-        if (transport == "ss" && !hasSs()) return Said.no("This server's key had no Shadowsocks.")
+    suspend fun setTunnelTransport(transport: String): Said = withContext(io) {
+        if (transport == "ss" && !hasSs()) return@withContext Said.no("This server's key had no Shadowsocks.")
         if (RelayVpnService.exitAddress.isNotEmpty() && _way.value != Way.PROVIDER) {
-            return Said.no("Disconnect first - the tunnel is carrying the connection right now.")
+            return@withContext Said.no("Disconnect first - the tunnel is carrying the connection right now.")
         }
-        prefs.edit().putString("tunnelTransport", if (transport == "ss") "ss" else "ws").apply()
+        prefs.edit().putString(Keys.TUNNEL_TRANSPORT, if (transport == "ss") "ss" else "ws").apply()
         _tunnel.value = readTunnel()
-        return Said(true, if (transport == "ss") "Straight to the server over Shadowsocks."
+        Said(true, if (transport == "ss") "Straight to the server over Shadowsocks."
             else "Through the WebSocket, as before.")
     }
 
@@ -1171,10 +1226,10 @@ class RelayCore(private val app: Application) {
     private fun applySs(cfg: relay.ServerConfig): Boolean {
         if (!viaSs()) return false
         cfg.transport = "ss"
-        cfg.ssMethod = prefs.getString("tunnelSsMethod", "").orEmpty()
-        cfg.ssPassword = prefs.getString("tunnelSsPassword", "").orEmpty()
-        cfg.ssPort = prefs.getInt("tunnelSsPort", 0).toLong()
-        cfg.ssExitPort = prefs.getInt("tunnelSsExitPort", 0).toLong()
+        cfg.ssMethod = prefs.getString(Keys.TUNNEL_SS_METHOD, "").orEmpty()
+        cfg.ssPassword = secret(Keys.TUNNEL_SS_PASSWORD)
+        cfg.ssPort = prefs.getInt(Keys.TUNNEL_SS_PORT, 0).toLong()
+        cfg.ssExitPort = prefs.getInt(Keys.TUNNEL_SS_EXIT_PORT, 0).toLong()
         return true
     }
 
@@ -1182,26 +1237,42 @@ class RelayCore(private val app: Application) {
      * Blank means unchanged, not cleared: the passwords are never shown back,
      * so treating empty as erase would wipe them whenever the domain changed.
      * A new domain drops the edges, which belong to the old one.
+     *
+     * Nothing is saved unless all of it passes: the host is an IPv4 address
+     * or an LDH hostname, and a typed password follows the server-password
+     * rule (Keys.hostProblem, Keys.serverPasswordProblem) - these go into a
+     * command run as root on the server. The reason comes back to be shown.
+     *
+     * Suspends: the passwords go to the secret store.
      */
-    fun saveTunnel(domain: String, password: String, apiPassword: String) {
-        val was = prefs.getString("tunnelDomain", "")
+    suspend fun saveTunnel(domain: String, password: String, apiPassword: String): Said = withContext(io) {
+        val host = domain.trim()
+        (Keys.hostProblem(host)
+            ?: password.takeIf { it.isNotEmpty() }?.let { Keys.serverPasswordProblem(it, "The tunnel password") }
+            ?: apiPassword.takeIf { it.isNotEmpty() }?.let { Keys.serverPasswordProblem(it, "The API password") }
+            )?.let { return@withContext Said.no(it) }
+        val was = prefs.getString(Keys.TUNNEL_DOMAIN, "")
+        if (password.isNotEmpty()) Keys.putSecret(app, Keys.TUNNEL_PASSWORD, password)
+        if (apiPassword.isNotEmpty()) Keys.putSecret(app, Keys.TUNNEL_API_PASSWORD, apiPassword)
+        // A new server: its edges, its certificate and its Shadowsocks
+        // were the old one's - and so were its shared locations, and
+        // the links made for them.
+        val moved = host != was
+        if (moved) Keys.putSecret(app, Keys.TUNNEL_SS_PASSWORD, null)
         prefs.edit().apply {
-            putString("tunnelDomain", domain.trim())
-            if (password.isNotEmpty()) putString("tunnelPassword", password)
-            if (apiPassword.isNotEmpty()) putString("tunnelApiPassword", apiPassword)
-            // A new server: its edges, its certificate and its Shadowsocks
-            // were the old one's - and so were its shared locations, and
-            // the links made for them.
-            if (domain.trim() != was) {
-                remove("tunnelEdges"); remove("tunnelPin"); remove("tunnelPort")
-                remove("tunnelSsMethod"); remove("tunnelSsPassword")
-                remove("tunnelSsPort"); remove("tunnelSsExitPort")
-                putString("tunnelTransport", "ws")
-                remove("tunnelExportId"); remove("tunnelExportSlots"); remove("exportLast")
+            putString(Keys.TUNNEL_DOMAIN, host)
+            if (moved) {
+                remove(Keys.TUNNEL_EDGES); remove(Keys.TUNNEL_PIN); remove(Keys.TUNNEL_PORT)
+                remove(Keys.TUNNEL_SS_METHOD)
+                remove(Keys.TUNNEL_SS_PORT); remove(Keys.TUNNEL_SS_EXIT_PORT)
+                putString(Keys.TUNNEL_TRANSPORT, "ws")
+                remove(Keys.TUNNEL_EXPORT_ID); remove(Keys.TUNNEL_EXPORT_SLOTS); remove(Keys.EXPORT_LAST)
             }
         }.apply()
+        if (moved) serverChanged()
         _tunnel.value = readTunnel()
         _export.update { readExport(it) }
+        Said(true, "Saved.")
     }
 
     /**
@@ -1214,23 +1285,67 @@ class RelayCore(private val app: Application) {
             val bytes = ByteArray(15).also { java.security.SecureRandom().nextBytes(it) }
             return Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         }
-        prefs.edit().apply {
-            if (prefs.getString("tunnelPassword", "").isNullOrEmpty()) putString("tunnelPassword", make())
-            if (prefs.getString("tunnelApiPassword", "").isNullOrEmpty()) putString("tunnelApiPassword", make())
-        }.apply()
+        if (secret(Keys.TUNNEL_PASSWORD).isEmpty()) Keys.putSecret(app, Keys.TUNNEL_PASSWORD, make())
+        if (secret(Keys.TUNNEL_API_PASSWORD).isEmpty()) Keys.putSecret(app, Keys.TUNNEL_API_PASSWORD, make())
         _tunnel.value = readTunnel()
     }
 
     fun setWay(way: Way) {
-        prefs.edit().putString("mode", way.key).apply()
+        prefs.edit().putString(Keys.MODE, way.key).apply()
         _way.value = way
     }
 
     /** Takes effect on the next connect: routes are fixed when the tun is built. */
     fun setAllowLan(on: Boolean): Boolean {
-        prefs.edit().putBoolean("allowLan", on).apply()
+        prefs.edit().putBoolean(Keys.ALLOW_LAN, on).apply()
         _allowLan.value = on
         return RelayVpnService.exitAddress.isNotEmpty()
+    }
+
+    /**
+     * Another server is set up: its own exit check (each server keeps its
+     * own, on unless turned off for it), and whether it is in Iran unknown
+     * until asked again.
+     */
+    private fun serverChanged() {
+        _tunnelVerify.value = Keys.verifyExit(app, prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty())
+        _serverInIran.value = null
+        inIranFor = ""
+    }
+
+    /**
+     * Server + exit's check of the exit it is given, for the server set up
+     * now. Turning it off is the screen's to confirm first; this only keeps
+     * the answer, under the server's host. Read by the service, and by the
+     * configs for other devices, as they set the server's exit.
+     */
+    fun setTunnelVerify(on: Boolean) {
+        val host = prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty()
+        if (host.isEmpty()) return
+        Keys.setVerifyExit(app, host, on)
+        _tunnelVerify.value = on
+    }
+
+    /**
+     * Ask the core whether the server is at an Iranian address - by its
+     * Iran preset's ranges, the name resolved over DoH - for Settings'
+     * notice. Once per server. A core that cannot tell (no network, a name
+     * that does not resolve) leaves it unknown, and the notice is not shown;
+     * the switch is there either way.
+     */
+    suspend fun checkServerInIran() = withContext(io) {
+        val host = prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty()
+        if (host.isEmpty() || host == inIranFor) return@withContext
+        val answer: Boolean? = try {
+            Relay.serverInIran(host, 8000L)
+        } catch (e: Exception) {
+            Log.i(RelayVpnService.TAG, "whether $host is in Iran: could not tell (${e.message})")
+            null
+        }
+        // Another server pasted while this was asked: its own answer comes later.
+        if (host != prefs.getString(Keys.TUNNEL_DOMAIN, "")) return@withContext
+        if (answer != null) inIranFor = host
+        _serverInIran.value = answer
     }
 
     // -- sharing on the Wi-Fi ---------------------------------------------------------
@@ -1246,6 +1361,9 @@ class RelayCore(private val app: Application) {
         if (!tunnelUp()) return Said.OK
         RelayVpnService.stopLanShare()
         if (_lanShare.value) {
+            Keys.lanPasswordProblem(_lanSharePassword.value)?.let {
+                return Said.no("Set a password for the share first. $it")
+            }
             try {
                 RelayVpnService.startLanShare(_lanSharePort.value, _lanSharePassword.value)
             } catch (e: Exception) {
@@ -1256,10 +1374,27 @@ class RelayCore(private val app: Application) {
         return Said.OK
     }
 
-    /** On: starts at once when connected, else with the next connect. */
+    /**
+     * On: starts at once when connected, else with the next connect.
+     *
+     * Never on without a password. The share is a proxy that anything on the
+     * same Wi-Fi - a café's, a hotel's - can find by scanning for it, and an
+     * open one is this phone's tunnel lent to all of them. Settings asks for
+     * one before it calls this; this refuses rather than
+     * trust that it did.
+     */
     suspend fun setLanShare(on: Boolean): Said = withContext(io) {
-        prefs.edit().putBoolean("lanShare", on).apply()
+        if (on) {
+            Keys.lanPasswordProblem(Keys.secret(app, Keys.LAN_SHARE_PASSWORD))?.let {
+                return@withContext Said.no("Set a password for the share first. $it")
+            }
+        }
+        prefs.edit().putBoolean(Keys.LAN_SHARE, on).apply()
         _lanShare.value = on
+        // The core's own words when it cannot start - no Wi-Fi, hotspot or
+        // Ethernet address to share on, a port in use - so the screen can
+        // say what to do. The setting stays on: it starts with the next
+        // connect, or once there is a network to share on.
         val r = applyLanShare()
         readLanShare()
         r
@@ -1269,7 +1404,7 @@ class RelayCore(private val app: Application) {
     suspend fun setLanSharePort(port: Int): Said {
         if (port !in 1024..65535) return Said(false, "Use a port between 1024 and 65535.")
         return withContext(io) {
-            prefs.edit().putInt("lanSharePort", port).apply()
+            prefs.edit().putInt(Keys.LAN_SHARE_PORT, port).apply()
             _lanSharePort.value = port
             val r = if (_lanShare.value) applyLanShare() else Said.OK
             readLanShare()
@@ -1277,9 +1412,18 @@ class RelayCore(private val app: Application) {
         }
     }
 
+    /**
+     * The share's password, into the secret store. The core's rule - 8 to
+     * 128 characters of printable ASCII (Keys.lanPasswordProblem) - and never
+     * cleared: there is no open share to go back to. A password that is
+     * unchanged is a no-op rather than a restart of a share other devices
+     * are using.
+     */
     suspend fun setLanSharePassword(password: String): Said = withContext(io) {
         val clean = password.trim()
-        prefs.edit().putString("lanSharePassword", clean).apply()
+        Keys.lanPasswordProblem(clean)?.let { return@withContext Said.no(it) }
+        if (clean == _lanSharePassword.value) return@withContext Said.OK
+        Keys.putSecret(app, Keys.LAN_SHARE_PASSWORD, clean)
         _lanSharePassword.value = clean
         val r = if (_lanShare.value) applyLanShare() else Said.OK
         readLanShare()
@@ -1298,9 +1442,10 @@ class RelayCore(private val app: Application) {
                 port = j.optInt("port"),
                 addrs = List(a?.length() ?: 0) { a!!.getString(it) },
                 clients = j.optInt("clients"),
+                error = if (j.optBoolean("on")) "" else RelayVpnService.lanShareError,
             )
         } catch (e: Exception) {
-            LanShareState()
+            LanShareState(error = RelayVpnService.lanShareError)
         }
     }
 
@@ -1316,10 +1461,10 @@ class RelayCore(private val app: Application) {
         prefs.getString(key, "").orEmpty().lines().map { it.trim() }.filter { it.isNotEmpty() }
 
     private fun readSplit() = SplitPlan(
-        mode = SplitMode.of(prefs.getString("splitMode", "off")),
-        iran = prefs.getBoolean("splitIran", true),
-        apps = prefLines("splitApps").toSet(),
-        domains = prefLines("splitDomains").distinct(),
+        mode = SplitMode.of(prefs.getString(Keys.SPLIT_MODE, "off")),
+        iran = prefs.getBoolean(Keys.SPLIT_IRAN, true),
+        apps = prefLines(Keys.SPLIT_APPS).toSet(),
+        domains = prefLines(Keys.SPLIT_DOMAINS).distinct(),
     )
 
     /** Saved, and noted as waiting for a reconnect if a tunnel is up or on its way. */
@@ -1330,12 +1475,12 @@ class RelayCore(private val app: Application) {
     }
 
     fun setSplitMode(mode: SplitMode) {
-        prefs.edit().putString("splitMode", mode.key).apply()
+        prefs.edit().putString(Keys.SPLIT_MODE, mode.key).apply()
         changedSplit(_split.value.copy(mode = mode))
     }
 
     fun setSplitIran(on: Boolean) {
-        prefs.edit().putBoolean("splitIran", on).apply()
+        prefs.edit().putBoolean(Keys.SPLIT_IRAN, on).apply()
         changedSplit(_split.value.copy(iran = on))
     }
 
@@ -1343,7 +1488,7 @@ class RelayCore(private val app: Application) {
         val was = _split.value.apps
         val next = if (on) was + pkg else was - pkg
         if (next == was) return
-        prefs.edit().putString("splitApps", next.joinToString("\n")).apply()
+        prefs.edit().putString(Keys.SPLIT_APPS, next.joinToString("\n")).apply()
         changedSplit(_split.value.copy(apps = next))
     }
 
@@ -1378,14 +1523,14 @@ class RelayCore(private val app: Application) {
                 if (got.size == 1) "${got[0]} is already on the list." else "Those are already on the list.")
         }
         val next = had + fresh
-        prefs.edit().putString("splitDomains", next.joinToString("\n")).apply()
+        prefs.edit().putString(Keys.SPLIT_DOMAINS, next.joinToString("\n")).apply()
         changedSplit(_split.value.copy(domains = next))
         Said(true, if (fresh.size == 1) "Added ${fresh[0]}." else "Added ${fresh.size}.")
     }
 
     fun removeSplitDomain(entry: String) {
         val next = _split.value.domains.filter { it != entry }
-        prefs.edit().putString("splitDomains", next.joinToString("\n")).apply()
+        prefs.edit().putString(Keys.SPLIT_DOMAINS, next.joinToString("\n")).apply()
         changedSplit(_split.value.copy(domains = next))
     }
 
@@ -1439,12 +1584,12 @@ class RelayCore(private val app: Application) {
 
     /** Look for a way in now: fifty-odd TLS handshakes, a few seconds. */
     suspend fun rescanEdges(): Said = withContext(io) {
-        val domain = prefs.getString("tunnelDomain", "").orEmpty()
+        val domain = prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty()
         if (domain.isEmpty()) return@withContext Said.no("No server domain saved yet.")
         val found = JSONObject(Relay.scanEdgesJSON(domain, tunnelPort(), 40000L))
         val edges = found.optJSONArray("edges").strings()
         if (edges.isNotEmpty()) {
-            prefs.edit().putString("tunnelEdges", edges.joinToString("\n")).apply()
+            prefs.edit().putString(Keys.TUNNEL_EDGES, edges.joinToString("\n")).apply()
             _tunnel.value = readTunnel()
             Said(true, "${edges.size} ways in. Using ${edges[0]}.")
         } else {
@@ -1458,8 +1603,8 @@ class RelayCore(private val app: Application) {
      * because a Test that retries forever never finishes.
      */
     suspend fun testTunnel(): Said = withContext(io) {
-        val domain = prefs.getString("tunnelDomain", "").orEmpty()
-        val password = prefs.getString("tunnelPassword", "").orEmpty()
+        val domain = prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty()
+        val password = secret(Keys.TUNNEL_PASSWORD)
         if (domain.isEmpty() || password.isEmpty()) {
             return@withContext Said.no("Set the domain and password first.")
         }
@@ -1468,8 +1613,8 @@ class RelayCore(private val app: Application) {
         cfg.domain = domain
         cfg.password = password
         cfg.mode = mode
-        cfg.edges = prefs.getString("tunnelEdges", "").orEmpty()
-        cfg.pin = prefs.getString("tunnelPin", "").orEmpty()
+        cfg.edges = prefs.getString(Keys.TUNNEL_EDGES, "").orEmpty()
+        cfg.pin = prefs.getString(Keys.TUNNEL_PIN, "").orEmpty()
         cfg.port = tunnelPort()
         // Straight to the address: there is no other way in to go looking
         // for, so a failure is the answer rather than a reason to scan.
@@ -1490,7 +1635,7 @@ class RelayCore(private val app: Application) {
                 return@withContext Said.no("No way in: " +
                     scan.optString("error").ifEmpty { first.message ?: first.toString() })
             }
-            prefs.edit().putString("tunnelEdges", found.joinToString("\n")).apply()
+            prefs.edit().putString(Keys.TUNNEL_EDGES, found.joinToString("\n")).apply()
             _tunnel.value = readTunnel()
             cfg.edges = found.joinToString("\n")
             try {
@@ -1508,7 +1653,7 @@ class RelayCore(private val app: Application) {
         // seen and required from then on.
         val pin = seen.optString("pin")
         if (pin.isNotEmpty() && cfg.pin.isEmpty()) {
-            prefs.edit().putString("tunnelPin", pin).apply()
+            prefs.edit().putString(Keys.TUNNEL_PIN, pin).apply()
             _tunnel.value = readTunnel()
         }
         return Said(true, "Carrying traffic - it comes out at ${seen.optString("ip")}.")
@@ -1524,23 +1669,37 @@ class RelayCore(private val app: Application) {
      * bash ignores lines that start with one), passwords and all. No provider
      * account goes in it: server + exit sends the picked location's own
      * credential each time it connects.
+     *
+     * Ok with the command as its text, or the reason there is none. Every
+     * value in it is checked (the host and passwords as saveTunnel checks
+     * them - a password saved before that rule existed is refused here too)
+     * and quoted as one shell word besides: this line is pasted into a root
+     * shell.
      */
-    fun installCommand(host: String): String? {
+    suspend fun installCommand(host: String): Said = withContext(io) {
         val blob = try {
             app.assets.open("install-server.sh").use {
                 Base64.encodeToString(it.readBytes(), Base64.NO_WRAP)
             }
         } catch (e: Exception) {
-            return null
+            return@withContext Said.no("The installer is missing from this build.")
         }
         val server = host.trim()
-        if (server.isEmpty()) return null
-        if (server != prefs.getString("tunnelDomain", "")) saveTunnel(server, "", "")
+        Keys.hostProblem(server)?.let { return@withContext Said.no(it) }
+        if (server != prefs.getString(Keys.TUNNEL_DOMAIN, "")) {
+            val saved = saveTunnel(server, "", "")
+            if (!saved.ok) return@withContext saved
+        }
         ensurePasswords()
-        val pw = prefs.getString("tunnelPassword", "").orEmpty()
-        val api = prefs.getString("tunnelApiPassword", "").orEmpty()
-        return " mkdir -p /opt/relay && echo '$blob' | base64 -d > /opt/relay/install-server.sh" +
-            " && bash /opt/relay/install-server.sh $server --password '$pw' --api-password '$api'"
+        val pw = secret(Keys.TUNNEL_PASSWORD)
+        val api = secret(Keys.TUNNEL_API_PASSWORD)
+        (Keys.serverPasswordProblem(pw, "The saved tunnel password")
+            ?: Keys.serverPasswordProblem(api, "The saved API password"))?.let {
+            return@withContext Said.no("$it Type a new one under Server and save, then copy again.")
+        }
+        val q = Keys::shellQuote
+        Said(true, " mkdir -p /opt/relay && echo ${q(blob)} | base64 -d > /opt/relay/install-server.sh" +
+            " && bash /opt/relay/install-server.sh ${q(server)} --password ${q(pw)} --api-password ${q(api)}")
     }
 
     /** What is running on the server, and whether it answers. */
@@ -1548,13 +1707,22 @@ class RelayCore(private val app: Application) {
         "systemctl --no-pager --lines=0 status gost sing-box nginx | grep -E '^. |Active:';" +
             " ss -lnt | grep -E ':443 |:838[89] |127.0.0.1:(1000[0-3]|18080) '"
 
-    /** Takes the tunnel off the server again, leaving anything else there alone. */
+    /**
+     * Takes the tunnel off the server again, leaving anything else there alone.
+     *
+     * The host goes into two `rm -f` paths, so it is quoted as one shell word
+     * - and a saved host that is not a plain address or hostname (from before
+     * that was checked) is left out, with SERVER in its place for a person to
+     * fill in, rather than put into a root shell as it is.
+     */
     fun uninstallCommand(): String {
-        val host = prefs.getString("tunnelDomain", "").orEmpty().ifEmpty { "SERVER" }
+        val saved = prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty().trim()
+        val host = if (Keys.hostProblem(saved) == null) saved else "SERVER"
+        val q = Keys::shellQuote
         return "systemctl disable --now gost sing-box;" +
             " rm -f /etc/systemd/system/gost.service /etc/systemd/system/sing-box.service" +
             " /usr/local/bin/gost /usr/local/bin/sing-box" +
-            " /etc/nginx/sites-enabled/relay-$host.conf /etc/nginx/sites-available/relay-$host.conf;" +
+            " ${q("/etc/nginx/sites-enabled/relay-$host.conf")} ${q("/etc/nginx/sites-available/relay-$host.conf")};" +
             " rm -rf /etc/gost /etc/sing-box /etc/relay /opt/relay;" +
             " systemctl daemon-reload; systemctl reload nginx"
     }
@@ -1578,11 +1746,11 @@ class RelayCore(private val app: Application) {
     // can no longer answer, and a dial from here is a plain dial.
 
     private fun readExport(was: ExportRun): ExportRun = was.copy(
-        ready = !prefs.getString("tunnelDomain", "").isNullOrEmpty() &&
-            !prefs.getString("tunnelPassword", "").isNullOrEmpty() &&
-            !prefs.getString("tunnelExportId", "").isNullOrEmpty(),
-        slots = prefs.getInt("tunnelExportSlots", 0),
-        last = prefs.getString("exportLast", null)?.let { parseExportResult(it) },
+        ready = !prefs.getString(Keys.TUNNEL_DOMAIN, "").isNullOrEmpty() &&
+            secret(Keys.TUNNEL_PASSWORD).isNotEmpty() &&
+            !prefs.getString(Keys.TUNNEL_EXPORT_ID, "").isNullOrEmpty(),
+        slots = prefs.getInt(Keys.TUNNEL_EXPORT_SLOTS, 0),
+        last = prefs.getString(Keys.EXPORT_LAST, null)?.let { parseExportResult(it) },
     )
 
     /**
@@ -1681,11 +1849,11 @@ class RelayCore(private val app: Application) {
     }
 
     private fun exportNow(picks: List<ExportPick>): Said {
-        val domain = prefs.getString("tunnelDomain", "").orEmpty()
-        val password = prefs.getString("tunnelPassword", "").orEmpty()
-        val api = prefs.getString("tunnelApiPassword", "").orEmpty()
-        val id = prefs.getString("tunnelExportId", "").orEmpty()
-        val slots = prefs.getInt("tunnelExportSlots", 0)
+        val domain = prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty()
+        val password = secret(Keys.TUNNEL_PASSWORD)
+        val api = secret(Keys.TUNNEL_API_PASSWORD)
+        val id = prefs.getString(Keys.TUNNEL_EXPORT_ID, "").orEmpty()
+        val slots = prefs.getInt(Keys.TUNNEL_EXPORT_SLOTS, 0)
         when {
             domain.isEmpty() || password.isEmpty() ->
                 return Said.no("Set up your own server under Settings → Connection first.")
@@ -1721,8 +1889,8 @@ class RelayCore(private val app: Application) {
         cfg.domain = domain
         cfg.password = password
         cfg.mode = "multi"
-        cfg.edges = prefs.getString("tunnelEdges", "").orEmpty()
-        cfg.pin = prefs.getString("tunnelPin", "").orEmpty()
+        cfg.edges = prefs.getString(Keys.TUNNEL_EDGES, "").orEmpty()
+        cfg.pin = prefs.getString(Keys.TUNNEL_PIN, "").orEmpty()
         cfg.port = tunnelPort()
         val viaSs = applySs(cfg)
         if (!viaSs && cfg.edges.isBlank() && picks.isNotEmpty()) {
@@ -1735,9 +1903,26 @@ class RelayCore(private val app: Application) {
                 return Said.no("No way in to $domain answered. Press Test under Settings → Connection, " +
                     "then try again.")
             }
-            prefs.edit().putString("tunnelEdges", cfg.edges).apply()
+            prefs.edit().putString(Keys.TUNNEL_EDGES, cfg.edges).apply()
             _tunnel.value = readTunnel()
         }
+
+        // The server's certificate before its API: a server by address whose
+        // pin is not kept yet is tested first, plainly, and the pin kept -
+        // the core refuses every API call until then (see ServerPin). Every
+        // call below also goes through ServerPin.call, which does this again
+        // and retries once should the core still say there is no pin.
+        if (picks.isNotEmpty()) {
+            try {
+                ServerPin.ensure(app, cfg)
+            } catch (e: Exception) {
+                return Said.no("$domain did not answer a test: ${(e.message ?: e.toString()).take(160)}. " +
+                    "Press Test under Settings → Connection, then try again.")
+            }
+            _tunnel.value = readTunnel()
+        }
+        // The exit check, as server + exit has it for this server.
+        val verify = Keys.verifyExit(app, domain)
 
         val notes = mutableListOf<String>()
         var fatal: String? = null
@@ -1753,7 +1938,7 @@ class RelayCore(private val app: Application) {
             // A server that has never had server + exit set may have no
             // exit-chain to keep; then there is nothing to put back either.
             val saved: String? = try {
-                Relay.saveServerChain(cfg, api, EXIT_CHAIN, EXPORT_API_MS)
+                ServerPin.call(app, cfg) { Relay.saveServerChain(cfg, api, EXIT_CHAIN, EXPORT_API_MS) }
             } catch (e: Exception) {
                 val why = e.message ?: e.toString()
                 if (!why.contains("no chain called")) return Said.no("$domain did not answer: ${why.take(160)}")
@@ -1768,9 +1953,12 @@ class RelayCore(private val app: Application) {
                     _export.update { it.copy(phase = "locations", index = i) }
                     setStep(i) { it.copy(phase = "testing") }
                     try {
-                        val r = c.exportSlot(cfg, api, (i + 1).toLong(), p.code,
-                            surfshark?.first.orEmpty(), surfshark?.second.orEmpty(),
-                            windscribe?.first.orEmpty(), windscribe?.second.orEmpty(), 6L, 4000L)
+                        val r = ServerPin.call(app, cfg) {
+                            c.exportSlot(cfg, api, (i + 1).toLong(), p.code,
+                                surfshark?.first.orEmpty(), surfshark?.second.orEmpty(),
+                                windscribe?.first.orEmpty(), windscribe?.second.orEmpty(),
+                                verify, 6L, 4000L)
+                        }
                         setStep(i) {
                             it.copy(phase = "pinned", exit = r.name, provider = r.provider, upKBs = r.tookMs.toInt())
                         }
@@ -1784,7 +1972,9 @@ class RelayCore(private val app: Application) {
                 if (saved != null) {
                     _export.update { it.copy(phase = "restoring") }
                     try {
-                        Relay.restoreServerChain(cfg, api, EXIT_CHAIN, saved, EXPORT_API_MS)
+                        ServerPin.call(app, cfg) {
+                            Relay.restoreServerChain(cfg, api, EXIT_CHAIN, saved, EXPORT_API_MS)
+                        }
                     } catch (e: Exception) {
                         notes += "Your own server + exit could not be put back where it was (" +
                             (e.message ?: e.toString()).take(120) + "). The next connect through " +
@@ -1799,7 +1989,7 @@ class RelayCore(private val app: Application) {
         if (pinned.isNotEmpty()) {
             _export.update { it.copy(phase = "saving") }
             try {
-                Relay.persistServer(cfg, api, EXPORT_API_MS)
+                ServerPin.call(app, cfg) { Relay.persistServer(cfg, api, EXPORT_API_MS) }
             } catch (e: Exception) {
                 notes += "The server took the locations but could not save them (" +
                     (e.message ?: e.toString()).take(120) + "). They work until it restarts; make " +
@@ -1847,7 +2037,7 @@ class RelayCore(private val app: Application) {
             )
         }
         val result = ExportResult(System.currentTimeMillis(), domain, rows, notes)
-        prefs.edit().putString("exportLast", result.toJson()).apply()
+        prefs.edit().putString(Keys.EXPORT_LAST, result.toJson()).apply()
         _export.update { it.copy(last = result) }
         fatal?.let { return Said.no("$domain stopped taking locations: ${it.take(160)}") }
         return Said(true, "Made ${rows.count { it.ok }} configs.")
@@ -1876,10 +2066,10 @@ class RelayCore(private val app: Application) {
 
     /** The key's Shadowsocks, for the server's own slot - or nothing, when the key had none. */
     private fun ssJson(): String = if (!hasSs()) "" else JSONObject()
-        .put("method", prefs.getString("tunnelSsMethod", "").orEmpty())
-        .put("password", prefs.getString("tunnelSsPassword", "").orEmpty())
-        .put("port", prefs.getInt("tunnelSsPort", 0))
-        .put("exitPort", prefs.getInt("tunnelSsExitPort", 0))
+        .put("method", prefs.getString(Keys.TUNNEL_SS_METHOD, "").orEmpty())
+        .put("password", secret(Keys.TUNNEL_SS_PASSWORD))
+        .put("port", prefs.getInt(Keys.TUNNEL_SS_PORT, 0))
+        .put("exitPort", prefs.getInt(Keys.TUNNEL_SS_EXIT_PORT, 0))
         .toString()
 
     private fun slotName(place: String) = "Relay · $place"

@@ -301,13 +301,22 @@ ovpn connect de-fra --kill-switch   # or OVPN_KILL_SWITCH=1 in .env
 ```
 
 While the tunnel is up, everything that is not the tunnel is dropped — only
-loopback, the tunnel device, the VPN server itself and your own LAN get out.
+loopback, the tunnel device, the VPN server's own addresses (the one it
+connected to and every `remote` in the file) and your own LAN get out.
 It lives in one `nftables` table of its own, `inet ovpn_pin`, so removing it
 cannot take anyone else's firewall rules with it. IPv6 is covered by the same
 drop policy, which is where a leak around a v4 tunnel usually goes.
 
-`--stop` removes it. If something goes wrong and it outlives the tunnel your
-network will look broken, so the way out is printed every time it is installed:
+DNS is the exception to "your LAN gets out": port 53 and 853 (DNS over TLS)
+are dropped on anything but the tunnel, your router included, because a
+resolver outside the tunnel is the leak — and on a censored line, the one
+that lies. If names stop resolving with the kill switch on, connect with
+`--set-dns` (or `OVPN_SET_DNS=1`) so the resolver the server pushed is used,
+through the tunnel.
+
+`--stop` removes it, even when openvpn has already died on its own. If
+something goes wrong and it outlives the tunnel your network will look broken,
+so the way out is printed every time it is installed:
 
 ```bash
 sudo nft delete table inet ovpn_pin       # or: ovpn connect --kill-switch-off
@@ -321,11 +330,27 @@ sudo systemctl enable --now ovpn-pin
 ```
 
 That writes a unit which runs `--supervise`: connect, then hold the foreground
-until the tunnel dies, so `Restart=always` brings it back.
+until the tunnel dies, so `Restart=always` brings it back. The kill switch and
+`--set-dns` choices in force when you install it are written into the unit.
 
-One thing to know about it. The unit runs as root, and root has no desktop
-session, so it cannot switch your GNOME proxy setting off. Set
-`OVPN_PROXY_OFF_CMD` in `.env` if that matters on an unattended machine.
+The unit runs as root, so it does not run the scripts where they sit in your
+folder — anything running as you could edit those. Installing copies
+`ovpn-connect.sh` and `ovpn-lib.sh`, owned by root, to `/usr/local/lib/ovpn-pin`
+and the unit runs that copy, pointed at your folder for the configs. Changing
+the scripts does not change the service: install it again to update the copy.
+
+For the same reason the service reads `.env` only if root owns it and neither
+its group nor anyone else can write to it — its commands and paths would
+otherwise be yours to point root at. Root as owner and your group to read it
+keeps it usable by you, while editing it takes sudo:
+
+```bash
+sudo chown root:"$(id -gn)" .env && sudo chmod 640 .env
+```
+
+Root has no desktop session, so it cannot switch your GNOME proxy setting off.
+Set `OVPN_PROXY_OFF_CMD` in such a `.env` if that matters on an unattended
+machine.
 
 ---
 

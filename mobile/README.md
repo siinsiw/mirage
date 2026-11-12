@@ -202,10 +202,15 @@ A cable still works, and is quicker when there is one to hand:
 
 ```sh
 ./setup-phone.sh                          # app, configs, credentials
-./setup-phone.sh --tunnel DOMAIN PW       # and your own server
+./setup-phone.sh --tunnel DOMAIN          # and your own server; asks for its passwords
+RELAY_TUNNEL_PASSWORD=… RELAY_API_PASSWORD=… ./setup-phone.sh --tunnel DOMAIN
 ```
 
-Everything lives in the app's own external files directory, which a file
+The server's passwords are never arguments — an argument sits in the shell's
+history and in every process listing while it runs — so they come from the
+environment or a prompt that does not echo.
+
+The configs live in the app's own external files directory, which a file
 manager can see:
 
 ```
@@ -215,20 +220,30 @@ Android/data/com.erelay.relay.debug/files/
   windscribe/        Windscribe's inbox
   dropped/           set aside by hand, one shelf per folder
   .state/            what was measured, and the roster
-  auth               the Surfshark service credential, two lines
-  auth-windscribe    the Windscribe proxy credential
 ```
 
-Passwords are not in there. They are in the keystore, because this build is
-debuggable — which is what makes setup-phone.sh's `run-as` trick work, and
-what would otherwise make `shared_prefs` readable by anyone with a cable.
+No credential is in there. Anything on shared storage is readable by anybody
+with a cable, and on older Android by any app allowed to read storage, so
+`.ovpn-auth` no longer goes to `/sdcard`: setup-phone.sh and install.sh hand
+it to the app through `run-as` into the app's private `no_backup/` folder,
+over stdin, and the app moves it into its encrypted store (a keystore-held
+key) and deletes the file the next time it starts. The server's passwords
+pass through `shared_prefs/relay.xml` the same way and leave it on the next
+start. An `auth` file left on shared storage by an older version is read in
+and deleted the same way. `run-as` works on a debuggable build only; on a
+release build, add the account in the app (Settings → Accounts).
+
+Nothing the app keeps goes into a cloud backup or a device-to-device
+transfer: the secret store is sealed with a key that never leaves the phone.
 
 **Uninstalling takes all of it.** `Android/data` goes with the app, and so
 does a folder of four hundred pinned exits.
 
-**The release build is signed with the debug key.** Android asks twice before
-installing it, and an upgrade over a differently-signed copy has to be
-uninstalled first. A real signing config is the next thing this needs.
+**A release is signed with the repository's release key, or not built.** CI
+refuses to build one without `RELAY_KEYSTORE_B64` and `RELAY_KEYSTORE_PASSWORD`.
+A local release build without `RELAY_KEYSTORE` still falls back to the debug
+key, for trying it on a phone; an upgrade over a differently-signed copy has
+to be uninstalled first.
 
 ## What it did on a phone
 

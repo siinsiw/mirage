@@ -195,5 +195,78 @@ for typed, want in [(4, 4), ('2', 2), (0, 1), (99, 32), (None, 4), ('x', 4)]:
 
 
 print()
+print('a pinned config never runs anything')
+
+CERT = ('<ca>\n-----BEGIN CERTIFICATE-----\nup\ndown\nMIIB\n'
+        '-----END CERTIFICATE-----\n</ca>\n')
+DIRTY = (
+    'client\r\n'
+    'remote 1.2.3.4 443\r\n'
+    'script-security 2\r\n'
+    'up C:\\evil.cmd\r\n'
+    '  --route-up "C:\\evil.cmd"\r\n'
+    'Down evil\r\n'
+    '"up" "C:\\x.cmd"\r\n'
+    "'plugin' evil.dll\r\n"
+    'u\\p evil\r\n'
+    'CONFIG other.ovpn\r\n'
+    'cd C:\\Windows\r\n'
+    'log-append C:\\Windows\\x\r\n'
+    'management 127.0.0.1 7505\r\n'
+    'setenv opt up evil\r\n'
+    '# up is only a word in a comment\r\n'
+    '; so is down\r\n'
+    'upx is not a directive\r\n'
+    'proto tcp\r\n')
+clean, removed = pin.strip_script_directives(DIRTY)
+check('every directive form is removed', removed,
+      ['script-security', 'up', 'route-up', 'down', 'up', 'plugin', 'up',
+       'config', 'cd', 'log-append', 'management', 'setenv'])
+check('what is not a directive stays',
+      [l for l in clean.split('\r\n') if l and not l.startswith('# relay')],
+      ['client', 'remote 1.2.3.4 443', '# up is only a word in a comment',
+       '; so is down', 'upx is not a directive', 'proto tcp'])
+check('the note says what went and keeps the line endings',
+      clean.endswith('pinned config never runs programs\r\n')
+      and '\n' not in clean.replace('\r\n', ''), True)
+check('a clean config is left exactly alone',
+      pin.strip_script_directives('client\nremote a 1\n' + CERT),
+      ('client\nremote a 1\n' + CERT, []))
+
+# Inline data blocks pass through, and end where OpenVPN ends them: at the
+# first line that begins with the closing tag.
+trick = ('client\n<ca>\nMIIB\n</ca> trailing\nup evil\n'
+         '<connection>\nremote 5.6.7.8 443\nup evil2\n</connection>\n'
+         '<plugin>\nevil.dll\n</plugin>\n<key>\nup\n</key>\n')
+clean, removed = pin.strip_script_directives(trick)
+check('a closing tag with more after it still closes the block',
+      'up evil\n' not in clean, True)
+check('inside <connection> is filtered like the rest',
+      'up evil2' not in clean and 'remote 5.6.7.8 443' in clean, True)
+check('a <plugin> block goes whole', 'evil.dll' not in clean
+      and '<plugin>' not in clean, True)
+check('key material that looks like a word is left alone',
+      '<key>\nup\n</key>\n' in clean, True)
+check('what went', removed, ['up', 'up', 'plugin'])
+
+clean, removed = pin.strip_script_directives(
+    '﻿up evil\nclient\n﻿ --plugin x.dll\n')
+check('a byte-order mark in front does not hide a directive',
+      (removed, 'evil' in clean or 'x.dll' in clean), (['up', 'plugin'], False))
+
+import tempfile                                              # noqa: E402
+with tempfile.TemporaryDirectory() as d:
+    path = os.path.join(d, 'x.ovpn')
+    with open(path, 'w', newline='') as f:
+        f.write('client\r\nup evil\r\nremote 1.2.3.4 443\r\n')
+    check('sanitize_file reports and rewrites', pin.sanitize_file(path), ['up'])
+    with open(path, newline='') as f:
+        body = f.read()
+    check('the file on disk is clean', 'up evil' not in body
+          and body.startswith('client\r\nremote 1.2.3.4 443\r\n'), True)
+    check('a second pass has nothing to do', pin.sanitize_folder(d), {})
+
+
+print()
 print(', '.join(failed) + ' failed' if failed else 'all pass')
 raise SystemExit(1 if failed else 0)

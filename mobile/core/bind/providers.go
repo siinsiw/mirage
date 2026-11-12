@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ERelay/ovpn-pin/mobile/core"
+	"github.com/siinsiw/ovpn-pin/mobile/core"
 )
 
 // Signing in, and fetching what a provider publishes.

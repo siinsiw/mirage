@@ -18,9 +18,10 @@ package core
 // the sites to be found, and the app has to be recognised once it is inside.
 //
 // What a connection is matched by is what the tun can know about it before
-// the first byte is sent anywhere: its address, the name the phone looked
-// that address up under (dnsnames.go saw the answer go past), and - when
-// neither settles it and names are listed - the name in its TLS ClientHello.
+// the first byte is sent anywhere: its address and, when names are listed,
+// its name - the one in its TLS ClientHello when it sends one, and otherwise
+// the name the phone looked that address up under (dnsnames.go saw the
+// answer go past). See ListedByName for why in that order.
 //
 // The Iran preset is three lists kept in lists/: Iran's registered address
 // ranges, the domains of Iranian services, and Iranian apps' package names.
@@ -36,6 +37,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -197,11 +199,56 @@ func (s *Split) AddrListed(ip netip.Addr) bool {
 	if !ip.Is4() || len(s.nets) == 0 {
 		return false
 	}
+	return inSpans(s.nets, ip)
+}
+
+// inSpans is whether an IPv4 address falls in one of a sorted set of ranges.
+func inSpans(nets []span, ip netip.Addr) bool {
 	v := be32(ip)
 	// The first range starting above v; the one before it is the only one
 	// that can hold v, since the ranges are sorted and do not overlap.
-	i := sort.Search(len(s.nets), func(i int) bool { return s.nets[i].lo > v })
-	return i > 0 && s.nets[i-1].hi >= v
+	i := sort.Search(len(nets), func(i int) bool { return nets[i].lo > v })
+	return i > 0 && nets[i-1].hi >= v
+}
+
+// ListedByName is whether a connection's name puts it on the list, taking
+// the better of the two names a connection can have. The SNI in its TLS
+// ClientHello is what the app itself asked for, on this very connection; the
+// name remembered for its address (dnsnames.go) is the last lookup that
+// produced that address, which on a CDN's shared addresses is as often
+// somebody else's site. So the SNI decides whenever there is one, and the
+// remembered name only when there is not.
+func (s *Split) ListedByName(sni, remembered string) bool {
+	if sni != "" {
+		return s.NameListed(sni)
+	}
+	return s.NameListed(remembered)
+}
+
+var (
+	iranOnce  sync.Once
+	iranSpans []span
+)
+
+// InIranIPv4 is whether an address is in the Iran preset's address list -
+// the same embedded ranges split tunnelling uses, read once.
+func InIranIPv4(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if !ip.Is4() {
+		return false
+	}
+	iranOnce.Do(func() {
+		var prefixes []netip.Prefix
+		for _, line := range listLines(iranIPv4) {
+			if p, err := netip.ParsePrefix(line); err == nil {
+				prefixes = append(prefixes, p)
+			} else if a, err := netip.ParseAddr(line); err == nil {
+				prefixes = append(prefixes, netip.PrefixFrom(a, 32))
+			}
+		}
+		iranSpans = spans(prefixes)
+	})
+	return inSpans(iranSpans, ip)
 }
 
 // UidListed is whether an app is listed (in "only", the one place apps are).

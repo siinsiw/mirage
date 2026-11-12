@@ -172,23 +172,10 @@ def app_version():
         return 'dev'
 
 
-def load_settings():
-    try:
-        with open(SETTINGS, encoding='utf-8') as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
-
-
-def save_settings(data):
-    try:
-        os.makedirs(paths.STATE_DIR, exist_ok=True)
-        tmp = SETTINGS + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp, SETTINGS)
-    except OSError:
-        pass
+# The settings file - load, save, the lock, the backup and the sealing -
+# lives in settingsfile.py, where it can be tested without a window.
+from settingsfile import (load_settings, save_settings,      # noqa: E402
+                          update_settings)
 
 
 def _tray_importable():
@@ -451,6 +438,29 @@ class Api:
         # the whole bridge and leaves a page that loads and can call nothing.
         self._sysproxy = winproxy.SystemProxy(paths.SAVED_PROXY)
         self._settings_early = load_settings()
+        # Sharing needs a password now. A copy that had it switched on from
+        # before there was one comes up with it off, and stays off until a
+        # password is set - the switch asks for one.
+        share_pw = self._settings_early.get('lanSharePassword')
+        # Said, not just done: the Share on Wi-Fi panel shows this until a
+        # new password is chosen, so a switch that is off for a reason the
+        # person did not see does not read as the app forgetting.
+        self._share_notice = ''
+        if (self._settings_early.get('lanShare')
+                and not engine.lan_password_ok(share_pw)):
+            self._settings_early['lanShare'] = False
+            save_settings(self._settings_early)
+            self._share_notice = (
+                'Share on Wi-Fi was turned off: it now needs a password of 8 '
+                'to 128 characters - English letters, digits, spaces and '
+                'punctuation, the same rule as the phone app'
+                + (", and the one saved here does not fit it"
+                   if share_pw else '')
+                + '. Turn it on to choose one.')
+        if share_pw and not engine.lan_password_ok(share_pw):
+            # Kept on disk out of the way rather than in use: a password no
+            # phone app would accept is not one to share with.
+            share_pw = None
         self._engine = Engine(
             self._sysproxy,
             folder=self._settings_early.get('folder') or None,
@@ -458,7 +468,16 @@ class Api:
             port=self._settings_early.get('port'),
             route_with=self._settings_early.get('routeWith', 'proxy'),
             split_settings=split.clean(self._settings_early.get('split'))[0],
-            lan_share=bool(self._settings_early.get('lanShare')))
+            lan_share=bool(self._settings_early.get('lanShare')),
+            lan_password=share_pw,
+            kill_switch=self._settings_early.get('killSwitch', True))
+        # Set while the kill switch is holding the line after the worker went
+        # away by itself, so that a page reloading meanwhile does not mistake
+        # the held proxy setting or adapter for a crash's leftovers and put
+        # the machine back on the bare line.
+        self._holding = False
+        # Whether the user's server is in Iran, by address: (domain, answer).
+        self._iran_cache = (None, None)
         self._window = None
         self._hwnd_cache = None
         self._tray = None
@@ -684,6 +703,16 @@ class Api:
                 # Share on Wi-Fi: whether other devices on the network may
                 # use this proxy. Details are lanShareState().
                 'lanShare': self._engine.lan_share,
+                'lanSharePasswordSet': engine.lan_password_ok(
+                    self._settings.get('lanSharePassword')),
+                'lanShareNotice': self._share_notice,
+                # "Block internet if the connection drops" - on unless
+                # turned off. See Engine.kill_switch.
+                'killSwitch': self._engine.kill_switch,
+                # Whether exit addresses may be sent to the IP-owner lookup
+                # (the company chips in the timing sheet).
+                'ownerLookup': self._settings.get('ownerLookup', True)
+                is not False,
                 # Whether there is an adapter to offer at all, and whether
                 # bringing it up will put a UAC prompt in front of somebody.
                 'tunReady': tun.available(),
@@ -723,18 +752,29 @@ class Api:
         recovered = False
         # A stash with no proxy of ours running is the wreckage of a copy
         # that was killed - unless another copy is up and using it right now,
-        # in which case it is not wreckage, it is theirs.
+        # in which case it is not wreckage, it is theirs. Or unless this copy
+        # is holding the line on purpose (the kill switch, after the worker
+        # went) and the page has merely been loaded again: that is a choice
+        # the person makes with Disconnect, not one a reload makes for them.
+        # A fresh launch never has _holding set, so a crash is still undone.
         if (self._sysproxy.stashed() and not self._engine.running()
+                and not self._holding
                 and not px_live_elsewhere(self._engine.port)):
             recovered = self._sysproxy.restore()
         # The adapter's version of the same wreckage: its worker gone and the
         # script that should have noticed gone with it. Told apart from the
         # proxy setting, because the page says which of the two it put back.
         recovered_tun = False
-        try:
-            recovered_tun = self._engine.tun.tidy()
-        except Exception:
-            pass
+        if not self._holding:
+            try:
+                recovered_tun = self._engine.tun.tidy()
+            except Exception:
+                pass
+        if self._engine.running():
+            # A window opening onto a connection already up - left running
+            # when the last one closed. Watched from now on like one this
+            # window made.
+            self._engine.expected_up = True
         status = dict(self._engine.status())
         if status.get('state') == 'on' and self._since:
             # So a window opened onto a connection already up counts from
@@ -841,6 +881,81 @@ class Api:
                 quiet = True
                 self._emit('Traffic', {'live': False})
 
+    def _watch_drop(self):
+        """Notice the worker going away without being asked.
+
+        It is a separate process on purpose (Engine._spawn), so it can die
+        without this window hearing a thing - a crash, an antivirus, a
+        taskkill. What happens next is the kill switch's to decide:
+
+          on   the machine stays pointed at the port nobody answers, so
+               nothing goes out on the bare line. The page is told it is
+               blocked, and why, and offered Reconnect or Disconnect.
+          off  the machine is put back, as Disconnect would, and the page is
+               told the connection dropped.
+
+        Every two seconds, and only while a connection is meant to be up -
+        a connect in flight, a port move or a disconnect is not a drop.
+        """
+        while not self._stop.wait(2.0):
+            if self._busy or not self._engine.expected_up:
+                continue
+            try:
+                if self._engine.running():
+                    continue
+            except Exception:
+                continue
+            # Asked again under the engine's lock: a move or a switch holds
+            # it, and what looked like a drop may be one of those halfway.
+            if not self._engine.lock.acquire(timeout=0.5):
+                continue
+            try:
+                if not self._engine.expected_up or self._engine.running():
+                    continue
+                self._engine.expected_up = False
+                held = self._engine.blocked()
+            finally:
+                self._engine.lock.release()
+            self._since = None
+            self._retray('off')
+            if held:
+                self._holding = True
+                self._emit('Blocked', {'reason': 'dropped',
+                                       'status': self._engine.status()})
+            else:
+                try:
+                    self._engine.disconnect(quiet=True)
+                except Exception:
+                    pass
+                self._emit('Dropped', {'status': self._engine.status()})
+
+    def setKillSwitch(self, on):
+        """Whether a dropped connection blocks the internet until you
+        reconnect or disconnect (on, the default), or lets traffic fall back
+        to the bare line (off).
+
+        Turned off while it is holding, the hold is let go of at once -
+        that is what turning it off means - and Windows goes back to normal.
+        """
+        on = bool(on)
+        self._engine.kill_switch = on
+        try:
+            if self._engine.tun.engaged_for(self._engine.port):
+                self._engine.tun.set_hold(on)
+        except Exception:
+            pass
+        released = False
+        if not on and not self._engine.running() and self._engine.engaged():
+            try:
+                self._engine.disconnect(quiet=True)
+                released = True
+            except Exception:
+                pass
+            self._holding = False
+        update_settings(self._settings,
+                        lambda st: st.__setitem__('killSwitch', on))
+        return {'ok': True, 'killSwitch': on, 'released': released}
+
     def setSystemProxy(self, on):
         """Whether connecting should move the whole machine or just serve.
 
@@ -911,6 +1026,7 @@ class Api:
         if self._busy:
             return {'ok': False, 'port': self._engine.port,
                     'error': 'Not while it is connecting. Try once it settles.'}
+        old_port = self._engine.port
         try:
             result = self._engine.set_port(port)
         except RuntimeError as e:
@@ -930,7 +1046,33 @@ class Api:
             # replaced. Same exit, same address, new pid - and the readout is
             # rebuilt from the answer rather than left to drift.
             self._emit('Connected', self._engine.status())
-        return {'ok': True, **result}
+        out = {'ok': True, **result}
+        if self._engine.port != old_port:
+            out.update(self._move_lan_rule(old_port, self._engine.port))
+        return out
+
+    def _move_lan_rule(self, old, new):
+        """The firewall rule follows the port while sharing: the old port's
+        rule is swapped for the new one's under one UAC prompt. Not sharing,
+        there is no rule of ours to move (turning sharing off removed it) and
+        nothing is asked."""
+        if not self._engine.lan_share:
+            return {}
+        try:
+            stale = engine.probe_network(old, fresh=True)
+        except Exception:
+            stale = None
+        # Unknown (no answer from PowerShell) is treated as there: removing a
+        # rule that is not there costs nothing, leaving one open does.
+        has_old = stale is None or bool(stale.get('found'))
+        ok, why = engine.change_firewall('move', new,
+                                         old=old if has_old else None)
+        if not ok:
+            return {'firewall': 'missing',
+                    'warning': ('Sharing moved to the new port, but the '
+                                f'firewall rule could not be moved: {why}')}
+        return {'firewall': engine.firewall_verdict(
+            engine.probe_network(new, fresh=True))}
 
     # -- Share on Wi-Fi ------------------------------------------------------
 
@@ -950,7 +1092,7 @@ class Api:
         info = engine.probe_network(port, fresh=True)
         return True, engine.firewall_verdict(info) if info else 'ok', None
 
-    def setLanShare(self, on):
+    def setLanShare(self, on, password=None):
         """Offer the connection to other devices on the same Wi-Fi.
 
         A phone sets its Wi-Fi HTTP proxy to this PC's address and this
@@ -978,6 +1120,28 @@ class Api:
                     'error': 'Not while it is connecting. Try once it settles.'}
         port = self._engine.port
         out = {}
+        # A password, always. Sharing cannot be turned on without one: the
+        # page asks for it when the switch is flipped, and a password sent
+        # with the switch replaces the one kept. Kept sealed in the settings
+        # file (settingsfile.py), and handed to the worker in its
+        # environment rather than on its command line.
+        changed = False
+        if on:
+            given = password if isinstance(password, str) else None
+            pw = given if given is not None else self._settings.get(
+                'lanSharePassword')
+            if not engine.lan_password_ok(pw):
+                return {'ok': False, 'lanShare': was, 'needPassword': True,
+                        'error': ('Choose a password of '
+                                  f'{engine.LAN_PASSWORD_MIN} to '
+                                  f'{engine.LAN_PASSWORD_MAX} characters - '
+                                  'English letters, digits, spaces and '
+                                  'punctuation. Devices will need it to use '
+                                  'this PC as their proxy.')}
+            changed = pw != self._engine.lan_password
+            self._engine.lan_password = pw
+            self._settings['lanSharePassword'] = pw
+            self._share_notice = ''
         if on:
             ok, state, why = self._lan_rule_for(port)
             if not ok:
@@ -991,7 +1155,9 @@ class Api:
                                   'Windows settings, then try the phone '
                                   'again.')
         try:
-            result = self._engine.set_lan_share(on)
+            # A new password for a worker already sharing means a new worker:
+            # the old one holds the old password in its environment.
+            result = self._engine.set_lan_share(on, force=on and changed)
         except Exception as e:
             # A move that fell over mid-flight leaves nothing running, and
             # the page has to hear that rather than a switch that "worked".
@@ -1027,6 +1193,14 @@ class Api:
         if why:
             out['error'] = why
         return out
+
+    def lanSharePassword(self):
+        """The share password, for the moment the person asks to see it - to
+        type it into a phone. Never part of info() or lanShareState(), which
+        are painted on every visit to the screen."""
+        pw = self._settings.get('lanSharePassword')
+        return {'ok': engine.lan_password_ok(pw),
+                'password': pw if engine.lan_password_ok(pw) else ''}
 
     def lanShareState(self):
         """What the sharing panel shows: the address to type into the phone,
@@ -1532,15 +1706,28 @@ class Api:
         """Ask who the untraced addresses are rented from.
 
         Its own button rather than something the sheet does on opening: it is
-        a request to somebody else's service per hundred addresses, with a
+        a request to somebody else's service for every address, with a
         deliberate wait between them, and doing that because a settings sheet
         was opened would be rude to them and slow for you.
         """
+        if self._settings.get('ownerLookup', True) is False:
+            return {'ok': False, 'error': 'Looking up who owns each exit is '
+                                          'turned off in Settings, so no '
+                                          'addresses were sent anywhere.'}
         target = folder or self._engine.folder
         result = sweep.look_up_owners(target)
         if not result.get('ok'):
             return result
         return {**result, 'plan': self.sweepPlan(target)}
+
+    def setOwnerLookup(self, on):
+        """Whether exit addresses may be sent to an IP-lookup service to learn
+        which company each is rented from - the company chips, and the
+        sweep's own lookup (told -NoOwner when this is off)."""
+        on = bool(on)
+        update_settings(self._settings,
+                        lambda st: st.__setitem__('ownerLookup', on))
+        return {'ok': True, 'ownerLookup': on}
 
     def chooseSweepFolder(self):
         try:
@@ -1905,6 +2092,8 @@ class Api:
                 'serverCount': len(self._engine.servers())}
 
     def startSweep(self, folder=None):
+        self._sweep.no_owner = self._settings.get('ownerLookup', True) is False
+        self._sweep.verify_exit = self._verify_exit()
         return self._sweep.start(
             self._engine, folder or self._engine.folder,
             lambda p: self._emit('Sweep', p), **self._sweep_choices())
@@ -2426,7 +2615,68 @@ class Api:
                 password=want[2], api_password=want[3], ss=ss,
                 expected_pin=want[5], port=want[6])
             self._tunnel_key = want
+        # Read every time rather than baked in: it is a switch the person can
+        # flip without anything else about the server changing.
+        self._tunnel.verify_exit = self._verify_exit()
         return self._tunnel
+
+    # -- does the server check the exits it is handed ------------------------
+
+    def _verify_exit(self):
+        """Whether this server checks each provider exit's certificate (on
+        unless turned off for this server). Kept per server, by its address,
+        so that a new server starts from the safe answer."""
+        st = self._settings
+        per = st.get('tunnelVerifyExit')
+        domain = st.get('tunnelDomain') or ''
+        if isinstance(per, dict):
+            return per.get(domain, True) is not False
+        return per is not False
+
+    def _server_in_iran(self, fresh=False):
+        """Whether the user's server is at an Iranian address, by the Iran
+        preset's own ranges (lists/iran-ipv4.txt). A name is looked up over
+        DoH, never the line's resolver. A name behind Cloudflare resolves to
+        Cloudflare, which says nothing either way: None means "cannot tell".
+        """
+        domain = (self._settings.get('tunnelDomain') or '').strip()
+        if not domain:
+            return None
+        cached_for, answer = self._iran_cache
+        if cached_for == domain and not fresh:
+            return answer
+        if tunnel.is_address(domain):
+            addrs = [domain]
+        else:
+            try:
+                addrs = surfshark._doh(domain, 8)
+            except Exception:
+                addrs = []
+        answer = split.in_iran(addrs) if addrs else None
+        self._iran_cache = (domain, answer)
+        return answer
+
+    def setTunnelVerifyExit(self, on, confirmed=False):
+        """The switch for this server. Turning it off needs `confirmed`: the
+        page asks first, because it sends the provider account's password to
+        exits whose certificates are no longer checked."""
+        on = bool(on)
+        if not on and not confirmed:
+            return {'ok': False, 'needConfirm': True, 'verifyExit': True}
+        domain = self._settings.get('tunnelDomain') or ''
+
+        def put(st):
+            per = st.get('tunnelVerifyExit')
+            per = dict(per) if isinstance(per, dict) else {}
+            if on:
+                per.pop(domain, None)
+            else:
+                per[domain] = False
+            st['tunnelVerifyExit'] = per
+        update_settings(self._settings, put)
+        if self._tunnel:
+            self._tunnel.verify_exit = on
+        return {'ok': True, 'verifyExit': on, **self.tunnelPlan()}
 
     def _tunnel_port(self):
         """Where the server's TLS answers: what its key said, else 443."""
@@ -2468,7 +2718,24 @@ class Api:
             'transport': 'ss' if self._tunnel_ss() else 'ws',
             'hasSs': isinstance(st.get('tunnelSs'), dict),
             'ssPort': (st.get('tunnelSs') or {}).get('port'),
+            # Whether the server checks each provider exit's certificate,
+            # and - when it is known without a network round trip - whether
+            # the server is at an Iranian address (serverInIran() asks).
+            'verifyExit': self._verify_exit(),
+            'inIran': (self._iran_cache[1]
+                       if self._iran_cache[0] == st.get('tunnelDomain')
+                       else None),
         }
+
+    def serverInIran(self):
+        """Ask, now, whether the server is in Iran - for the notice beside
+        the exit-verification switch. A DoH request when the server is a
+        name, so the page asks for it after drawing rather than with it."""
+        try:
+            answer = self._server_in_iran()
+        except Exception:
+            answer = None
+        return {'inIran': answer, 'verifyExit': self._verify_exit()}
 
     def importKey(self, text):
         """Set the whole tunnel up from the key the installer printed.
@@ -2592,16 +2859,31 @@ class Api:
         host = (domain or self._settings.get('tunnelDomain') or '').strip()
         if not host:
             return {'ok': False, 'error': "type the server's IP or domain first"}
+        # This becomes a line somebody pastes into a root shell. Checked
+        # against the shared rule first, and quoted as a shell word anyway.
+        if not engine.px.valid_host(host):
+            return {'ok': False, 'error': 'that is not a server address - use '
+                                          'its IPv4 address or a domain name '
+                                          '(letters, digits, hyphens, dots)'}
         if host != self._settings.get('tunnelDomain'):
-            self.saveTunnel(domain=host)
+            saved = self.saveTunnel(domain=host)
+            if isinstance(saved, dict) and saved.get('ok') is False:
+                return saved
         self._ensure_tunnel_passwords()
         pw = self._settings['tunnelPassword']
         api = self._settings['tunnelApiPassword']
+        for label, value in (('tunnel password', pw), ('API password', api)):
+            if not engine.px.valid_secret(value):
+                return {'ok': False,
+                        'error': f'the {label} kept here cannot go into a '
+                                 f'command line - it has to be '
+                                 f'{engine.px.SECRET_RULE}. Set a new one.'}
+        q = engine.px.shell_quote
         return {'ok': True,
                 'command': " mkdir -p /opt/relay && echo '" + blob + "' | base64 -d "
                            "> /opt/relay/install-server.sh && bash "
-                           f"/opt/relay/install-server.sh {host} "
-                           f"--password '{pw}' --api-password '{api}'",
+                           f"/opt/relay/install-server.sh {q(host)} "
+                           f"--password {q(pw)} --api-password {q(api)}",
                 'status': "systemctl --no-pager --lines=0 status gost sing-box nginx"
                           " | grep -E '^. |Active:'; ss -lnt | grep -E "
                           "':443 |:838[89] |127.0.0.1:(1000[0-3]|18080) '",
@@ -2609,15 +2891,32 @@ class Api:
                              " rm -f /etc/systemd/system/gost.service"
                              " /etc/systemd/system/sing-box.service"
                              " /usr/local/bin/gost /usr/local/bin/sing-box"
-                             f" /etc/nginx/sites-enabled/relay-{host}.conf"
-                             f" /etc/nginx/sites-available/relay-{host}.conf;"
+                             f" {q(f'/etc/nginx/sites-enabled/relay-{host}.conf')}"
+                             f" {q(f'/etc/nginx/sites-available/relay-{host}.conf')};"
                              " rm -rf /etc/gost /etc/sing-box /etc/relay /opt/relay;"
                              " systemctl daemon-reload; systemctl reload nginx"}
 
     def saveTunnel(self, domain=None, password=None, apiPassword=None):
         """Keep what was typed. Blank means unchanged, not cleared: the page
         never sends the passwords back, so treating empty as "erase" would
-        wipe them every time the domain was edited."""
+        wipe them every time the domain was edited.
+
+        Checked against the shared rule (px.valid_host / valid_secret)
+        before anything is kept: these go into gost's config, an HTTP
+        header and the install command's root shell line."""
+        px_ = engine.px
+        if domain is not None and domain.strip() and \
+                not px_.valid_host(domain.strip()):
+            return {**self.tunnelPlan(), 'ok': False,
+                    'error': 'That is not a server address. Use its IPv4 '
+                             'address or a domain name - letters, digits, '
+                             'hyphens and dots.'}
+        for label, value in (('tunnel password', password),
+                             ('API password', apiPassword)):
+            if value and not px_.valid_secret(value.strip()):
+                return {**self.tunnelPlan(), 'ok': False,
+                        'error': f'That {label} has characters it cannot '
+                                 f'have. It has to be {px_.SECRET_RULE}.'}
         if domain is not None:
             if domain.strip() != self._settings.get('tunnelDomain', ''):
                 # A new server: the certificate kept for the old one is not
@@ -2850,6 +3149,7 @@ class Api:
                     result = self._through_tunnel(where, mode, provider=want,
                                                   only=only, city=city)
                 self._since = time.time()
+                self._holding = False
                 self._retray('on')
                 if isinstance(result, dict):
                     result = dict(result, since=self._since)
@@ -2875,16 +3175,28 @@ class Api:
                             f.write(tail)
                 except OSError:
                     pass
+                # A switch that found nothing to switch to. With the kill
+                # switch on, the line the old connection was holding stays
+                # held - that is the promise - and the page says so; off, or
+                # with nothing held, Windows goes back as it always did.
                 try:
-                    self._engine.disconnect(quiet=True)
+                    self._engine.disconnect(
+                        quiet=True, hold=self._engine.holding())
                 except Exception:
                     pass
+                blocked = False
+                try:
+                    blocked = self._engine.blocked()
+                except Exception:
+                    pass
+                self._holding = blocked
                 self._retray('off')
                 # The port goes with it: the one failure the page has to name
                 # a number in is the port being held by somebody else, and
                 # the page has no other way to know which port was tried.
                 self._emit('Failed', {'kind': kind, 'detail': str(e),
-                                      'port': self._engine.port})
+                                      'port': self._engine.port,
+                                      'blocked': blocked})
             finally:
                 self._busy = False
 
@@ -2950,13 +3262,15 @@ class Api:
         """
         best, last = None, None
         for server in ordered[:tries]:
-            ip, _host = engine.px.read_config(server.path)
+            ip, host = engine.px.read_config(server.path)
             # The chosen exit's own provider, asked after it is chosen. This
             # used to be the Surfshark credential whatever the exit, so a
             # Windscribe country here was refused by its own exit - and the
             # server answered 503 for every connection after.
             user, password = self._engine.credentials_for(server)
-            client.set_exit(ip, user, password, name=server.file)
+            # `host` is the name the config was pinned from, which the
+            # server checks the exit's certificate against (px.exit_tls).
+            client.set_exit(ip, user, password, name=server.file, host=host)
             last = server.file
             if tries == 1:
                 best = (server, ip, user, password, 0)
@@ -2973,7 +3287,8 @@ class Api:
         server, ip, user, password, rate = best
         if server.file != last:
             # The fastest was not the last one tried: put it back.
-            client.set_exit(ip, user, password, name=server.file)
+            client.set_exit(ip, user, password, name=server.file,
+                            host=engine.px.read_config(server.path)[1])
         return best
 
     # -- configs for other devices (export.py) ------------------------------
@@ -3074,8 +3389,9 @@ class Api:
                                 lambda s, i=i, label=label: emit(
                                     i, label, 'testing',
                                     f'testing upload via {s.file.split("_")[0]}'))
-                            client.set_slot(i, ip, user, password,
-                                            name=server.file)
+                            client.set_slot(
+                                i, ip, user, password, name=server.file,
+                                host=engine.px.read_config(server.path)[1])
                         except Exception as e:
                             text = str(e)
                             if 'refused the API' in text or 'no exported' in text:
@@ -3166,9 +3482,12 @@ class Api:
             minutes = max(1, int((time.time() - self._since) / 60))
         self._since = None
         try:
+            # Never held: Disconnect is the one way out of the kill switch,
+            # and it puts the machine back whatever state it was in.
             self._engine.disconnect()
         except Exception as e:
             return {'ok': False, 'error': str(e)}
+        self._holding = False
         self._retray('off')
         # Straight away rather than on the next tick: the address just
         # changed back and the window is still showing the exit's.
@@ -4876,6 +5195,8 @@ def main():
                      lambda: threading.Thread(target=api._watch_self,
                                               daemon=True).start(),
                      lambda: threading.Thread(target=api._watch_traffic,
+                                              daemon=True).start(),
+                     lambda: threading.Thread(target=api._watch_drop,
                                               daemon=True).start()):
             try:
                 step()

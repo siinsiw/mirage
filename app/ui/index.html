@@ -303,6 +303,12 @@
   </section>
 
   <p class="hint" id="hint"></p>
+  <!-- The kill switch at work: the connection dropped (or a switch found
+       nothing) and Windows is held on Relay, so nothing goes out on the bare
+       line. Connect reconnects; this is the other way out. -->
+  <div class="blocked" id="blocked" role="status" hidden>
+    <button class="btn btn--quiet btn--auto" id="unblock" type="button">Disconnect and restore internet</button>
+  </div>
 </main>
 
 <dialog class="sheet" id="picker">
@@ -660,6 +666,23 @@
               aria-label="Route all of Windows"><span></span></button>
     </section>
 
+    <!-- 2a - the kill switch. On unless turned off: a connection that drops,
+         or a switch to another server, leaves Windows pointed at Relay so
+         nothing goes out on the bare line until you reconnect or press
+         Disconnect. -->
+    <section class="setrow pane--line" id="prefKill">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Block internet if the connection drops</h3>
+        <p class="pane__why">Nothing reaches the internet outside Relay until
+          you reconnect or press Disconnect. Off, traffic falls back to your
+          normal connection.</p>
+      </span>
+      <button class="toggle" id="killSwitch" type="button"
+              role="switch" aria-checked="true"
+              aria-label="Block internet if the connection drops"><span></span></button>
+    </section>
+
     <!-- 2b - and how. Two answers of the same weight, so the two-position
          switch rather than a list. Directly under the switch it qualifies,
          and dimmed with it: with Windows left alone there is nothing for
@@ -855,8 +878,9 @@
                   aria-checked="false" aria-label="Share this connection on Wi-Fi"><span></span></button>
         </section>
       </div>
-      <p class="note" id="lanUac">Turning this on shows a Windows permission
-        prompt, once, to open the firewall for it. Turning it off may ask again.</p>
+      <p class="note" id="lanUac">Turning this on asks for a password other
+        devices will need, then shows a Windows permission prompt, once, to
+        open the firewall for it. Turning it off may ask again.</p>
       <p class="note" id="lanSaid" role="status" aria-live="polite"></p>
       <div class="lan" id="lanBody" hidden>
         <h4 class="lan__head">On the other device</h4>
@@ -866,7 +890,12 @@
             <button class="btn btn--bare" id="lanCopyAddr" type="button">Copy</button></div>
           <div class="kv__row"><dt>Port</dt><dd class="mono" id="lanPort">—</dd>
             <button class="btn btn--bare" id="lanCopyPort" type="button">Copy</button></div>
+          <div class="kv__row"><dt>Password</dt><dd class="mono" id="lanPw">••••••••</dd>
+            <button class="btn btn--bare" id="lanPwShow" type="button" aria-pressed="false">Show</button></div>
         </dl>
+        <div class="pane__row">
+          <button class="btn btn--bare" id="lanPwChange" type="button">Change the password</button>
+        </div>
         <p class="note" id="lanOthers" hidden></p>
         <p class="lan__line" id="lanClients"></p>
         <p class="lan__line" id="lanFw"></p>
@@ -878,12 +907,14 @@
           <summary class="expander__sum"><span>How to set it on an iPhone</span>
             <svg class="ico expander__chev" aria-hidden="true"><use href="#i-chev-down"/></svg></summary>
           <p class="pane__why pane__why--tight">Settings → Wi-Fi → the (i) next to this network →
-            Configure Proxy → Manual. Type the server and port above, leave
-            authentication off, and save. Android has the same under the
-            network's Advanced options.</p>
+            Configure Proxy → Manual. Type the server and port above, turn
+            Authentication on, put anything as the username and the password
+            above, and save. Android's Wi-Fi proxy setting cannot send a
+            password, so on Android use an app that takes an HTTP or SOCKS5
+            proxy with a password.</p>
         </details>
-        <p class="note">Only devices on the same network can use it. Anyone
-          on that network can, so share it on a network you trust.</p>
+        <p class="note">Only devices on the same network, that know the
+          password, can use it.</p>
       </div>
     </section>
 
@@ -1040,6 +1071,43 @@
             <svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>
             <span>Test says it cannot be reached? Find another way in</span>
           </button>
+        </div>
+
+        <!-- Whether the server checks each provider exit's certificate when
+             server + exit hands it one. On by default; off only on purpose,
+             and only after saying what it costs. Per server: a new server
+             starts checked again. -->
+        <div class="step" id="tunnelVerifyStep" hidden>
+          <p class="step__cap">
+            <svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>
+            <span>Checking the exits</span>
+          </p>
+          <div class="split__iran">
+            <label class="split__copy" for="tunnelVerify">
+              <span class="split__name" id="tunnelVerifyName">Check each exit's certificate</span>
+              <span class="split__help" id="tunnelVerifySaid">Your server
+                checks that the exit it is handed really is the provider's
+                before sending it the account password.</span>
+            </label>
+            <button class="toggle toggle--sm" id="tunnelVerify" type="button"
+                    role="switch" aria-checked="true"
+                    aria-labelledby="tunnelVerifyName"
+                    aria-describedby="tunnelVerifySaid"><span></span></button>
+          </div>
+          <!-- Only when the server's address is Iranian and checking is on. -->
+          <p class="note split__warn" id="tunnelIranNote" hidden>
+            <svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg>
+            <span>Your server looks like it is in Iran. Checking an exit means
+              your server sends the provider's name (such as
+              <span class="mono">*.prod.surfshark.com</span>) in the clear when
+              it connects, and Iran's filtering may block connections that
+              name a VPN provider. If server + exit keeps failing, turn
+              checking off for this server.</span>
+          </p>
+          <div class="pane__row pane__row--acts" id="tunnelIranRow" hidden>
+            <button class="btn btn--quiet btn--auto" id="tunnelVerifyOff" type="button">Turn checking off&hellip;</button>
+          </div>
+          <p class="note" id="tunnelVerifyNote" role="status" aria-live="polite"></p>
         </div>
       </div>
       </details>
@@ -1425,6 +1493,20 @@
             and all of them are swept.</p>
           <ul class="chips" id="sweepLords"></ul>
           <p class="note" id="lordsSaid"></p>
+          <!-- Whether exit addresses may leave this machine to be looked up
+               at all. On by default; off, Look the rest up is refused and
+               the timing run is told not to look them up either. -->
+          <div class="split__iran">
+            <label class="split__copy" for="ownerLookup">
+              <span class="split__name" id="ownerLookupName">Look up who owns each exit</span>
+              <span class="split__help" id="ownerLookupSaid">Sends exit
+                addresses to an IP-lookup service (ipwho.is), over HTTPS.</span>
+            </label>
+            <button class="toggle toggle--sm" id="ownerLookup" type="button"
+                    role="switch" aria-checked="true"
+                    aria-labelledby="ownerLookupName"
+                    aria-describedby="ownerLookupSaid"><span></span></button>
+          </div>
           <div class="pane__row" id="lookUpRow" hidden>
             <button class="btn btn--quiet btn--auto" id="lookUpOwners" type="button">
               <svg class="ico ico--sm" aria-hidden="true"><use href="#i-tower"/></svg>Look the rest up</button>
@@ -1733,6 +1815,39 @@
   <div class="ask__row">
     <button class="btn btn--quiet btn--auto" id="askQuit" type="button">Quit Relay</button>
     <button class="btn first__go btn--auto" id="askTray" type="button">Put in the tray</button>
+  </div>
+</dialog>
+
+<!-- Share on Wi-Fi's password. Asked for when sharing is turned on, and it
+     cannot be turned on without one. Shown as typed rather than as dots: it
+     is going to be read off this screen and typed into a phone. -->
+<dialog class="ask" id="askLanPw">
+  <h2 class="ask__title">A password for Share on Wi-Fi</h2>
+  <p class="ask__say">Other devices give this as the proxy password. 8 to
+    128 characters &mdash; English letters, digits, spaces and punctuation,
+    so it can be typed on any phone. Anyone on this Wi-Fi who has it can use
+    your connection.</p>
+  <label class="field">
+    <span class="field__cap">Password</span>
+    <input class="field__in mono" id="askLanPwIn" type="text" minlength="8"
+           maxlength="128" autocomplete="off" autocapitalize="off"
+           spellcheck="false" aria-describedby="askLanPwSaid">
+  </label>
+  <p class="note" id="askLanPwSaid" role="status" aria-live="polite"></p>
+  <div class="ask__row">
+    <button class="btn btn--quiet btn--auto" id="askLanPwNo" type="button">Cancel</button>
+    <button class="btn first__go btn--auto" id="askLanPwYes" type="button">Share</button>
+  </div>
+</dialog>
+
+<!-- A yes-or-no question for a choice that weakens something - asked in
+     words that say what is given up, with the safe answer as the default. -->
+<dialog class="ask" id="askConfirm">
+  <h2 class="ask__title" id="askConfirmTitle"></h2>
+  <p class="ask__say" id="askConfirmSay"></p>
+  <div class="ask__row">
+    <button class="btn first__go btn--auto" id="askConfirmNo" type="button">Keep it on</button>
+    <button class="btn btn--quiet btn--auto" id="askConfirmYes" type="button">Turn it off</button>
   </div>
 </dialog>
 

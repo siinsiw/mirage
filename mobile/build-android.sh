@@ -38,9 +38,13 @@ prefer() {                      # prefer VAR /a/path /another/path ...
     return 0
 }
 
-prefer GO_BIN "/c/Users/bashi/sdk/go1.27.0/go/bin"
+# Go: GO_BIN when it is set (the folder holding the go binary, e.g.
+# GO_BIN=~/sdk/go1.27.0/go/bin), else GOROOT's bin, else whatever `go` is on
+# PATH. No one person's folder is written in here any more: that default was
+# a path that existed on one machine and nowhere else.
+prefer GO_BIN "${GOROOT:+$GOROOT/bin}"
 prefer JAVA_HOME "/c/Program Files/Android/Android Studio/jbr"
-prefer ANDROID_HOME "${ANDROID_SDK_ROOT-}" "$HOME/Android/Sdk" "${LOCALAPPDATA-}/Android/Sdk" "C:/Users/bashi/AppData/Local/Android/Sdk"
+prefer ANDROID_HOME "${ANDROID_SDK_ROOT-}" "$HOME/Android/Sdk" "${LOCALAPPDATA-}/Android/Sdk"
 
 if [ -n "${ANDROID_HOME-}" ]; then
     export ANDROID_HOME
@@ -65,6 +69,11 @@ if [ -z "${GOPATH_BIN-}" ] && command -v go >/dev/null; then
 fi
 
 need() { command -v "$1" >/dev/null || { echo "missing: $1" >&2; exit 1; }; }
+command -v go >/dev/null || {
+    echo "missing: go - put it on PATH, or point GO_BIN at the folder that holds it" >&2
+    echo "         (GO_BIN=/path/to/go/bin $0)" >&2
+    exit 1
+}
 need go
 need gomobile
 need javac

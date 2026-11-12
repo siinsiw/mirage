@@ -17,6 +17,8 @@ import android.os.PowerManager
 import android.os.SystemClock
 import com.erelay.relay.data.SplitMode
 import java.net.Inet4Address
+import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -59,6 +61,19 @@ import relay.Relay
  *  - Foreground, with a notification, before anything else. A VPN service
  *    that is not in the foreground is killed as soon as the window goes away,
  *    and the tunnel goes with it.
+ *
+ * And one that is about time rather than about the platform: every Connect,
+ * Disconnect and teardown is a numbered request ([generation]), and only the
+ * newest one may change anything. A connect spends seconds to a minute in
+ * calls that cannot be interrupted - a race, an edge scan, a test request -
+ * and a Disconnect pressed meanwhile used to tear down what was there, after
+ * which the connect finished anyway and opened a tunnel nobody wanted any
+ * more, or cleared the protector out from under the next one. Now a request
+ * takes its number on the main thread the moment it arrives; the work that
+ * changes what is up happens under [lifecycle], and every long call is
+ * followed by a check that the number is still the newest. A connect that
+ * has been overtaken simply stops: whatever overtook it tears down what it
+ * had opened, because every request starts with [stopTunnel].
  */
 class RelayVpnService : VpnService() {
 
@@ -66,15 +81,73 @@ class RelayVpnService : VpnService() {
     // The raw descriptor, once ownership has left ParcelFileDescriptor. Kept
     // only so that a status line can say whether one is open; nothing here
     // closes it, because the core does.
-    private var tunFd: Int = -1
+    @Volatile private var tunFd: Int = -1
     @Volatile private var client: Client? = null
 
+    // A Client a connect is using before it carries anything - server + exit's
+    // search for an exit - so that Disconnect can stop it as it stops a race.
+    @Volatile private var pending: Client? = null
+
     // The watchdog over a tunnel that is up. See watch().
-    private var watcher: Job? = null
+    @Volatile private var watcher: Job? = null
 
     // The sentence the tunnel came up with, said again when a stall clears
     // without the exit having changed.
-    private var connectedText = ""
+    @Volatile private var connectedText = ""
+
+    // Whether the newest request to this instance was to be connected. Only
+    // for a stray ACTION_SEEN, which must not keep alive a service that was
+    // told to stop.
+    @Volatile private var wanted = false
+
+    /**
+     * One request: its number, and the start id Android gave it - which is
+     * what [stopSelf] is told, so that a request that fails cannot stop the
+     * service out from under a newer one that has already arrived.
+     */
+    private class Attempt(val gen: Long, val startId: Int) {
+        val current: Boolean get() = RelayVpnService.generation.get() == gen
+    }
+
+    /**
+     * What a Connect asked for, and nothing secret: the passwords are read
+     * from [Secrets] and [Accounts] when they are needed, so a restart by the
+     * system needs only this to reach the same place the window did.
+     *
+     * [provider] is the way out ("surfshark" for the provider race, else the
+     * server mode), [country] the pick, [only] the files behind it.
+     */
+    private class Request(
+        val provider: String, val configDir: String, val country: String, val only: String,
+    ) {
+        fun save(ctx: android.content.Context) {
+            Keys.prefs(ctx).edit().putString(Keys.LAST_CONNECT, JSONObject()
+                .put("provider", provider).put("configDir", configDir)
+                .put("country", country).put("only", only).toString()).apply()
+        }
+
+        companion object {
+            fun from(i: Intent) = Request(
+                provider = i.getStringExtra(RelayVpnService.EXTRA_PROVIDER) ?: "surfshark",
+                configDir = i.getStringExtra(RelayVpnService.EXTRA_CONFIG_DIR).orEmpty(),
+                country = i.getStringExtra(RelayVpnService.EXTRA_COUNTRY) ?: "auto",
+                only = i.getStringExtra(RelayVpnService.EXTRA_ONLY).orEmpty(),
+            )
+
+            /** The last Connect, or null when there has not been one since this was kept. */
+            fun saved(ctx: android.content.Context): Request? {
+                val raw = Keys.prefs(ctx).getString(Keys.LAST_CONNECT, null) ?: return null
+                return try {
+                    val o = JSONObject(raw)
+                    Request(o.optString("provider", "surfshark").ifEmpty { "surfshark" },
+                        o.optString("configDir"), o.optString("country", "auto").ifEmpty { "auto" },
+                        o.optString("only"))
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }
+    }
 
     companion object {
         const val TAG = "Relay"
@@ -88,15 +161,11 @@ class RelayVpnService : VpnService() {
          */
         const val ACTION_SEEN = "com.erelay.relay.SEEN"
         const val EXTRA_SEEN_COUNTRY = "seenCountry"
-        const val EXTRA_USER = "user"
-        const val EXTRA_PASSWORD = "password"
 
-        // Windscribe's, which is a different account entirely. A folder can
-        // hold both providers' exits, and an exit asked with the other one's
-        // credential is refused - which reads on screen as "blocked here"
-        // rather than as "wrong question".
-        const val EXTRA_WS_USER = "wsUser"
-        const val EXTRA_WS_PASSWORD = "wsPassword"
+        // No credential travels in the intent. Both providers' accounts, the
+        // tunnel password and the API password are read by the service from
+        // [Accounts] and [Keys.secret] as it connects - which is also what
+        // lets a restart by the system, with no intent at all, connect.
         const val EXTRA_CONFIG_DIR = "configDir"
         const val EXTRA_COUNTRY = "country"
 
@@ -108,18 +177,69 @@ class RelayVpnService : VpnService() {
 
         // Which way out. "surfshark" races the pinned provider exits; the
         // rest go through the user's own server and differ only in the path
-        // they ask it for.
+        // they ask it for. The server itself - its address, edges, pin and
+        // port - is read from the settings, so it is the same on a restart.
         const val EXTRA_PROVIDER = "provider"
-        const val EXTRA_DOMAIN = "domain"
-        const val EXTRA_TUNNEL_PASSWORD = "tunnelPassword"
-        const val EXTRA_EDGES = "edges"
-        // A server reached by IP: the certificate it must show, and the API
-        // password server + exit sets the exit with.
-        const val EXTRA_PIN = "pin"
-        const val EXTRA_API_PASSWORD = "apiPassword"
 
         private const val CHANNEL = "relay.tunnel"
         private const val NOTIFICATION = 1
+
+        /**
+         * The newest request's number. In the companion rather than on the
+         * instance because the teardown of a destroyed instance runs after
+         * it is gone, and may overlap the next instance's first connect; one
+         * count across both is what lets the old one see it is no longer the
+         * newest and leave the shared state - the protector above all - to
+         * the new one.
+         *
+         * Internal rather than private only so that [Attempt], a nested
+         * class, reads it without leaning on the compiler's accessors.
+         */
+        internal val generation = AtomicLong()
+
+        /** Held while anything is being set up or torn down. See the class comment. */
+        private val lifecycle = Any()
+
+        /**
+         * Held while server + exit searches for an exit - the one long call
+         * that writes the server's exit-chain and that nothing can interrupt.
+         * Separate from [lifecycle] so a Disconnect is never kept waiting for
+         * it; see connectServer.
+         */
+        private val serverChain = Any()
+
+        /**
+         * Why the Wi-Fi share is not running when it should be - the core's
+         * own words ("there is no Wi-Fi, hotspot or Ethernet address to share
+         * on", a port in use) - or empty. Read by the share screen, which
+         * otherwise could only say "Starting…" forever.
+         */
+        @Volatile var lanShareError: String = ""
+            private set
+
+        /**
+         * For teardowns that must finish after the service is gone. The
+         * service's own scope is cancelled in onDestroy, and a coroutine that
+         * had not started on it yet would never run - leaving the stack, and
+         * the tun descriptor it owns, open.
+         */
+        private val process = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        /** The instance alive now, for [noteSeen]; null between instances. */
+        @Volatile private var running: RelayVpnService? = null
+
+        /**
+         * Where the window measured the traffic coming out, for the
+         * notification. A call rather than an intent: an intent is a start
+         * request, and one arriving just after Disconnect would leave
+         * Android holding a start id newer than the Disconnect's - and the
+         * service, told to stop with the older one, would not.
+         */
+        fun noteSeen(country: String) {
+            if (exitAddress.isEmpty()) return
+            seenCountry = country
+            running?.let { s -> s.notificationManager().notify(NOTIFICATION, s.notification(status)) }
+        }
 
         /**
          * Where the window is told to look, rather than the window being sent
@@ -205,10 +325,16 @@ class RelayVpnService : VpnService() {
         /** Starts the share on the live tunnel. Throws when there is none, or the port is taken. */
         fun startLanShare(port: Int, password: String): String {
             val c = live ?: throw IllegalStateException("The tunnel is not up.")
-            return c.startLANShare(port.toLong(), password)
+            return try {
+                c.startLANShare(port.toLong(), password).also { lanShareError = "" }
+            } catch (e: Exception) {
+                lanShareError = e.message ?: e.toString()
+                throw e
+            }
         }
 
         fun stopLanShare() {
+            lanShareError = ""
             try {
                 live?.stopLANShare()
             } catch (e: Exception) {
@@ -227,6 +353,11 @@ class RelayVpnService : VpnService() {
         }
     }
 
+    override fun onCreate() {
+        super.onCreate()
+        running = this
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Before the core is asked for anything. Cheap, idempotent, and the
         // service may well be running with no window to have done it.
@@ -235,24 +366,88 @@ class RelayVpnService : VpnService() {
         if (intent?.action == ACTION_SEEN) {
             // Only a better word for the notification: the tunnel is not
             // touched, which is why this is checked before anything else.
+            // The window calls noteSeen() now; this is for an intent from an
+            // older build of the window still in flight.
             if (exitAddress.isNotEmpty()) {
                 seenCountry = intent.getStringExtra(EXTRA_SEEN_COUNTRY).orEmpty()
                 notificationManager().notify(NOTIFICATION, notification(status))
+                return START_STICKY
+            }
+            if (!wanted) {
+                // Nothing up and nothing asked for: this intent is all that
+                // started the service, and it has nothing to keep it for.
+                stopSelf(startId)
+                return START_NOT_STICKY
             }
             return START_STICKY
         }
         if (intent?.action == ACTION_STOP) {
+            val a = Attempt(generation.incrementAndGet(), startId)
+            wanted = false
+            // A race or a search in flight ends now, rather than running on
+            // to the end of its timeouts while the window says "Disconnecting".
+            interrupt()
             // Off the main thread: closing the stack closes every connection
             // it carries, and that froze the window for as long as it took -
             // which was the stutter on every Disconnect.
             scope.launch {
-                stopTunnel()
-                stopSelf()
+                synchronized(lifecycle) {
+                    // A Connect pressed after this one is the newer request:
+                    // its own first step is this same teardown.
+                    if (!a.current) return@launch
+                    stopTunnel(a.gen)
+                    leaveForeground(a)
+                }
             }
             return START_NOT_STICKY
         }
 
-        startForeground(NOTIFICATION, notification("finding an exit"))
+        // A start that is not the window's: Android restarting the service
+        // after the process was killed (a null intent - START_STICKY), or
+        // the always-on VPN bringing it up at boot or when it is switched on
+        // (the android.net.VpnService action, no extras). Either way the
+        // only thing to connect to is what the window last asked for.
+        val fromWindow = intent?.action == ACTION_START
+        if (!fromWindow && (client != null || exitAddress.isNotEmpty())) {
+            // Always-on said "be up" to a service that already is.
+            return START_STICKY
+        }
+        val req = if (fromWindow) Request.from(intent!!).also { it.save(this) }
+            else Request.saved(this)
+
+        val a = Attempt(generation.incrementAndGet(), startId)
+        wanted = req != null
+        if (!enterForeground(if (req != null) "finding an exit" else "starting")) {
+            // Android refused the foreground (a start from the background it
+            // does not exempt). Nothing can run without it: say so and stop,
+            // rather than be killed for not having called startForeground.
+            if (req != null) {
+                status = "failed: Android did not let the tunnel start from the background - " +
+                    "open Relay and connect"
+                sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName))
+            }
+            wanted = false
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+
+        if (req == null) {
+            // Nothing has ever been connected to (or not since this version
+            // started keeping it): there is nothing to restart. The service
+            // stops rather than sit in the foreground with an empty
+            // notification. With lockdown on, Android goes on blocking
+            // traffic until somebody connects - which is what lockdown is
+            // for; without it, traffic was never in a tunnel to begin with.
+            Log.i(TAG, "started with nothing to reconnect to")
+            wanted = false
+            scope.launch {
+                synchronized(lifecycle) {
+                    if (!a.current) return@launch
+                    leaveForeground(a)
+                }
+            }
+            return START_NOT_STICKY
+        }
 
         // Whatever was carrying traffic a moment ago stops now.
         //
@@ -268,32 +463,77 @@ class RelayVpnService : VpnService() {
         // keeping the radio awake with a keepalive nobody was reading.
         //
         // In the coroutine below rather than here, for the same reason as Stop:
-        // this runs on the main thread and the window is drawing on it.
-
-        val user = intent?.getStringExtra(EXTRA_USER).orEmpty()
-        val password = intent?.getStringExtra(EXTRA_PASSWORD).orEmpty()
-        val wsUser = intent?.getStringExtra(EXTRA_WS_USER).orEmpty()
-        val wsPassword = intent?.getStringExtra(EXTRA_WS_PASSWORD).orEmpty()
-        val configDir = intent?.getStringExtra(EXTRA_CONFIG_DIR).orEmpty()
-        val country = intent?.getStringExtra(EXTRA_COUNTRY) ?: "auto"
-        val only = intent?.getStringExtra(EXTRA_ONLY).orEmpty()
-        val provider = intent?.getStringExtra(EXTRA_PROVIDER) ?: "surfshark"
-        val domain = intent?.getStringExtra(EXTRA_DOMAIN).orEmpty()
-        val tunnelPassword = intent?.getStringExtra(EXTRA_TUNNEL_PASSWORD).orEmpty()
-        val edges = intent?.getStringExtra(EXTRA_EDGES).orEmpty()
-        val pin = intent?.getStringExtra(EXTRA_PIN).orEmpty()
-        val apiPassword = intent?.getStringExtra(EXTRA_API_PASSWORD).orEmpty()
-
+        // this runs on the main thread and the window is drawing on it. A
+        // race the old connect is still running is told to stop first, so it
+        // does not hold up this one.
+        interrupt()
         scope.launch {
-            stopTunnel()
-            if (provider == "surfshark") {
-                connect(user, password, wsUser, wsPassword, configDir, country, only)
-            } else {
-                connectServer(provider, domain, tunnelPassword, edges, pin,
-                    ServerExit(country, apiPassword, user, password, wsUser, wsPassword))
+            synchronized(lifecycle) {
+                if (!a.current) return@launch
+                stopTunnel(a.gen)
+                // Again, under the lock: a Disconnect that was already past
+                // its check when this request arrived may have taken the
+                // service out of the foreground just now.
+                enterForeground("finding an exit")
             }
+            if (req.provider == "surfshark") connect(a, req) else connectServer(a, req)
         }
         return START_STICKY
+    }
+
+    private fun enterForeground(text: String): Boolean = try {
+        startForeground(NOTIFICATION, notification(text))
+        true
+    } catch (e: Exception) {
+        Log.w(TAG, "foreground refused", e)
+        false
+    }
+
+    /**
+     * Out of the foreground and stopped, for a request that has ended. Under
+     * [lifecycle] and only for the newest request, so it cannot take down a
+     * connect that arrived after it; and with the request's own start id, so
+     * Android does not stop a service it has already handed a newer start.
+     */
+    private fun leaveForeground(a: Attempt) {
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            Log.w(TAG, "leaving the foreground", e)
+        }
+        stopSelf(a.startId)
+    }
+
+    /**
+     * Stop the Go work a connect may be blocked in, without waiting for it
+     * and without the lock: Client.stop() makes a race return early, and
+     * the connect that was waiting on it then finds it has been overtaken.
+     * On the process scope, because onDestroy calls this as the service's
+     * own scope is cancelled.
+     */
+    private fun interrupt() {
+        val c = client
+        val p = pending
+        if (c == null && p == null) return
+        process.launch {
+            try { c?.stop() } catch (e: Exception) { Log.w(TAG, "stopping the race", e) }
+            try { p?.stop() } catch (e: Exception) { Log.w(TAG, "stopping the search", e) }
+        }
+    }
+
+    /** The platform's answers the core needs before anything dials. See the class comment. */
+    private fun hooks() {
+        Relay.setProtector(object : Protector {
+            override fun protect(fd: Long): Boolean =
+                this@RelayVpnService.protect(fd.toInt())
+        })
+        // Who opened each connection, for the log sheet. Handed over
+        // beside the protector because both are the platform answering a
+        // question the core cannot ask for itself. The same lookup as a
+        // uid is what splitting by app asks, when it has to ask.
+        val namer = AppNamer(applicationContext)
+        Relay.setNamer(namer)
+        Relay.setOwner(namer)
     }
 
     /**
@@ -325,8 +565,7 @@ class RelayVpnService : VpnService() {
         // beyond the house, so nothing leaves by being excluded, and a VPN
         // that silently breaks the LAN is a VPN people blame for the wrong
         // thing.
-        val allowLan = getSharedPreferences("relay", MODE_PRIVATE)
-            .getBoolean("allowLan", true)
+        val allowLan = Keys.prefs(this).getBoolean(Keys.ALLOW_LAN, true)
 
         if (!allowLan) {
             b.addRoute("0.0.0.0", 0)
@@ -396,10 +635,10 @@ class RelayVpnService : VpnService() {
      * name. It need not: an app that is not let in is out already.
      */
     private fun splitInto(b: Builder): CoreSplit {
-        val prefs = getSharedPreferences("relay", MODE_PRIVATE)
-        val mode = SplitMode.of(prefs.getString("splitMode", "off"))
-        val iran = prefs.getBoolean("splitIran", true)
-        val entries = prefs.getString("splitDomains", "").orEmpty().trim()
+        val prefs = Keys.prefs(this)
+        val mode = SplitMode.of(prefs.getString(Keys.SPLIT_MODE, "off"))
+        val iran = prefs.getBoolean(Keys.SPLIT_IRAN, true)
+        val entries = prefs.getString(Keys.SPLIT_DOMAINS, "").orEmpty().trim()
         val hasDest = iran || entries.isNotEmpty()
 
         // This app must not route its own traffic. Without it, the socket to
@@ -412,7 +651,7 @@ class RelayVpnService : VpnService() {
             leaveSelfOut()
             return told(SplitMode.OFF)
         }
-        val apps = splitApps(prefs.getString("splitApps", "").orEmpty(), iran)
+        val apps = splitApps(prefs.getString(Keys.SPLIT_APPS, "").orEmpty(), iran)
 
         if (mode == SplitMode.BYPASS) {
             for (pkg in apps.keys) {
@@ -527,7 +766,7 @@ class RelayVpnService : VpnService() {
      * with the failure said, when the core refuses it: a tunnel that came up
      * routing other than it was told to would be worse than none.
      */
-    private fun applySplit(c: Client, s: CoreSplit): Boolean {
+    private fun applySplit(a: Attempt, c: Client, s: CoreSplit): Boolean {
         val dns = if (s.mode == SplitMode.OFF) "" else directDns()
         Log.i(TAG, "split: ${s.mode.key}, iran ${s.iran}, " +
             "${s.entries.lines().count { it.isNotBlank() }} entries, " +
@@ -537,9 +776,27 @@ class RelayVpnService : VpnService() {
             c.setSplit(s.mode.key, s.iran, s.entries, s.uids, dns)
             true
         } catch (e: Exception) {
-            fail("the split tunnel settings were not taken: " + (e.message ?: e.toString()).take(140))
+            fail(a, "the split tunnel settings were not taken: " + (e.message ?: e.toString()).take(140))
             false
         }
+    }
+
+    /**
+     * Puts the server's Shadowsocks settings on [cfg] when that is the way in,
+     * and says whether it is. The same settings RelayCore.importKey writes;
+     * the password out of [Secrets], like every other one.
+     */
+    private fun applySs(cfg: relay.ServerConfig): Boolean {
+        val prefs = Keys.prefs(this)
+        if (prefs.getString(Keys.TUNNEL_TRANSPORT, "") != "ss") return false
+        val secret = Keys.secret(this, Keys.TUNNEL_SS_PASSWORD)
+        if (secret.isEmpty()) return false
+        cfg.transport = "ss"
+        cfg.ssMethod = prefs.getString(Keys.TUNNEL_SS_METHOD, "").orEmpty()
+        cfg.ssPassword = secret
+        cfg.ssPort = prefs.getInt(Keys.TUNNEL_SS_PORT, 0).toLong()
+        cfg.ssExitPort = prefs.getInt(Keys.TUNNEL_SS_EXIT_PORT, 0).toLong()
+        return true
     }
 
     /**
@@ -550,73 +807,54 @@ class RelayVpnService : VpnService() {
      * provider node it picks, /gwb is /gw without multiplexing. The tun, the
      * stack and the DNS above are the same ones the provider path uses,
      * because the core is written not to know which is underneath.
+     *
+     * Everything about the server is read here, from the settings and from
+     * [Secrets], rather than carried in the intent: a restart by the system
+     * reaches the server the same way the window did, and no password
+     * travels in an Intent.
      */
-    /**
-     * Puts the server's Shadowsocks settings on [cfg] when that is the way in,
-     * and says whether it is. The same settings RelayCore.importKey writes.
-     */
-    private fun applySs(cfg: relay.ServerConfig): Boolean {
-        val prefs = getSharedPreferences("relay", MODE_PRIVATE)
-        val secret = prefs.getString("tunnelSsPassword", "").orEmpty()
-        if (prefs.getString("tunnelTransport", "") != "ss" || secret.isEmpty()) return false
-        cfg.transport = "ss"
-        cfg.ssMethod = prefs.getString("tunnelSsMethod", "").orEmpty()
-        cfg.ssPassword = secret
-        cfg.ssPort = prefs.getInt("tunnelSsPort", 0).toLong()
-        cfg.ssExitPort = prefs.getInt("tunnelSsExitPort", 0).toLong()
-        return true
-    }
-
-    /** What server + exit needs to point the server at the picked location. */
-    private class ServerExit(
-        val country: String, val apiPassword: String,
-        val ssUser: String, val ssPassword: String, val wsUser: String, val wsPassword: String,
-    )
-
-    private fun connectServer(mode: String, domain: String, password: String, edges: String,
-                              pin: String, exit: ServerExit) {
+    private fun connectServer(a: Attempt, req: Request) {
         try {
-            Relay.setProtector(object : Protector {
-                override fun protect(fd: Long): Boolean =
-                    this@RelayVpnService.protect(fd.toInt())
-            })
-            // Who opened each connection, for the log sheet. Handed over
-            // beside the protector because both are the platform answering a
-            // question the core cannot ask for itself. The same lookup as a
-            // uid is what splitting by app asks, when it has to ask.
-            val namer = AppNamer(applicationContext)
-            Relay.setNamer(namer)
-            Relay.setOwner(namer)
-
+            // A start at boot can get here before the window's first refresh
+            // has moved anything into the secret store. Once done, a no-op.
+            Keys.migrate(applicationContext)
+            val mode = req.provider
+            val prefs = Keys.prefs(this)
+            val domain = prefs.getString(Keys.TUNNEL_DOMAIN, "").orEmpty()
+            val password = Keys.secret(this, Keys.TUNNEL_PASSWORD)
             if (domain.isEmpty() || password.isEmpty()) {
-                fail("no server configured - set the domain and password in Settings")
+                fail(a, "no server configured - set the domain and password in Settings")
                 return
             }
 
-            val c = Relay.newClient("", "")
-            client = c
-            live = c
+            // Hooks and the Client together, and only if nothing newer has
+            // been asked for: a Disconnect pressed while this waited for the
+            // lock has already torn down, and must not find a protector set
+            // again behind it.
+            val c: Client = synchronized(lifecycle) {
+                if (!a.current) return
+                hooks()
+                Relay.newClient("", "").also { client = it; live = it }
+            }
 
             val cfg = Relay.newServerConfig()
             cfg.domain = domain
             cfg.password = password
             cfg.mode = mode
-            cfg.edges = edges
-            cfg.pin = pin
-            cfg.port = getSharedPreferences("relay", MODE_PRIVATE).getInt("tunnelPort", 443).toLong()
+            cfg.edges = prefs.getString(Keys.TUNNEL_EDGES, "").orEmpty()
+            cfg.pin = prefs.getString(Keys.TUNNEL_PIN, "").orEmpty()
+            cfg.port = prefs.getInt(Keys.TUNNEL_PORT, 443).toLong()
 
             // Shadowsocks, when the server's key offered it and it is the
             // chosen way in: straight to the address, so there are no edges
-            // to measure. Read from the settings rather than carried in the
-            // intent, so a restart by the system reaches the server the same
-            // way the window did.
+            // to measure.
             val viaSs = applySs(cfg)
 
             // Measured here rather than carried over from the desktop: which
             // Cloudflare addresses are filtered is a fact about this line, and
             // the phone is not always on the same line the desktop was.
-            if (!viaSs && edges.isBlank()) {
-                say("finding a way in")
+            if (!viaSs && cfg.edges.isBlank()) {
+                say("finding a way in", a)
                 cfg.edges = try {
                     Relay.scanEdges(domain, cfg.port, 30000L)
                 } catch (e: Exception) {
@@ -625,6 +863,7 @@ class RelayVpnService : VpnService() {
                     Log.w(TAG, "edge scan: ${e.message}")
                     ""
                 }
+                if (!a.current) return
                 // Kept, so the next connect does not pay for it again. Five
                 // seconds of TLS handshakes is not much once and is a great
                 // deal every time - and the answer does not change between
@@ -635,13 +874,12 @@ class RelayVpnService : VpnService() {
                 // outlives the window, which is the whole point of it being
                 // a service.
                 if (cfg.edges.isNotBlank()) {
-                    getSharedPreferences("relay", MODE_PRIVATE)
-                        .edit().putString("tunnelEdges", cfg.edges).apply()
+                    prefs.edit().putString(Keys.TUNNEL_EDGES, cfg.edges).apply()
                 }
             }
 
             if (!viaSs && cfg.edges.isBlank()) {
-                fail("no way in to $domain answered - check the domain, or try " +
+                fail(a, "no way in to $domain answered - check the domain, or try " +
                     "Find another way in under Settings")
                 return
             }
@@ -651,22 +889,62 @@ class RelayVpnService : VpnService() {
             // account - before anything goes through it.
             var exitPlace = ""
             if (mode == "multi") {
-                say("checking the server answers")
-                val pick = Relay.newClient(exit.ssUser, exit.ssPassword)
+                val surfshark = Accounts.credentials(applicationContext, Accounts.SURFSHARK)
+                val windscribe = Accounts.credentials(applicationContext, Accounts.WINDSCRIBE)
+                val apiPassword = Keys.secret(this, Keys.TUNNEL_API_PASSWORD)
+                // Per server, on unless turned off for this one (Settings).
+                val verify = Keys.verifyExit(this, domain)
+                say("checking the server answers", a)
+
+                // The pin before the API. A server by address met for the
+                // first time used to be handed the API password - and every
+                // provider credential the exit search sends - before anything
+                // had checked its certificate; the core now refuses that
+                // outright. So it is tested first, plainly, and its
+                // certificate kept; ServerPin.call below handles the case
+                // where the core still says there is none.
                 try {
+                    ServerPin.ensure(applicationContext, cfg)
+                } catch (e: Exception) {
+                    fail(a, "$domain did not answer: " + (e.message ?: e.toString()).take(140))
+                    return
+                }
+                if (!a.current) return
+
+                val pick = Relay.newClient(surfshark?.first.orEmpty(), surfshark?.second.orEmpty())
+                try {
+                    pending = pick
                     pick.load()
                     // From a server in Iran, upload is throttled per foreign
                     // exit: most in a city carry next to nothing up. Each is
                     // set and asked to carry an upload, and the first that
                     // does is kept - the location stays the one picked.
-                    say("finding an exit that uploads")
-                    val at = pick.bestServerExit(cfg, exit.apiPassword, exit.country.ifEmpty { "auto" },
-                        exit.ssUser, exit.ssPassword, exit.wsUser, exit.wsPassword, 6L, 4000L)
+                    //
+                    // Every exit tried is written to the server's exit-chain,
+                    // and Client.stop() does not interrupt that - so a connect
+                    // that was overtaken would go on writing it, and could
+                    // land its last write after the newer connect's. One
+                    // search at a time ([serverChain]), each starting only if
+                    // it is still the newest request: the newer one waits for
+                    // the old search to end, and its writes come last.
+                    val at = synchronized(serverChain) {
+                        if (!a.current) return
+                        say("finding an exit that uploads", a)
+                        ServerPin.call(applicationContext, cfg) {
+                            pick.bestServerExit(cfg, apiPassword, req.country.ifEmpty { "auto" },
+                                surfshark?.first.orEmpty(), surfshark?.second.orEmpty(),
+                                windscribe?.first.orEmpty(), windscribe?.second.orEmpty(),
+                                verify, 6L, 4000L)
+                        }
+                    }
                     exitPlace = at.name + if (at.tookMs > 0) ", ${at.tookMs} KB/s up" else ", upload throttled"
                 } catch (e: Exception) {
-                    fail("$domain did not take the exit: " + (e.message ?: e.toString()).take(140))
+                    fail(a, "$domain did not take the exit: " + (e.message ?: e.toString()).take(140))
                     return
+                } finally {
+                    if (pending === pick) pending = null
                 }
+                if (!a.current) return
             }
 
             // One real request through the server before the tunnel goes up.
@@ -674,149 +952,164 @@ class RelayVpnService : VpnService() {
             // server that did not exist showed as connected, with every app's
             // traffic routed into nothing. A few seconds now buys a
             // "connected" that is true.
-            say("checking the server answers")
+            say("checking the server answers", a)
             try {
-                val seen = org.json.JSONObject(Relay.testServer(cfg, 20000L))
+                val seen = JSONObject(Relay.testServer(cfg, 20000L))
+                if (!a.current) return
                 // A server by address, met for the first time: its
                 // certificate is kept, and required from then on.
                 val seenPin = seen.optString("pin")
                 if (cfg.pin.isEmpty() && seenPin.isNotEmpty()) {
                     cfg.pin = seenPin
-                    getSharedPreferences("relay", MODE_PRIVATE)
-                        .edit().putString("tunnelPin", seenPin).apply()
+                    prefs.edit().putString(Keys.TUNNEL_PIN, seenPin).apply()
                 }
             } catch (e: Exception) {
-                fail("$domain did not carry a request: " + (e.message ?: e.toString()).take(140))
+                fail(a, "$domain did not carry a request: " + (e.message ?: e.toString()).take(140))
                 return
             }
 
-            say("opening the tunnel to $domain")
+            say("opening the tunnel to $domain", a)
 
-            val (builder, split) = buildInterface()
-            if (!applySplit(c, split)) return
+            // From here to the end is one step under the lock: nothing newer
+            // can arrive between the interface going up and the stack taking
+            // it, and nothing newer is overtaken by it.
+            synchronized(lifecycle) {
+                if (!a.current) return
+                val (builder, split) = buildInterface()
+                if (!applySplit(a, c, split)) return
 
-            val pfd = builder.establish()
-            if (pfd == null) {
-                fail("Android refused to open the interface")
-                return
-            }
-            val fd = pfd.detachFd()
-            try {
-                c.startServerTunnel(fd.toLong(), Relay.tunMTU(), cfg)
-            } catch (e: Exception) {
-                ParcelFileDescriptor.adoptFd(fd).close()
-                throw e
-            }
-            tunFd = fd
+                val pfd = builder.establish()
+                if (pfd == null) {
+                    fail(a, "Android refused to open the interface")
+                    return
+                }
+                val fd = pfd.detachFd()
+                try {
+                    c.startServerTunnel(fd.toLong(), Relay.tunMTU(), cfg)
+                } catch (e: Exception) {
+                    ParcelFileDescriptor.adoptFd(fd).close()
+                    throw e
+                }
+                tunFd = fd
 
-            exitAddress = domain
-            exitFile = ""
-            exitProvider = ""
-            exitName = when (mode) {
-                "multi" -> "$domain (server + exit${if (exitPlace.isNotEmpty()) ", $exitPlace" else ""})"
-                "bulk" -> "$domain (bulk)"
-                else -> "$domain (your server)"
+                exitAddress = domain
+                exitFile = ""
+                exitProvider = ""
+                exitName = when (mode) {
+                    "multi" -> "$domain (server + exit${if (exitPlace.isNotEmpty()) ", $exitPlace" else ""})"
+                    "bulk" -> "$domain (bulk)"
+                    else -> "$domain (your server)"
+                }
+                since = System.currentTimeMillis() / 1000
+                connectedText = "connected through $exitName"
+                say(connectedText)
+                shareOnLan(c)
+                watch(c) { redialServer(c) }
             }
-            since = System.currentTimeMillis() / 1000
-            connectedText = "connected through $exitName"
-            say(connectedText)
-            shareOnLan(c)
-            watch(c) { redialServer(c) }
         } catch (e: Exception) {
             Log.e(TAG, "server connect failed", e)
-            fail(e.message ?: e.toString())
+            fail(a, e.message ?: e.toString())
         }
     }
 
-    private fun connect(
-        user: String, password: String, wsUser: String, wsPassword: String,
-        configDir: String, country: String, only: String,
-    ) {
+    private fun connect(a: Attempt, req: Request) {
         try {
-            // Before anything dials. See the class comment.
-            Relay.setProtector(object : Protector {
-                override fun protect(fd: Long): Boolean =
-                    this@RelayVpnService.protect(fd.toInt())
-            })
-            // Who opened each connection, for the log sheet. Handed over
-            // beside the protector because both are the platform answering a
-            // question the core cannot ask for itself. The same lookup as a
-            // uid is what splitting by app asks, when it has to ask.
-            val namer = AppNamer(applicationContext)
-            Relay.setNamer(namer)
-            Relay.setOwner(namer)
-
-            val c = Relay.newClient(user, password)
+            // As in connectServer: the accounts may still be in their old files.
+            Keys.migrate(applicationContext)
             // Both, when both are signed in. A pool holding one provider the
             // phone has no credential for still races the other half rather
             // than refusing outright - core.Logins.Keep decides that, and it
-            // needs to have been told.
-            c.setCredentials("windscribe", wsUser, wsPassword)
-            client = c
-            live = c
+            // needs to have been told. Read here, out of Secrets, rather than
+            // handed over in the intent.
+            val surfshark = Accounts.credentials(applicationContext, Accounts.SURFSHARK)
+            val windscribe = Accounts.credentials(applicationContext, Accounts.WINDSCRIBE)
+            if (surfshark == null && windscribe == null) {
+                fail(a, "no account - add one under Settings → Accounts")
+                return
+            }
+
+            // Before anything dials, and only if this is still the request
+            // being served. See the class comment.
+            val c: Client = synchronized(lifecycle) {
+                if (!a.current) return
+                hooks()
+                Relay.newClient(surfshark?.first.orEmpty(), surfshark?.second.orEmpty()).also {
+                    it.setCredentials("windscribe", windscribe?.first.orEmpty(), windscribe?.second.orEmpty())
+                    client = it
+                    live = it
+                }
+            }
 
             // One scan rather than a file at a time: the folder is the truth,
             // and the same scan is what the window's country list came from -
             // so a country the page offers is a country the race can run in.
-            c.scanFolder(configDir)
+            c.scanFolder(req.configDir)
             // The configs behind the pick, as the window resolved them from
             // the row that was tapped - a country, a city, one provider's
             // share, one server, or Starred. Narrowed to exactly those, the
             // race takes the whole of what is left: asking the core to parse
             // the code again here is how a city or a single server came back
             // with nothing to race while a country connected.
-            val narrowed = only.isNotBlank()
-            if (narrowed) c.setOnly(only)
+            val narrowed = req.only.isNotBlank()
+            if (narrowed) c.setOnly(req.only)
             if (c.count() == 0L) {
-                fail(if (narrowed) "pick-gone" else "no pinned configs in $configDir")
+                fail(a, if (narrowed) "pick-gone" else "no pinned configs in ${req.configDir}")
                 return
             }
             // A start with no list - an old intent, or Android restarting the
             // service on its own - still parses the code, as it always did.
-            val pool = if (narrowed) "auto" else country
+            val pool = if (narrowed) "auto" else req.country
 
+            if (!a.current) return
             total = c.count().toInt()
-            say("racing ${c.count()} exits")
-            val winner = race(c, pool)
+            say("racing ${c.count()} exits", a)
+            val winner = race(c, pool) { a.current }
+            // The long wait is over. Whatever was asked for meanwhile wins:
+            // a Disconnect has stopped this race and torn down its Client,
+            // and a newer Connect will have done the same.
+            if (!a.current) return
 
-            say("opening the tunnel via ${winner.name}")
+            say("opening the tunnel via ${winner.name}", a)
 
-            val (builder, split) = buildInterface()
-            if (!applySplit(c, split)) return
+            synchronized(lifecycle) {
+                if (!a.current) return
+                val (builder, split) = buildInterface()
+                if (!applySplit(a, c, split)) return
 
-            val pfd = builder.establish()
-            if (pfd == null) {
-                fail("Android refused to open the interface")
-                return
+                val pfd = builder.establish()
+                if (pfd == null) {
+                    fail(a, "Android refused to open the interface")
+                    return
+                }
+
+                // Handed over for good. See the class comment: two owners for one
+                // descriptor is what fdsan kills the process for.
+                val fd = pfd.detachFd()
+                try {
+                    c.startTunnel(fd.toLong(), Relay.tunMTU(), winner.addr, winner.name,
+                        winner.provider)
+                } catch (e: Exception) {
+                    // Nobody owns it now, so adopt it back only to close it.
+                    ParcelFileDescriptor.adoptFd(fd).close()
+                    throw e
+                }
+                tunFd = fd
+
+                exitAddress = winner.addr
+                exitName = winner.name
+                exitFile = winner.file
+                exitProvider = winner.provider
+                tookMs = winner.tookMs.toInt()
+                since = System.currentTimeMillis() / 1000
+                connectedText = "connected via ${winner.name} (${winner.addr}), ${winner.tookMs} ms"
+                say(connectedText)
+                shareOnLan(c)
+                // A replacement comes from the same pick: the narrowed list again.
+                watch(c) { switchExit(c, pool) }
             }
-
-            // Handed over for good. See the class comment: two owners for one
-            // descriptor is what fdsan kills the process for.
-            val fd = pfd.detachFd()
-            try {
-                c.startTunnel(fd.toLong(), Relay.tunMTU(), winner.addr, winner.name,
-                    winner.provider)
-            } catch (e: Exception) {
-                // Nobody owns it now, so adopt it back only to close it.
-                ParcelFileDescriptor.adoptFd(fd).close()
-                throw e
-            }
-            tunFd = fd
-
-            exitAddress = winner.addr
-            exitName = winner.name
-            exitFile = winner.file
-            exitProvider = winner.provider
-            tookMs = winner.tookMs.toInt()
-            since = System.currentTimeMillis() / 1000
-            connectedText = "connected via ${winner.name} (${winner.addr}), ${winner.tookMs} ms"
-            say(connectedText)
-            shareOnLan(c)
-            // A replacement comes from the same pick: the narrowed list again.
-            watch(c) { switchExit(c, pool) }
         } catch (e: Exception) {
             Log.e(TAG, "connect failed", e)
-            fail(e.message ?: e.toString())
+            fail(a, e.message ?: e.toString())
         }
     }
 
@@ -826,16 +1119,24 @@ class RelayVpnService : VpnService() {
      * Long literals, not Int. gomobile maps Go's int to Java long, and Kotlin
      * does not widen an Int to fill a Long parameter.
      */
-    private fun race(c: Client, country: String): relay.Result {
+    private fun race(c: Client, country: String, stillWanted: () -> Boolean): relay.Result {
         // The race keeps reporting after it has a winner - the exits still in
         // flight answer late - and each report used to overwrite the status,
         // so a connected tunnel read "asked 8 of 353" in the notification and
         // the window. Only the race's own lifetime counts.
+        //
+        // And only while the race is still wanted: a race that a Disconnect
+        // has stopped reports a few more answers on its way out, and each one
+        // would put "asked 3 of 300" back over "not connected" - a window
+        // left saying Connecting about a tunnel nobody is building. Checked
+        // without the lifecycle lock, deliberately: this runs on the core's
+        // own threads, and one of them blocked here while the lock's holder
+        // waits for the race to stop would be a deadlock.
         val racing = java.util.concurrent.atomic.AtomicBoolean(true)
         return try {
             c.raceIn(country, 6000L, 8L, object : Progress {
                 override fun onProgress(n: Long, of: Long) {
-                    if (!racing.get()) return
+                    if (!racing.get() || !stillWanted()) return
                     asked = n.toInt()
                     total = of.toInt()
                     say("asked $n of $of")
@@ -921,15 +1222,24 @@ class RelayVpnService : VpnService() {
                     if (stalled) {
                         // Back on its own - the line came back, or the
                         // exit did - without anything having been changed.
-                        stalled = false
-                        say(connectedText)
+                        // Under the lock, so it is never said over a
+                        // Disconnect that landed during the check.
+                        synchronized(lifecycle) {
+                            if (client === c) {
+                                stalled = false
+                                say(connectedText)
+                            }
+                        }
                     }
                     continue
                 }
                 misses++
                 if (misses < MISSES_BEFORE_SWITCH) continue
 
-                stalled = true
+                synchronized(lifecycle) {
+                    if (client === c) stalled = true
+                }
+                if (client !== c) break
                 val fixed = try {
                     recover()
                 } catch (e: Exception) {
@@ -974,26 +1284,31 @@ class RelayVpnService : VpnService() {
         // it would win again and carry nothing again.
         c.avoid(dead)
         val winner = try {
-            race(c, country)
+            race(c, country) { client === c }
         } catch (e: Exception) {
             if (client === c) say("reconnecting: no other exit answered - " +
                 (e.message ?: e.toString()).take(100))
             return false
         }
-        if (client !== c) return false
-        c.switchExit(winner.addr, winner.name, winner.provider)
-        Log.i(TAG, "switched from $dead to ${winner.addr} (${winner.name})")
-        exitAddress = winner.addr
-        exitName = winner.name
-        exitFile = winner.file
-        exitProvider = winner.provider
-        tookMs = winner.tookMs.toInt()
-        // Where it comes out is a fact about the old exit until asked again.
-        seenCountry = ""
-        since = System.currentTimeMillis() / 1000
-        stalled = false
-        connectedText = "connected via ${winner.name} (${winner.addr}), ${winner.tookMs} ms"
-        say(connectedText)
+        // Under the lock, so a Disconnect cannot land between the check and
+        // the switch and leave "connected via" said about a tunnel it has
+        // already taken down.
+        synchronized(lifecycle) {
+            if (client !== c) return false
+            c.switchExit(winner.addr, winner.name, winner.provider)
+            Log.i(TAG, "switched from $dead to ${winner.addr} (${winner.name})")
+            exitAddress = winner.addr
+            exitName = winner.name
+            exitFile = winner.file
+            exitProvider = winner.provider
+            tookMs = winner.tookMs.toInt()
+            // Where it comes out is a fact about the old exit until asked again.
+            seenCountry = ""
+            since = System.currentTimeMillis() / 1000
+            stalled = false
+            connectedText = "connected via ${winner.name} (${winner.addr}), ${winner.tookMs} ms"
+            say(connectedText)
+        }
         return true
     }
 
@@ -1013,32 +1328,63 @@ class RelayVpnService : VpnService() {
                 (e.message ?: e.toString()).take(100))
             return false
         }
-        if (client !== c) return false
-        stalled = false
-        say(connectedText)
+        synchronized(lifecycle) {
+            if (client !== c) return false
+            stalled = false
+            say(connectedText)
+        }
         return true
     }
 
-    private fun stopTunnel() {
+    /**
+     * Take down whatever this instance has up, and - when [gen] is still the
+     * newest request - the shared state with it. Under [lifecycle] always.
+     *
+     * This instance's own Client is stopped either way: nothing else holds
+     * it. The rest - the companion's exit and status, and the core's global
+     * hooks - belongs to whichever request is newest. A teardown that has
+     * been overtaken (onDestroy's, finishing after the next instance's
+     * Connect has begun) leaves it alone; clearing the protector there is
+     * what used to make the new tunnel's first dial fail with "could not be
+     * kept out of the tunnel".
+     *
+     * [announce] false leaves the status line as it is, for a failure that
+     * is about to say why itself.
+     */
+    private fun stopTunnel(gen: Long, announce: Boolean = true) {
         watcher?.cancel()
         watcher = null
-        stalled = false
+        val c = client
+        client = null
         // A race in flight - the first one, or one replacing a stalled exit -
         // ends here rather than finishing on its own and opening something
         // nobody asked for any more.
         try {
-            client?.stop()
+            c?.stop()
         } catch (e: Exception) {
             Log.w(TAG, "stopping the race", e)
         }
-        seenCountry = ""
         try {
-            client?.stopTunnel()
+            pending?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "stopping the search", e)
+        }
+        try {
+            c?.stopTunnel()
         } catch (e: Exception) {
             Log.w(TAG, "stopping the tunnel", e)
         }
-        client = null
+        if (c != null && live === c) live = null
+        // Nothing closes the descriptor here. stopTunnel() above ends the
+        // stack, and the stack owns it - which is the whole point of handing
+        // it over with detachFd().
+        tunFd = -1
+
+        if (generation.get() != gen) return
         live = null
+        stalled = false
+        seenCountry = ""
+        lanShareError = ""
 
         // Handed back, because it belongs to a service that is about to stop
         // being able to answer. VpnService.protect() on a dead service
@@ -1056,32 +1402,62 @@ class RelayVpnService : VpnService() {
         } catch (e: Exception) {
             Log.w(TAG, "letting go of the platform hooks", e)
         }
-        // Nothing closes the descriptor here. stopTunnel() above ends the
-        // stack, and the stack owns it - which is the whole point of handing
-        // it over with detachFd().
-        tunFd = -1
         exitAddress = ""
         exitName = ""
         exitFile = ""
         exitProvider = ""
+        // The counts too, which the tile and the window read as "a connect
+        // is under way" while they are above zero. Left over from a race
+        // that failed, they made the next tap on the tile a Disconnect.
         asked = 0
         total = 0
         tookMs = 0
         since = 0
-        status = "not connected"
-        sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName))
+        if (announce) {
+            status = "not connected"
+            sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName))
+        }
     }
 
+    /**
+     * Gone - stopped, revoked, or killed for memory with the process staying.
+     *
+     * The teardown runs off the main thread, as Stop's does: closing the
+     * stack closes every connection it carries, and doing that here froze
+     * whatever the main thread was drawing for as long as it took. On the
+     * process scope rather than this service's, which is cancelled two lines
+     * down; and it always runs, so the stack - and with it the tun
+     * descriptor it owns - is closed even though nothing waits for it.
+     *
+     * A failure keeps its words: the window is still reading them.
+     */
     override fun onDestroy() {
-        stopTunnel()
+        val gen = generation.incrementAndGet()
+        wanted = false
+        if (running === this) running = null
+        interrupt()
+        val announce = !status.startsWith("failed")
+        process.launch {
+            synchronized(lifecycle) { stopTunnel(gen, announce) }
+        }
         scope.cancel()
         super.onDestroy()
     }
 
-    /** Android tearing the VPN down from Settings, rather than the app. */
+    /**
+     * Android tearing the VPN down from Settings, rather than the app - or
+     * another VPN app taking over. VpnService's own onRevoke stops the
+     * service, and the teardown is onDestroy's; this only takes the service
+     * out of the foreground at once, so its notification does not linger
+     * saying Connected about a tunnel Android has already taken away.
+     */
     override fun onRevoke() {
-        stopTunnel()
-        stopSelf()
+        wanted = false
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            Log.w(TAG, "leaving the foreground", e)
+        }
         super.onRevoke()
     }
 
@@ -1089,7 +1465,15 @@ class RelayVpnService : VpnService() {
 
     @Volatile private var lastProgressAt = 0L
 
-    private fun say(text: String) {
+    /**
+     * Said on behalf of [a], when given: only while it is still the newest
+     * request. A connect that has been overtaken goes on talking until its
+     * next check - "finding a way in", "checking the server answers" - and
+     * each line would put a connect back on the screen after Disconnect.
+     * Lock-free, like the race's progress, and for the same reason.
+     */
+    private fun say(text: String, a: Attempt? = null) {
+        if (a != null && !a.current) return
         status = text
         // A race reports once per exit it asks - hundreds, in a second or two.
         // Each was a notification and a broadcast, and each broadcast redrew
@@ -1111,19 +1495,66 @@ class RelayVpnService : VpnService() {
      * here; a failure is logged and the connection carries on without it.
      */
     private fun shareOnLan(c: Client) {
-        val p = getSharedPreferences("relay", MODE_PRIVATE)
-        if (!p.getBoolean("lanShare", false)) return
+        val p = Keys.prefs(this)
+        if (!p.getBoolean(Keys.LAN_SHARE, false)) return
+        // A proxy on the Wi-Fi that anyone there can find is never opened
+        // without a password. Settings will not turn the share on without
+        // one; this is for a setting that got here some other way. The rule
+        // is the core's (8 to 128 printable ASCII), checked before asking it.
+        val password = Keys.secret(this, Keys.LAN_SHARE_PASSWORD)
+        Keys.lanPasswordProblem(password)?.let { why ->
+            lanShareError = why
+            Log.w(TAG, "sharing on the local network: not started - $why")
+            return
+        }
         try {
-            val said = c.startLANShare(p.getInt("lanSharePort", 8877).toLong(),
-                p.getString("lanSharePassword", "").orEmpty())
+            val said = c.startLANShare(p.getInt(Keys.LAN_SHARE_PORT, 8877).toLong(), password)
+            lanShareError = ""
             Log.i(TAG, "sharing on the local network: $said")
         } catch (e: Exception) {
+            // Kept for the share screen: "no Wi-Fi, hotspot or Ethernet
+            // address" is something the person can fix, if told.
+            lanShareError = e.message ?: e.toString()
             Log.w(TAG, "sharing on the local network: ${e.message}")
         }
     }
 
-    private fun fail(text: String) {
-        say("failed: $text")
+    /**
+     * A connect that ended without a tunnel, said and finished.
+     *
+     * Only for the newest request: one that was overtaken failed because it
+     * was stopped, and the request that stopped it is saying what is
+     * happening now. What it opened is taken down, its counts with it -
+     * the tile reads a count above zero as a connect still under way - and
+     * the service leaves the foreground and stops. Before, it stayed: a
+     * foreground service with an "ongoing" notification and nothing in it,
+     * which Android then restarted with START_STICKY to fail again.
+     *
+     * Leaving does not open anything. There was no interface yet - every
+     * failure here is before establish(), or a startTunnel that closed the
+     * one it was given - so traffic is where it was: blocked, if the
+     * always-on VPN's lockdown is on (Android keeps it so until a VPN comes
+     * up), or on the bare line if it is not, as it was a moment ago.
+     */
+    private fun fail(a: Attempt, text: String) {
+        synchronized(lifecycle) {
+            if (!a.current) return
+            wanted = false
+            stopTunnel(a.gen, announce = false)
+            val line = "failed: $text"
+            status = line
+            Log.i(TAG, line)
+            sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName))
+            leaveForeground(a)
+            // Said once more where it can be read with the window closed - a
+            // connect the always-on VPN started has no other way to say why
+            // it is not up. Not ongoing: there is nothing running to stop.
+            try {
+                notificationManager().notify(NOTIFICATION, notification(line, ongoing = false))
+            } catch (e: Exception) {
+                Log.w(TAG, "failure notification", e)
+            }
+        }
     }
 
     /**
@@ -1156,7 +1587,7 @@ class RelayVpnService : VpnService() {
     private fun notificationManager() =
         getSystemService(NotificationManager::class.java)
 
-    private fun notification(text: String): android.app.Notification {
+    private fun notification(text: String, ongoing: Boolean = true): android.app.Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             notificationManager().createNotificationChannel(
                 NotificationChannel(CHANNEL, "Tunnel", NotificationManager.IMPORTANCE_LOW)
@@ -1179,7 +1610,7 @@ class RelayVpnService : VpnService() {
         // Connected, the header counts up how long for: the platform's own
         // chronometer, ticking without a notification update every second.
         val up = text.startsWith("connected") && since > 0
-        return NotificationCompat.Builder(this, CHANNEL)
+        val b = NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle(title)
             .setContentText(body)
             .setShowWhen(up)
@@ -1187,9 +1618,11 @@ class RelayVpnService : VpnService() {
             .setWhen(if (up) since * 1000 else System.currentTimeMillis())
             .setSmallIcon(R.drawable.ic_relay)
             .setContentIntent(open)
-            .addAction(0, "Disconnect", stop)
-            .setOngoing(true)
+            .setOngoing(ongoing)
+            .setAutoCancel(!ongoing)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+        // Disconnect only while there is something to disconnect.
+        if (ongoing) b.addAction(0, "Disconnect", stop)
+        return b.build()
     }
 }
