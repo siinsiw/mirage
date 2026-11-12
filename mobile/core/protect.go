@@ -23,10 +23,10 @@ import (
 // where net.Dialer.Control runs.
 func SetSocketProtector(protect func(fd int) bool) {
 	if protect == nil {
-		dialControl = nil
+		dialProtect.Store(nil)
 		return
 	}
-	dialControl = func(_, _ string, c syscall.RawConn) error {
+	f := controlFunc(func(_, _ string, c syscall.RawConn) error {
 		var ok bool
 		if err := c.Control(func(fd uintptr) { ok = protect(int(fd)) }); err != nil {
 			return err
@@ -35,5 +35,7 @@ func SetSocketProtector(protect func(fd int) bool) {
 			return errors.New("the socket to the exit could not be kept out of the tunnel")
 		}
 		return nil
-	}
+	})
+	// Stored, not assigned: see dialProtect.
+	dialProtect.Store(&f)
 }

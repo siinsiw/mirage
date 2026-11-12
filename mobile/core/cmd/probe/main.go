@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ERelay/ovpn-pin/mobile/core"
+	"github.com/siinsiw/ovpn-pin/mobile/core"
 )
 
 func main() {

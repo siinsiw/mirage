@@ -119,9 +119,16 @@ func ParseRelayKey(text string) (*RelayKey, error) {
 		return nil, errors.New("the server in that key is not an address or a name")
 	case k.Pin != "" && !isHex64(k.Pin):
 		return nil, errors.New("the certificate pin in that key is malformed")
+	case !validSecret(k.Password):
+		return nil, errors.New("the tunnel password in that key " + secretRule)
+	case !validSecret(k.APIPassword):
+		return nil, errors.New("the API password in that key " + secretRule)
 	}
 	if wire.SS != nil {
 		ss := wire.SS
+		if ss.Password != "" && !validSecret(ss.Password) {
+			return nil, errors.New("the Shadowsocks password in that key " + secretRule)
+		}
 		ok := ss.Password != "" && validPort(ss.Port) && validPort(ss.ExitPort)
 		known := false
 		for _, m := range SSMethods {
@@ -144,18 +151,54 @@ func ParseRelayKey(text string) (*RelayKey, error) {
 
 func validPort(p int) bool { return p > 0 && p < 65536 }
 
+// validHost is the rule every app holds a key's host to: an IPv4 literal, or
+// a hostname of LDH labels - letters, digits and hyphens, one to 63 of them,
+// not starting or ending with a hyphen, 253 in all. The host ends up in URLs,
+// a Host header, a TLS name and the desktop's config files, and anything
+// else is a character one of those reads as syntax.
 func validHost(h string) bool {
-	if ip := net.ParseIP(h); ip != nil && ip.To4() != nil {
-		return true
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.To4() != nil && !strings.Contains(h, ":")
+	}
+	if h == "" || len(h) > 253 {
+		return false
 	}
 	for _, part := range strings.Split(h, ".") {
-		if part == "" || len(part) > 63 {
+		if part == "" || len(part) > 63 || part[0] == '-' || part[len(part)-1] == '-' {
 			return false
 		}
 		for _, r := range part {
 			if !(r == '-' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
 				return false
 			}
+		}
+	}
+	return true
+}
+
+// secretRule is validSecret, said to a person.
+const secretRule = "must be 1 to 128 printable characters, without spaces or any of ' \" ` $ \\ { } #"
+
+// validSecret is the rule every app holds a key's passwords to - the tunnel's,
+// the API's and Shadowsocks': 1 to 128 characters of printable ASCII
+// (0x21-0x7E), none of them ' " ` $ \ { } #. Those are the characters a
+// shell, a YAML or JSON writer or a config comment would read as syntax on
+// the way into the desktop's files and the server's, so a key carrying one
+// is refused here rather than turning into a config that means something
+// else. The installer's own passwords are 20 letters and digits and always
+// pass.
+func validSecret(s string) bool {
+	if len(s) < 1 || len(s) > 128 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x21 || c > 0x7e {
+			return false
+		}
+		switch c {
+		case '\'', '"', '`', '$', '\\', '{', '}', '#':
+			return false
 		}
 	}
 	return true

@@ -154,6 +154,31 @@ def iran_lists():
     return _lines('iran-domains.txt'), _lines('iran-ipv4.txt')
 
 
+_IRAN_NETS = []
+
+
+def in_iran(addresses):
+    """Whether any of these IPv4 addresses is in the Iran preset's ranges -
+    the same lists/iran-ipv4.txt split tunnelling uses. False when none is,
+    None when the list is missing and there is nothing to judge by."""
+    if not _IRAN_NETS:
+        for line in iran_lists()[1]:
+            try:
+                _IRAN_NETS.append(ipaddress.ip_network(line, strict=False))
+            except ValueError:
+                continue
+    if not _IRAN_NETS:
+        return None
+    for value in addresses or ():
+        try:
+            ip = ipaddress.ip_address(str(value).strip())
+        except ValueError:
+            continue
+        if ip.version == 4 and any(ip in n for n in _IRAN_NETS):
+            return True
+    return False
+
+
 def iran_counts():
     d, r = iran_lists()
     return {'domains': len(d), 'ranges': len(r)}

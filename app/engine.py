@@ -30,7 +30,7 @@ import paths
 import split
 import tun
 import windscribe
-from sweep import CREATE_NO_WINDOW, _ps_array, _ps_string
+from sweep import CREATE_NO_WINDOW, _ps_array, _ps_string, discard, elevated
 from countries import aliases, canon, city_name, continent, country_name
 
 HERE = paths.APP_DIR
@@ -187,6 +187,22 @@ class Server:
 #
 # Adding it needs administrator rights, so one UAC prompt, through the same
 # elevated-PowerShell pattern the sweep and the adapter use.
+
+# And a password, which the firewall cannot give. "From the local subnet"
+# is everyone on a café's Wi-Fi, so sharing cannot be turned on without one:
+# devices give it as the proxy password (HTTP) or the SOCKS5 password, and
+# the worker refuses anything else (core/ovpn-proxy.py, "who may use it").
+LAN_PASSWORD_MIN = 8
+LAN_PASSWORD_MAX = 128
+
+
+def lan_password_ok(text):
+    """8 to 128 characters of printable ASCII (0x20-0x7E) - the rule the
+    phone apps use too, so a password set on one device can be typed into
+    any other's proxy screen."""
+    # The worker's own rule, so the two cannot disagree about a password.
+    return px.lan_password_valid(text)
+
 
 FIREWALL_RULE = 'Relay LAN share ({port})'
 FIREWALL_STATES = ('ok', 'missing', 'public-network', 'unknown')
@@ -359,7 +375,7 @@ def socket_addresses():
                                 for ip in seen])
 
 
-def change_firewall(action, port, timeout=180):
+def change_firewall(action, port, timeout=180, old=None):
     """Add or remove the rule, elevated. (ok, message).
 
     The script is written to a file and run as administrator by a second
@@ -370,9 +386,15 @@ def change_firewall(action, port, timeout=180):
     """
     if os.name != 'nt':
         return False, 'Windows Firewall is a Windows thing.'
-    script = firewall_script(action, port)
+    if action == 'move':
+        # The share moved to another port: the old port's rule goes and the
+        # new one's comes, under one prompt rather than two. Left behind, the
+        # old rule is a hole in the firewall for whatever listens there next.
+        script = (firewall_script('remove', old) if old else '') \
+            + firewall_script('add', port)
+    else:
+        script = firewall_script(action, port)
     os.makedirs(paths.STATE_DIR, exist_ok=True)
-    ps1 = os.path.join(paths.STATE_DIR, f'share-{action}.ps1')
     result = os.path.join(paths.STATE_DIR, f'share-{action}.result')
     try:
         os.remove(result)
@@ -387,10 +409,9 @@ def change_firewall(action, port, timeout=180):
         '  Set-Content -LiteralPath ' + _ps_string(result) +
         ' -Value ("error: " + $_.Exception.Message) -Encoding utf8\n'
         '}\n')
-    with open(ps1, 'w', encoding='utf-8') as f:
-        f.write(wrapper)
-    argv = ['-NoProfile', '-ExecutionPolicy', 'Bypass',
-            '-WindowStyle', 'Hidden', '-File', ps1]
+    # Under a name nobody can guess, and checked by hash on the elevated
+    # side before it runs - see sweep.elevated.
+    argv, ps1 = elevated(wrapper, paths.STATE_DIR, f'share-{action}')
     try:
         if tun.is_admin():
             subprocess.run(['powershell'] + argv, stdin=subprocess.DEVNULL,
@@ -412,6 +433,9 @@ def change_firewall(action, port, timeout=180):
         return False, f'could not start the firewall change: {e}'
     finally:
         _PROBE['at'] = 0.0
+        # The elevated side deletes it once read; still here means it never
+        # ran (a refused prompt) and nothing else should find it.
+        discard(ps1)
     try:
         with open(result, encoding='utf-8-sig') as f:
             said = f.read().strip()
@@ -429,7 +453,8 @@ class Engine:
 
     def __init__(self, sysproxy, folder=None, auth_file=None,
                  set_system_proxy=True, port=None, route_with='proxy',
-                 split_settings=None, lan_share=False):
+                 split_settings=None, lan_share=False, lan_password=None,
+                 kill_switch=True):
         self.sysproxy = sysproxy
         self.folder = folder or paths.servers_dir()
         # Every folder worth looking in, the primary one first. A list rather
@@ -471,6 +496,21 @@ class Engine:
         # set this machine as its HTTP proxy. Off, the port is reachable
         # from this machine alone, which is what it always was.
         self.lan_share = bool(lan_share)
+        # What a device on the Wi-Fi has to give before the shared proxy
+        # serves it. Handed to the worker in its environment, never on its
+        # command line; a worker asked to share without one refuses to start.
+        self.lan_password = lan_password or None
+        # "Block internet if the connection drops". On, the machine stays
+        # pointed at the worker's port - the proxy setting or the adapter -
+        # through a switch to another exit and after the worker dies, so
+        # nothing leaks out on the bare line in between; only Disconnect, or
+        # quitting, puts it back. See disconnect(hold=) and blocked().
+        self.kill_switch = kill_switch is not False
+        # Whether a worker is meant to be up: set when a connect succeeds,
+        # cleared the moment a disconnect starts. A worker that is gone while
+        # this is set went without being asked - which is what the window's
+        # watcher looks for.
+        self.expected_up = False
         self.tun = tun.Tun(px.alive)
         self.child = None
         self.exit_info = None
@@ -761,6 +801,10 @@ class Engine:
         # file, and the app cannot tell that apart from never having had one.
         with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
             f.write(f'{user}\n{password}\n')
+        # Locked before it takes the real name, so the password is never in
+        # a file other accounts on this machine could read - and again after,
+        # for the rare filesystem where a rename does not keep the ACL.
+        self._lock_down(tmp)
         os.replace(tmp, self.auth_file)
         self._lock_down(self.auth_file)
 
@@ -1329,11 +1373,22 @@ class Engine:
         argv = paths.worker_argv(ip, host, self.port,
                                  auth_file or self.auth_file, tunnel,
                                  listen=self.listen_host())
+        env = dict(os.environ)
+        env.pop(px.LAN_PASSWORD_ENV, None)
+        if self.lan_share:
+            if not lan_password_ok(self.lan_password):
+                # The window should never get here - sharing cannot be turned
+                # on without a password - but the worker would refuse anyway,
+                # and this says why in words rather than in its log.
+                raise RuntimeError('share-needs-password: Share on Wi-Fi '
+                                   'needs a password of 8 or more characters')
+            env[px.LAN_PASSWORD_ENV] = self.lan_password
         flags = 0x08 | 0x200 if os.name == 'nt' else 0   # DETACHED, NEW_GROUP
         with open(out_path, 'w', encoding='utf-8') as out:
             return subprocess.Popen(
                 argv, stdin=subprocess.DEVNULL, stdout=out,
-                stderr=subprocess.STDOUT, creationflags=flags), out_path
+                stderr=subprocess.STDOUT, creationflags=flags,
+                env=env), out_path
 
     def _wait_listening(self, child, out_path, seconds=20):
         for _ in range(seconds * 4):
@@ -1368,10 +1423,34 @@ class Engine:
             raise RuntimeError(f'port-taken: {said[:600]}')
         raise RuntimeError(f'did-not-start: {said[-400:]}')
 
+    def holding(self):
+        """Whether a switch should keep the machine pointed at the port while
+        the worker behind it is replaced: the kill switch is on, and the
+        machine is pointed at us now."""
+        return bool(self.kill_switch and self.engaged())
+
+    def engaged(self):
+        """Whether Windows is pointed at this port, either way."""
+        try:
+            return bool(self.tun.engaged_for(self.port)
+                        or self.sysproxy.engaged_for(self.port))
+        except Exception:
+            return False
+
+    def blocked(self):
+        """The kill switch at work: Windows pointed at a port with no worker
+        behind it, on purpose, so nothing goes out until a reconnect or a
+        Disconnect. What the window shows instead of "Disconnected"."""
+        return bool(self.kill_switch and not self.running() and self.engaged())
+
     def connect(self, country, progress, provider=None, only=None,
                 city=None):
         with self.lock:
-            self.disconnect(quiet=True)
+            # A switch from one exit to another. With the kill switch on, the
+            # machine stays pointed at the port while the old worker goes and
+            # the new one is found, so the seconds in between fail rather
+            # than leaving on the bare line.
+            self.disconnect(quiet=True, hold=self.holding())
 
             took, server, ip, host = self.find_exit(
                 country, progress, provider=provider, only=only,
@@ -1390,6 +1469,7 @@ class Engine:
                               'city': server.city, 'provider': server.provider,
                               'answered': round(took, 2),
                               'pid': child.pid, 'since': time.time()}
+            self.expected_up = True
             # Deliberately NOT verified here. The connection is live the
             # moment the machine is pointed at a listening proxy; asking a
             # website to confirm it is a second network round trip, and
@@ -1408,7 +1488,7 @@ class Engine:
         window, the meter and the host list cannot tell the difference.
         """
         with self.lock:
-            self.disconnect(quiet=True)
+            self.disconnect(quiet=True, hold=self.holding())
             progress({'phase': 'starting', 'country': label, 'city': ''})
 
             child, out_path = self._spawn(None, None, tunnel=address)
@@ -1421,16 +1501,23 @@ class Engine:
                               'city': '', 'answered': 0.0,
                               'pid': child.pid, 'since': time.time(),
                               'tunnel': True}
+            self.expected_up = True
             return self.status()
 
-    def disconnect(self, quiet=False):
+    def disconnect(self, quiet=False, hold=False):
         """The machine goes back first, then the proxy stops.
 
         That order matters and is the only one that is safe: stopping the
         proxy while the machine still points at it leaves every request
         failing for as long as the restore takes, and if anything goes wrong
         in between, it leaves it failing for good.
+
+        Unless failing is the point. With `hold` - a switch to another exit
+        with the kill switch on - the machine is left pointed at the port
+        and only the worker stops, so what is in flight fails until the next
+        worker answers there. Disconnect, quitting and recovery never pass it.
         """
+        self.expected_up = False
         # Only put Windows back if Windows is currently pointed at *us*.
         #
         # Two copies of this app share a data folder, and so share the file
@@ -1440,7 +1527,8 @@ class Engine:
         # off the first copy's connection, which is somebody's actual VPN.
         # Ours to put back means ours to have changed. The adapter is held to
         # the same rule.
-        self.release()
+        if not hold:
+            self.release()
         rec = px.read_state(self.port)
         if rec:
             try:
@@ -1506,10 +1594,23 @@ class Engine:
         if adapter:
             if progress:
                 progress({'phase': 'adapter'})
-            self.tun.start(self.port, keep=[keep] if keep else [],
-                           watch=watch, own=[sys.executable],
-                           carriers=[paths.gost_exe()],
-                           split_rules=split.rules(self.split))
+            want = dict(keep=[keep] if keep else [], own=[sys.executable],
+                        carriers=[paths.gost_exe()],
+                        split_rules=split.rules(self.split))
+            # The adapter that held the line through a switch is kept as it
+            # is, when it is the adapter this connection would have started
+            # anyway: taking it down to bring the same one up again would be
+            # a gap on the bare line and a second UAC prompt. It is told the
+            # new worker to watch instead. The new exit's address is not in
+            # its route exclusions, and does not need to be - the worker's
+            # connection to it is left out by process, as this app's are.
+            if (self.kill_switch and self.tun.engaged_for(self.port)
+                    and self.tun.same_config(self.port, **want)):
+                self.tun.rewatch(watch)
+                self.tun.set_hold(True)
+                return
+            self.tun.start(self.port, watch=watch, hold=self.kill_switch,
+                           **want)
         else:
             if progress:
                 progress({'phase': 'routing'})
@@ -1601,19 +1702,28 @@ class Engine:
                        if held.get('pid') else
                        ', and it is not ours. Pick another port.'))
 
-            self.disconnect(quiet=True)
+            # Held through the move with the kill switch on: the old port
+            # stays the machine's until the new one is engaged in its place.
+            held = self.holding()
+            self.disconnect(quiet=True, hold=held)
+            old = self.port
             self.port = port
             child, out_path = self._spawn(info['ip'], info['host'])
             self._wait_listening(child, out_path)
             self.child = child
+            if held and self.tun.engaged_for(old):
+                # An adapter carrying traffic to the old port is no use on
+                # the new one; _engage brings up the right one.
+                self.tun.stop()
             self._engage(keep=info.get('ip'), watch=child.pid)
             # Everything already known about this exit survives the move -
             # the country, how fast it answered, and the address Cloudflare
             # confirmed. Only the process is new.
             self.exit_info = {**info, 'pid': child.pid}
+            self.expected_up = True
             return {'moved': True, 'busy': False, **self.status()}
 
-    def set_lan_share(self, on):
+    def set_lan_share(self, on, force=False):
         """Offer the connection to the other devices on the Wi-Fi, or stop.
 
         Applied now for the same reason set_port is: a switch that says
@@ -1642,11 +1752,13 @@ class Engine:
             # under the old setting, and the two can disagree.
             wide = rec.get('host') not in (paths.LOOPBACK_HOST, 'localhost')
             self.lan_share = on
-            if wide == on:
+            # `force`: the same setting with a new share password, which the
+            # running worker read from its environment when it started.
+            if wide == on and not force:
                 return {'applied': 'now', 'moved': False}
 
             info = self.exit_info or {'ip': rec['ip'], 'host': rec['name']}
-            self.disconnect(quiet=True)
+            self.disconnect(quiet=True, hold=self.holding())
             if info.get('tunnel'):
                 child, out_path = self._spawn(None, None, tunnel=info['ip'])
             else:
@@ -1661,6 +1773,7 @@ class Engine:
             self._engage(keep=None if info.get('tunnel') else info.get('ip'),
                          watch=child.pid)
             self.exit_info = {**info, 'pid': child.pid}
+            self.expected_up = True
             return {'applied': 'now', 'moved': True}
 
     def lan_clients(self):
@@ -1821,6 +1934,9 @@ class Engine:
                'systemProxy': self.set_system_proxy,
                'routeWith': self.route_with,
                'tun': adapter,
+               # Pointed at a port nobody answers, on purpose (kill switch).
+               'blocked': bool(self.kill_switch and not rec and engaged),
+               'killSwitch': self.kill_switch,
                'owed_restore': bool(self.sysproxy.stashed())}
         if rec:
             out['exit'] = {'ip': rec['ip'], 'host': rec['name'],

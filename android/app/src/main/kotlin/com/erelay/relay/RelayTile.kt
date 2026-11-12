@@ -47,29 +47,43 @@ class RelayTile : TileService() {
         super.onClick()
         val core = (application as RelayApp).core
         val up = RelayVpnService.exitAddress.isNotEmpty()
-        val busy = !up && RelayVpnService.total > 0
+        // A failure is not a connect under way, whatever the counts say.
+        val busy = !up && RelayVpnService.total > 0 &&
+            !RelayVpnService.status.startsWith("failed")
         if (up || busy) {
             core.disconnect()
             return
         }
-        if (VpnService.prepare(this) != null || !core.ready().ok) {
+        if (VpnService.prepare(this) != null) {
             openWindow()
             return
         }
-        val said = core.connect(core.picked.value)
-        if (!said.ok) openWindow()
-        paint()
+        // Whether there is anything to connect with, and which configs are
+        // behind the pick, are files and the secret store - off the main
+        // thread, which this is. The answer comes back on it.
+        core.connectThen(core.picked.value) { said ->
+            if (!said.ok) openWindow()
+            paint()
+        }
     }
 
     private fun openWindow() {
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        if (Build.VERSION.SDK_INT >= 34) {
-            startActivityAndCollapse(PendingIntent.getActivity(this, 0, intent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
-        } else {
-            @Suppress("DEPRECATION")
-            startActivityAndCollapse(intent)
+        // Asked from connectThen's answer as well as from the tap, by which
+        // time the panel may have closed and the tile been let go of. Android
+        // may then refuse, and the window simply does not open: the tile
+        // still shows the failure.
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startActivityAndCollapse(PendingIntent.getActivity(this, 0, intent,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            } else {
+                @Suppress("DEPRECATION")
+                startActivityAndCollapse(intent)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(RelayVpnService.TAG, "tile: window not opened", e)
         }
     }
 
@@ -79,6 +93,8 @@ class RelayTile : TileService() {
         val up = RelayVpnService.exitAddress.isNotEmpty()
         val note = RelayVpnService.status
         val working = !up && !note.startsWith("failed") && RelayVpnService.total > 0
+        // A tap that is still being looked into (connectThen) paints as off
+        // until the service says otherwise; the broadcast repaints it.
         tile.state = when {
             up -> Tile.STATE_ACTIVE
             else -> Tile.STATE_INACTIVE

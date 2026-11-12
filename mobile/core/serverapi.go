@@ -12,48 +12,124 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-// SetExit points the server's multi-IP mode at exitIP, with that exit's
-// provider credential. host is the server's IP or domain and port its TLS
-// port (0 for 443); pin is its
-// certificate's SHA-256 when it is reached by IP.
-func SetExit(host string, port int, apiPassword, pin, exitIP, user, password, name string, timeout time.Duration) error {
-	return setChain(host, port, apiPassword, pin, "exit-chain", exitIP, user, password, name, timeout)
+// ExitHop is the provider exit a chain on the server leaves by, as the
+// server is to dial it.
+type ExitHop struct {
+	IP       string // the exit's pinned address
+	Hostname string // the name its certificate serves - the pinned Name
+	User     string // the exit's own provider's credential
+	Password string
+	// Node is what the node is called in the server's config ("current"
+	// when empty) - a label, nothing is checked against it.
+	Node string
+	// Verify has the server check the exit's certificate against Hostname,
+	// as the phone does in exit.go, which also sends Hostname as SNI. The
+	// default for every server, and from a server in Iran the fast one:
+	// measured 2026-11-12, Windscribe exits reached without SNI carried about
+	// 10 KB/s of upload per connection, and with the real name 1.2-1.9 MB/s.
+	// Turned off only by the person, for a server whose connection through
+	// the exit fails entirely.
+	Verify bool
+}
+
+// SetExit points the server's multi-IP mode at one provider exit, with that
+// exit's provider credential. host is the server's IP or domain and port its
+// TLS port (0 for 443); pin is its certificate's SHA-256 when it is reached
+// by IP.
+func SetExit(host string, port int, apiPassword, pin string, hop ExitHop, timeout time.Duration) error {
+	return setChain(host, port, apiPassword, pin, "exit-chain", hop, timeout)
 }
 
 // SetSlot points one exported location - loc-<k> on the server, which the
-// links handed to other devices are routed to - at exitIP. The same node as
+// links handed to other devices are routed to - at one exit. The same node as
 // SetExit writes, under another chain's name.
-func SetSlot(host string, port int, apiPassword, pin string, k int, exitIP, user, password, name string, timeout time.Duration) error {
+func SetSlot(host string, port int, apiPassword, pin string, k int, hop ExitHop, timeout time.Duration) error {
 	if k < 1 {
 		return fmt.Errorf("slot %d is not one the server has: they start at 1", k)
 	}
-	return setChain(host, port, apiPassword, pin, fmt.Sprintf("loc-%d", k), exitIP, user, password, name, timeout)
+	return setChain(host, port, apiPassword, pin, fmt.Sprintf("loc-%d", k), hop, timeout)
 }
 
-func setChain(host string, port int, apiPassword, pin, chain, exitIP, user, password, name string, timeout time.Duration) error {
-	if name == "" {
-		name = "current"
+// chainBody is the gost chain that leaves by hop, as the API takes it.
+//
+// The dialer's tls block is where verification is decided. "secure": true
+// with the exit's hostname as serverName is gost checking the chain and the
+// name the way exit.go does; "secure": false is the old form, which takes
+// whatever the address shows - kept for the person who turned checking off
+// on purpose, and only for them.
+func chainBody(chain string, hop ExitHop) ([]byte, error) {
+	node := hop.Node
+	if node == "" {
+		node = "current"
 	}
-	body, _ := json.Marshal(map[string]any{
+	tlsOpts := map[string]any{"secure": false}
+	if hop.Verify {
+		if hop.Hostname == "" || !validHost(hop.Hostname) || net.ParseIP(hop.Hostname) != nil {
+			return nil, fmt.Errorf("%s was pinned without the name its certificate serves, so the server has nothing to check it against", hop.IP)
+		}
+		tlsOpts = map[string]any{"secure": true, "serverName": hop.Hostname}
+	}
+	return json.Marshal(map[string]any{
 		"name": chain,
 		"hops": []any{map[string]any{"name": "exit", "nodes": []any{map[string]any{
-			"name":      name,
-			"addr":      net.JoinHostPort(exitIP, "443"),
-			"connector": map[string]any{"type": "http", "auth": map[string]any{"username": user, "password": password}},
-			"dialer":    map[string]any{"type": "tls", "tls": map[string]any{"secure": false}},
+			"name":      node,
+			"addr":      net.JoinHostPort(hop.IP, "443"),
+			"connector": map[string]any{"type": "http", "auth": map[string]any{"username": hop.User, "password": hop.Password}},
+			"dialer":    map[string]any{"type": "tls", "tls": tlsOpts},
 		}}}},
 	})
-	_, err := ServerAPI(host, port, apiPassword, pin, http.MethodPut, "config/chains/"+chain, body, timeout)
+}
+
+func setChain(host string, port int, apiPassword, pin, chain string, hop ExitHop, timeout time.Duration) error {
+	body, err := chainBody(chain, hop)
+	if err != nil {
+		return err
+	}
+	_, err = ServerAPI(host, port, apiPassword, pin, http.MethodPut, "config/chains/"+chain, body, timeout)
 	return err
+}
+
+// ServerInIran is whether the user's server sits at an Iranian address -
+// by the Iran preset's own ranges, for an address as it is and for a name
+// as DoH answers it (any one of its addresses is enough). What the settings
+// screen asks to show its Iran notices: keep ExitHop.Verify on (from Iran an
+// exit reached without its name is held to about 10 KB/s of upload, with it
+// full speed - measured 2026-11-12), and that Surfshark's exits cannot be
+// reached from there at all (every cluster failed TLS from a server in Iran
+// the same day, with or without the name).
+//
+// An error is "could not tell" - a name that would not resolve - and is not
+// a no.
+func ServerInIran(ctx context.Context, host string) (bool, error) {
+	host = strings.TrimSpace(host)
+	if a, err := netip.ParseAddr(host); err == nil {
+		return InIranIPv4(a), nil
+	}
+	if !validHost(host) {
+		return false, fmt.Errorf("%q is not an address or a name", host)
+	}
+	addrs, err := Resolve(ctx, nil, "cloudflare", host)
+	if err != nil {
+		return false, err
+	}
+	for _, a := range addrs {
+		if InIranIPv4(a) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ChainJSON is one chain as the server has it now, for putting back later -
@@ -99,14 +175,72 @@ func apiHost(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(tlsPort(port)))
 }
 
-// ServerAPI is one request to the server's API, straight to it - protected
-// out of the phone's own tunnel, and pinned when the server is an address.
-func ServerAPI(host string, port int, apiPassword, pin, method, path string, body []byte, timeout time.Duration) ([]byte, error) {
-	tr := &http.Transport{DialContext: (&net.Dialer{Timeout: timeout, Control: dialControl}).DialContext}
+// ErrNoPin is the API asked of a server by address before its certificate
+// is known. A pin left empty there would trust whatever answered first and
+// hand it the API password - so the request is not made at all, and the
+// caller tests the server (which learns the pin; see TunnelServer.learnPin)
+// before asking again.
+var ErrNoPin = errors.New("the server's certificate is not pinned yet - test the server first")
+
+// apiTransports holds one transport per server and pin, so the requests an
+// export makes one after another share a connection rather than paying a
+// TLS handshake each - and nothing is left holding sockets: idle ones are
+// closed after apiIdle.
+var (
+	apiMu         sync.Mutex
+	apiTransports = map[string]*http.Transport{}
+)
+
+const (
+	apiIdle      = 30 * time.Second
+	apiMaxCached = 8
+)
+
+// apiTransport is the transport for one server, made the first time it is
+// asked for. Keyed by the pin as well as the host: a pin cleared or changed
+// by hand must not ride a connection made under the old one.
+func apiTransport(host string, port int, pin string) *http.Transport {
+	key := apiHost(host, port) + "|" + strings.ToLower(pin)
+	apiMu.Lock()
+	defer apiMu.Unlock()
+	if tr, ok := apiTransports[key]; ok {
+		return tr
+	}
+	if len(apiTransports) >= apiMaxCached {
+		// A phone talks to one server, two when one is being replaced; more
+		// than this is old pins. Start again rather than keep them.
+		for k, tr := range apiTransports {
+			tr.CloseIdleConnections()
+			delete(apiTransports, k)
+		}
+	}
+	tr := &http.Transport{
+		// No proxy: the API is asked straight, never through whatever the
+		// environment names.
+		Proxy: nil,
+		// The per-request timeout is the context's; this only stops a dial
+		// from outliving it on a line that swallows SYNs.
+		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, Control: dialControl}).DialContext,
+		TLSHandshakeTimeout: 30 * time.Second,
+		IdleConnTimeout:     apiIdle,
+		MaxIdleConnsPerHost: 2,
+		ForceAttemptHTTP2:   false,
+	}
 	if net.ParseIP(host) != nil {
 		tr.TLSClientConfig = PinnedTLS(pin, nil)
 	}
-	client := &http.Client{Timeout: timeout, Transport: tr}
+	apiTransports[key] = tr
+	return tr
+}
+
+// ServerAPI is one request to the server's API, straight to it - protected
+// out of the phone's own tunnel, and pinned when the server is an address.
+// An address with no pin is ErrNoPin, never a request.
+func ServerAPI(host string, port int, apiPassword, pin, method, path string, body []byte, timeout time.Duration) ([]byte, error) {
+	if net.ParseIP(host) != nil && strings.TrimSpace(pin) == "" {
+		return nil, ErrNoPin
+	}
+	client := &http.Client{Timeout: timeout, Transport: apiTransport(host, port, pin)}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

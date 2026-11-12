@@ -11,6 +11,7 @@ refused, that DNS goes where it should, and that the script handed to an
 elevated PowerShell quotes what it is given.
 """
 import ipaddress
+import json
 import os
 import re
 import sys
@@ -91,16 +92,56 @@ def test_no_carriers_no_dns_rule():
 
 
 def test_wrapper_quotes_what_it_is_given():
+    config = json.dumps(tun.build_config(8877, own=[r"C:\Users\O’Brien\x.exe"]))
     text = tun.WRAPPER.format(
         exe=tun._ps_string(r"C:\Users\O'Brien\Relay\sing-box.exe"),
-        argv=tun._ps_array(['run', '-c', r'C:\Users\A B\config.json']),
-        out="'o'", err="'e'", pidf="'p'", ready="'r'", failed="'f'",
-        stop="'s'", done="'d'", nic="'RelayTun'", watch=1234, startup=25)
+        ui=99, out="'o'", err="'e'", pidf="'p'", ready="'r'", failed="'f'",
+        stop="'s'", done="'d'", nic="'RelayTun'", watch=1234, startup=25,
+        holdf="'h'", held="'hd'", watchf="'w'",
+        config=tun._ps_string(config))
     assert "O''Brien" in text
-    assert '"C:\\Users\\A B\\config.json"' in text
+    # The configuration travels inside the (hash-checked) script, and the
+    # elevated side writes it - BOM-less, admin-only, CreateNew - where an
+    # ordinary user cannot swap it before sing-box reads it.
+    assert 'UTF8Encoding $false' in text
+    assert '[IO.FileMode]::CreateNew' in text
+    assert "SetAccessRuleProtection($true, $false)" in text
+    assert '$ui     = 99' in text
+    # ensure_ascii: the configuration is pure ASCII on sing-box's stdin.
+    assert r'O\u2019Brien' in text
     assert '$watch  = 1234' in text
     # Every brace that PowerShell needs survived str.format.
     assert text.count('{') == text.count('}')
+
+
+def test_the_kill_switch_is_a_file_the_script_reads():
+    # With the hold file there, the worker dying leaves the adapter up and
+    # says so in `held`; a pid in `watch` is the next worker to watch.
+    w = tun.WRAPPER
+    hold_at = w.index('Test-Path -LiteralPath $holdf')
+    assert w.index('Set-Content -LiteralPath $held') > hold_at
+    assert 'Test-Path -LiteralPath $watchf' in w
+    # And the hold is let go of when the window itself is gone: nothing is
+    # left to reconnect or to press Disconnect.
+    assert '-and -not $uiGone' in w and '$watch -eq 0 -and $uiGone' in w
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        t = tun.Tun(lambda pid: False)
+        t.dir = d
+        assert t.set_hold(True) and os.path.exists(os.path.join(d, 'hold'))
+        assert t.set_hold(True)
+        t.set_hold(False)
+        assert not os.path.exists(os.path.join(d, 'hold'))
+        with open(os.path.join(d, 'state.json'), 'w') as f:
+            json.dump({'port': 8877, 'watch': 1,
+                       'fingerprint': tun.Tun.fingerprint(8877, own=['a'])}, f)
+        assert t.same_config(8877, own=['a'], keep=['8.8.8.8'])
+        assert not t.same_config(8877, own=['b'])
+        assert not t.same_config(9000, own=['a'])
+        t.rewatch(4321)
+        with open(os.path.join(d, 'watch')) as f:
+            assert f.read() == '4321'
+        assert t.record()['watch'] == 4321
 
 
 def test_explain():

@@ -35,6 +35,16 @@ VERSION=1.2.0
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd -- "$HERE/.." && pwd)
 SELF=$(basename -- "${BASH_SOURCE[0]}")
+# The systemd unit runs a root-owned copy of this script from
+# /usr/local/lib/ovpn-pin (see install_service), where "the folder above"
+# is not the repo any more; the unit says where the repo is instead.
+if [ -n "${OVPN_ROOT:-}" ]; then
+    [[ $OVPN_ROOT == /* ]] && [ -d "$OVPN_ROOT" ] || {
+        printf '\n  [fail] OVPN_ROOT=%s is not an absolute path to a folder\n\n' "$OVPN_ROOT" >&2
+        exit 1
+    }
+    ROOT=$(cd -- "$OVPN_ROOT" && pwd)
+fi
 
 # shellcheck source=ovpn-lib.sh
 . "$HERE/ovpn-lib.sh" 2>/dev/null || {
@@ -43,8 +53,17 @@ SELF=$(basename -- "${BASH_SOURCE[0]}")
 }
 
 STATE=$ROOT/.state
-PIDFILE=$STATE/openvpn.pid
-LOGFILE=$STATE/openvpn.log
+# What root's openvpn writes, and the cleaned config it reads, live in a
+# folder only root can write to - not in .state, which is yours: a link
+# planted there as openvpn.log would have root write its log over whatever
+# the link points at. One tunnel per machine, so one folder.
+RUNDIR=/run/ovpn-pin
+PIDFILE=$RUNDIR/openvpn.pid
+LOGFILE=$RUNDIR/openvpn.log
+RUN_CONFIG=$RUNDIR/config.ovpn
+# Where versions before that kept the pid. Still looked at, so a tunnel one of
+# them started can be found and stopped - never written to again.
+LEGACY_PIDFILE=$STATE/openvpn.pid
 CURFILE=$STATE/current
 MODEFILE=$STATE/mode
 ROUTEFILE=$STATE/proxy-route
@@ -154,24 +173,36 @@ EOF
 
 state_init() { mkdir -p -- "$STATE" 2>/dev/null || die "cannot create $STATE"; }
 
+# Guard against a recycled pid, and against a pid file that lies - the old
+# one sat in a folder you can write to, and it is root who acts on it: the
+# process has to be openvpn by name, not merely mention it somewhere, and has
+# to be one of ours, started with `--daemon ovpn-pin` (every version passed
+# that). Not by owner: a config with `user nobody` drops root after start.
 pid_alive() {
-    local pid=$1
-    [ -n "$pid" ] || return 1
+    local pid=$1 args
+    [[ $pid =~ ^[0-9]+$ ]] || return 1
     if [ -d /proc ]; then
         [ -d "/proc/$pid" ] || return 1
-        # Guard against a recycled pid: it has to still be openvpn.
-        grep -qa openvpn "/proc/$pid/cmdline" 2>/dev/null || return 1
-        return 0
+        [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = openvpn ] || return 1
+        args=$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null)
+        [[ $'\n'$args$'\n' == *$'\n'ovpn-pin$'\n'* ]]
+        return
     fi
-    ps -p "$pid" -o comm= 2>/dev/null | grep -q openvpn
+    [ "$(ps -p "$pid" -o comm= 2>/dev/null)" = openvpn ] || return 1
+    args=$(ps -p "$pid" -o args= 2>/dev/null)
+    [[ $args == *'--daemon ovpn-pin'* ]]
 }
 
+# Root's pid file first; then, for a tunnel a version before it started, the
+# one in .state (see LEGACY_PIDFILE), believed only as far as pid_alive goes.
 running_pid() {
-    local pid
-    [ -f "$PIDFILE" ] || return 1
-    pid=$(tr -dc '0-9' < "$PIDFILE" 2>/dev/null)
-    pid_alive "$pid" || return 1
-    printf '%s' "$pid"
+    local pid f
+    for f in "$PIDFILE" "$LEGACY_PIDFILE"; do
+        [ -f "$f" ] || continue
+        pid=$(head -c 32 -- "$f" 2>/dev/null | tr -dc '0-9')
+        if pid_alive "$pid"; then printf '%s' "$pid"; return 0; fi
+    done
+    return 1
 }
 
 # The log belongs to root. Readable in practice, but do not bet the run on it.
@@ -560,7 +591,23 @@ auth_args() {
 start_tunnel() {
     local i=$1 mode=$2 file=${CFG_FILE[$1]} cmd=() ph pp arg authargs
 
-    cmd=(openvpn --config "$file" --daemon ovpn-pin
+    # openvpn runs as root here, and a config is somebody else's text. Two
+    # things stand between the two:
+    #
+    #   - openvpn is never handed the file itself, only a copy made as root
+    #     in $RUNDIR with everything drop_script_lines takes out taken out:
+    #     the script hooks, `plugin` (a library loaded into root's openvpn),
+    #     `config` (another file read in), and everything that writes a
+    #     file. Read from the file as it is now, so a config edited since it
+    #     was pinned is cleaned too.
+    #   - --script-security 1 after --config, so it wins over anything the
+    #     copy could still say. It covers the script hooks only - not
+    #     plugin, not config - which is why the copy is made at all. 1 still
+    #     lets openvpn call ip itself. DNS is set from the pushed options in
+    #     the log (set_dns), so no up script is needed.
+    read_config_lines "$file"
+    drop_script_lines "${LINES[@]}"
+    cmd=(openvpn --config "$RUN_CONFIG" --script-security 1 --daemon ovpn-pin
          --log "$LOGFILE" --writepid "$PIDFILE" --verb 3 --connect-retry-max 3)
 
     authargs=$(auth_args "$file") || die "$(basename -- "$file") asks for a username and password and no auth file exists.
@@ -576,6 +623,8 @@ start_tunnel() {
     if [ "$DRY_RUN" -eq 1 ]; then
         head_ 'Dry run'
         info "mode: $mode"
+        info "$RUN_CONFIG would be a cleaned copy of $file"
+        [ ${#DROPPED_DIRECTIVES[@]} -gt 0 ] && info "  leaving out: ${DROPPED_DIRECTIVES[*]}"
         say ''
         say "  $SUDO ${cmd[*]}"
         say ''
@@ -588,13 +637,23 @@ start_tunnel() {
         exit 0
     fi
 
+    # Root's folder, made by root; written fresh each time, as root, readable
+    # by root alone - it can hold a private key.
+    $SUDO install -d -m 755 -o root -g root "$RUNDIR" || die "cannot create $RUNDIR"
+    $SUDO rm -f -- "$RUN_CONFIG" "$LOGFILE"
+    ( umask 077; printf '%s\n' "${KEPT_LINES[@]}" | $SUDO tee "$RUN_CONFIG" >/dev/null ) \
+        || die "cannot write $RUN_CONFIG"
+    if [ ${#DROPPED_DIRECTIVES[@]} -gt 0 ]; then
+        warn "$(basename -- "$file") asks openvpn to run programs or write files: ${DROPPED_DIRECTIVES[*]}"
+        info 'those lines were left out of what openvpn is given.'
+    fi
+
     [ "$mode" = proxy ] && pin_upstream_routes "$pp"
 
-    rm -f -- "$LOGFILE" 2>/dev/null || $SUDO rm -f -- "$LOGFILE"
     if ! $SUDO "${cmd[@]}"; then
         unpin_upstream_routes
         bad 'openvpn refused to start. Run it by hand to see why:'
-        info "     sudo openvpn --config '$file'"
+        info "     sudo openvpn --config '$RUN_CONFIG' --script-security 1"
         return 1
     fi
 
@@ -675,7 +734,12 @@ report_up() {
         printf '\n'
         local extra=''
         [ -f "$ROUTEFILE" ] && extra=$(tr '\n' ' ' < "$ROUTEFILE")
-        killswitch_on "$dev" "${CFG_IP[$i]}" "$extra"
+        killswitch_on "$dev" "$(killswitch_peers "$i" "$server")" "$extra"
+        if [ "$SET_DNS" -ne 1 ]; then
+            info 'DNS to anything outside the tunnel is blocked now, your own router'
+            info 'included. If names stop resolving, connect with --set-dns so the'
+            info "server's resolver is used through the tunnel."
+        fi
     fi
 
     eg=$(egress_line) && { printf '\n'; info "Cloudflare sees you as $eg"; }
@@ -694,11 +758,23 @@ report_up() {
 # reaches you through a perfectly good tunnel. Only systemd-resolved is handled
 # - it is the one that can do this per interface and undo it by itself when
 # the interface goes away.
+#
+# IPv6 resolvers count too - `dhcp-option DNS6`, an IPv6 address on a plain
+# `dhcp-option DNS`, and the `dns server N address` form openvpn 2.6 pushes -
+# or a v6 resolver the server offered would be left out and the machine's own
+# kept for v6. Only things shaped like addresses are passed on.
 apply_dns() {
-    local dev=$1 servers
+    local dev=$1 servers a
     [ -n "$dev" ] || return 0
     command -v resolvectl >/dev/null 2>&1 || { warn 'resolvectl not found - DNS left as it was'; return 0; }
-    servers=$(log_cat | grep -oE 'dhcp-option DNS [0-9.]+' | awk '{print $3}' | sort -u | tr '\n' ' ')
+    servers=$( { log_cat | grep -oE 'dhcp-option DNS6? [0-9A-Fa-f:.]+' | awk '{print $3}'
+                 log_cat | grep -oE 'dns server [0-9]+ address [0-9A-Fa-f:. ]+' \
+                     | sed 's/.*address //' | tr ' ' '\n'; } \
+               | while IFS= read -r a; do
+                     if is_ip_literal "$a" || [[ $a =~ ^[0-9A-Fa-f:]+$ && $a == *:* ]]; then
+                         printf '%s\n' "$a"
+                     fi
+                 done | sort -u | tr '\n' ' ')
     [ -n "${servers// /}" ] || { info 'the server pushed no DNS - nothing to set'; return 0; }
     # shellcheck disable=SC2086
     if $SUDO resolvectl dns "$dev" $servers 2>/dev/null && $SUDO resolvectl domain "$dev" '~.' 2>/dev/null; then
@@ -784,27 +860,52 @@ dns_check() {
 # tearing it down cannot take anyone else's rules with it. IPv6 goes too:
 # `inet` with a drop policy covers both families, which is the point - a v6
 # route around a v4 tunnel is the classic leak.
+#
+# DNS is the exception to "your own network stays reachable": port 53 and 853
+# (DNS over TLS) are dropped on anything but the tunnel, the router on your
+# LAN included, because a resolver outside the tunnel is exactly the leak this
+# is meant to close - and on a censored line the one that lies. The rules
+# that let openvpn reach its server come first, so a server that happens to
+# listen on 53 still works.
+#
+# The table is declared, deleted and written again in one nft transaction,
+# so running this over a kill switch that is already up (the service
+# restarting after the tunnel died) replaces it without a moment unguarded
+# and without piling up a second copy of every rule.
 killswitch_on() {
-    local dev=$1 server=$2 extra=$3
+    local dev=$1 peers=$2 extra=$3
     command -v nft >/dev/null 2>&1 || {
         warn 'nftables (nft) is not installed - no kill switch'
         info 'apt install nftables / dnf install nftables, or leave it off.'
         return 1
     }
     [ -n "$dev" ] || { warn 'no tunnel device to build a kill switch around'; return 1; }
+    [[ $dev =~ ^[A-Za-z0-9_.-]{1,15}$ ]] || { warn "'$dev' is not an interface name - no kill switch"; return 1; }
 
-    local allow=''
-    [ -n "$server" ] && allow="$allow        ip daddr $server accept"$'\n'
-    local u
-    for u in $extra; do allow="$allow        ip daddr $u accept"$'\n'; done
+    # Addresses only. A hostname in an nft rule is resolved once, by nft, when
+    # the rule is loaded - through the very resolver that cannot be trusted -
+    # so anything that is not an address literal is left out, never passed on.
+    local allow='' u
+    for u in $peers $extra; do
+        if is_ip_literal "$u"; then
+            allow+="        ip daddr $u accept"$'\n'
+        elif [[ $u =~ ^[0-9A-Fa-f:]+$ && $u == *:* ]]; then
+            allow+="        ip6 daddr $u accept"$'\n'
+        fi
+    done
+    [ -n "$allow" ] || { warn 'no server address to let through - no kill switch'; return 1; }
 
     if $SUDO nft -f - <<EOF 2>/dev/null
+table inet ovpn_pin
+delete table inet ovpn_pin
 table inet ovpn_pin {
     chain out {
         type filter hook output priority 0; policy drop;
         oif lo accept
         oifname "$dev" accept
-$allow        ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 224.0.0.0/4 } accept
+$allow        udp dport { 53, 853 } drop
+        tcp dport { 53, 853 } drop
+        ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 224.0.0.0/4 } accept
         ip protocol icmp accept
     }
 }
@@ -836,23 +937,75 @@ killswitch_off() {
     return 0
 }
 
+killswitch_present() {
+    command -v nft >/dev/null 2>&1 && $SUDO nft list table inet ovpn_pin >/dev/null 2>&1
+}
+
+# Every address this config's openvpn may be talking to: the peer the log
+# says it connected to - which, in a file with several `remote` lines, need
+# not be the first - and every `remote` of the file, so a reconnect to the
+# next one is not cut off. Hostnames come out with the rest and are dropped
+# by killswitch_on.
+killswitch_peers() {
+    local i=$1 server=${2:-} h out=()
+    [ -n "$server" ] && out+=("${server%:*}")
+    read_config_lines "${CFG_FILE[$i]}"
+    scan_remotes
+    for h in "${R_HOST[@]}"; do out+=("$h"); done
+    printf '%s\n' "${out[@]}" | awk 'NF && !seen[$0]++' | tr '\n' ' '
+}
+
 
 #-------------------------------------------------------------------- service
 
+# One argument for a unit file: double-quoted, with what systemd would read
+# as something else escaped - \ and " for its quoting, % for its specifiers.
+# $ only in a command line (Exec*=), where systemd expands $VAR and $$ is a
+# literal $; an Environment= assignment is not expanded, so there a $ is
+# already itself and doubling it would put two in the value. Pass `env` as
+# the second argument for that. A newline cannot be escaped, so it is
+# refused.
+sd_quote() {
+    local s=$1 where=${2:-exec}
+    [[ $s == *$'\n'* ]] && return 1
+    s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//%/%%}
+    [ "$where" = env ] || s=${s//\$/\$\$}
+    printf '"%s"' "$s"
+}
+
+# The unit runs as root, so it must not run anything you - or anything
+# running as you - could change: not this script where it sits in your
+# folder, and not ovpn-lib.sh beside it. Both are copied, root-owned and
+# writable by root alone, to /usr/local/lib/ovpn-pin, and the unit runs that
+# copy and is told with OVPN_ROOT where your configs are. Updating the repo
+# does not update the service; installing it again does.
+#
+# The copy reads .env only if root owns it (see the arguments below), so the
+# kill switch and DNS choices in force now are written into the unit as
+# flags, rather than left to a file the service may decline to read.
+SERVICE_LIB=/usr/local/lib/ovpn-pin
 install_service() {
     local cfg=$1 unit=/etc/systemd/system/ovpn-pin.service body
+    local q_exe q_cfg q_root q_desc flags=''
+
+    q_exe=$(sd_quote "$SERVICE_LIB/ovpn-connect.sh")
+    q_cfg=$(sd_quote "$cfg") || die 'that config name has a line break in it - rename the file'
+    q_root=$(sd_quote "OVPN_ROOT=$ROOT" env) || die "$ROOT has a line break in it"
+    q_desc=${cfg//%/%%}
+    [ "$KILL_SWITCH" -eq 1 ] && flags+=' --kill-switch'
+    [ "$SET_DNS" -eq 1 ] && flags+=' --set-dns'
 
     body=$(cat <<EOF
 [Unit]
-Description=ovpn-pin: $cfg
-Documentation=file://$ROOT/README.md
+Description=ovpn-pin: $q_desc
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$HERE/$SELF $cfg --supervise --fallback stop
-ExecStop=$HERE/$SELF --stop
+Environment=$q_root
+ExecStart=$q_exe $q_cfg --supervise --fallback stop$flags
+ExecStop=$q_exe --stop
 Restart=always
 RestartSec=10
 
@@ -867,20 +1020,34 @@ EOF
     say ''
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        info "--dry-run: not written. It would go to $unit"
+        info "--dry-run: not written. It would go to $unit, running copies of"
+        info "$SELF and ovpn-lib.sh in $SERVICE_LIB"
         printf '\n'
         return 0
     fi
 
-    printf '%s\n' "$body" | $SUDO tee "$unit" >/dev/null || die "cannot write $unit"
+    $SUDO install -d -m 755 -o root -g root "$SERVICE_LIB" \
+        || die "cannot create $SERVICE_LIB"
+    if ! $SUDO install -m 755 -o root -g root "$HERE/$SELF" "$SERVICE_LIB/ovpn-connect.sh" \
+        || ! $SUDO install -m 644 -o root -g root "$HERE/ovpn-lib.sh" "$SERVICE_LIB/ovpn-lib.sh"; then
+        die "cannot copy the scripts to $SERVICE_LIB"
+    fi
+    ok "root-owned copies in $SERVICE_LIB"
+    ( umask 022; printf '%s\n' "$body" | $SUDO tee "$unit" >/dev/null ) || die "cannot write $unit"
+    $SUDO chmod 644 "$unit" 2>/dev/null
     $SUDO systemctl daemon-reload 2>/dev/null
     ok "written to $unit"
     printf '\n'
     info 'Start it now, and at every boot:'
     info '     sudo systemctl enable --now ovpn-pin'
     info 'It runs as root, which has no desktop session - so the system proxy'
-    info 'is not switched off by it. Set OVPN_PROXY_OFF_CMD in .env if that'
-    info 'matters for an unattended machine.'
+    info 'is not switched off by it. It reads .env only if root owns it and'
+    info 'nobody else can write it, and only then runs OVPN_PROXY_OFF_CMD.'
+    info 'Root as owner, your group to read it, so you still can (editing it'
+    info 'then takes sudo, which is the point):'
+    info "     sudo chown root:$(id -gn) '$ROOT/.env' && sudo chmod 640 '$ROOT/.env'"
+    info 'After changing these scripts, install the service again to update'
+    info "the copies in $SERVICE_LIB."
     printf '\n'
 }
 
@@ -1554,9 +1721,21 @@ do_sweep() {
 do_stop() {
     local pid mode='' quiet=${1:-0}
     pid=$(running_pid) || {
+        # Quiet is the supervisor finding the tunnel already gone: systemd is
+        # about to start it again, and a kill switch kept up in between is
+        # the point of having one, so it stays (killswitch_on replaces it).
         [ "$quiet" -eq 1 ] && return 0
         head_ 'Nothing to stop'
         info 'no tunnel of ours is running.'
+        # openvpn can die on its own - a crash, a kill, a lost server - and
+        # the kill switch built around it outlives it. --stop has to take
+        # that down whether or not there is anything left to stop, or the
+        # machine is left with no network and nothing saying why.
+        if killswitch_present; then killswitch_off 0; else rm -f -- "$STATE/killswitch" 2>/dev/null; fi
+        unpin_upstream_routes
+        rm -f -- "$CURFILE" "$MODEFILE" 2>/dev/null
+        [ -e "$RUN_CONFIG" ] && $SUDO rm -f -- "$RUN_CONFIG"
+        [ -e "$LEGACY_PIDFILE" ] && { rm -f -- "$LEGACY_PIDFILE" 2>/dev/null || $SUDO rm -f -- "$LEGACY_PIDFILE"; }
         proxy_on
         printf '\n'
         return 0
@@ -1567,7 +1746,9 @@ do_stop() {
 
     # Before anything else: a kill switch outlives the tunnel it was built
     # around, and one left behind looks exactly like the network being broken.
-    [ -f "$STATE/killswitch" ] && killswitch_off "$quiet"
+    # Asked of nft rather than of the state file, which can be missing while
+    # the table is not.
+    if killswitch_present; then killswitch_off "$quiet"; else rm -f -- "$STATE/killswitch" 2>/dev/null; fi
 
     # The proxy goes back first: the next connect may well need it, and in
     # proxied mode the tunnel is about to stop needing it anyway.
@@ -1587,7 +1768,9 @@ do_stop() {
     fi
 
     unpin_upstream_routes
-    $SUDO rm -f -- "$PIDFILE"
+    $SUDO rm -f -- "$PIDFILE" "$RUN_CONFIG"
+    # Root wrote it, into your folder, so it may take root to remove.
+    [ -e "$LEGACY_PIDFILE" ] && { rm -f -- "$LEGACY_PIDFILE" 2>/dev/null || $SUDO rm -f -- "$LEGACY_PIDFILE"; }
     rm -f -- "$CURFILE" "$MODEFILE" 2>/dev/null
 
     if [ "$quiet" -eq 0 ]; then
@@ -1712,7 +1895,22 @@ fi
 
 if [ "$(id -u)" -eq 0 ]; then SUDO=''; else SUDO='sudo'; fi
 
-load_env_file "$ROOT/.env"
+# As root - the systemd unit, or the whole script under sudo - .env is read
+# only if root owns it and nobody else can write it. Otherwise it is a file
+# any process running as you could edit, and it names commands this would
+# run (OVPN_PROXY_OFF_CMD, OVPN_PROXY_ON_CMD) and paths it would write as
+# root (OVPN_AUTH_FILE): a way from your account to root, not a setting.
+if [ -z "$SUDO" ] && [ -e "$ROOT/.env" ]; then
+    if ENV_COPY=$(root_owned_copy "$ROOT/.env"); then
+        load_env_file "$ENV_COPY"
+    else
+        warn "running as root, so $ROOT/.env is not read: it is not owned by root,"
+        info 'or others can write to it. Its commands and paths would run as root.'
+        info "To use it here: chown root:$(stat -c %G -- "$ROOT/.env" 2>/dev/null || printf root) '$ROOT/.env' && chmod 640 '$ROOT/.env'"
+    fi
+else
+    load_env_file "$ROOT/.env"
+fi
 OUT_DIR=$(env_or OVPN_OUT_DIR "$ROOT/pinned")
 SUCCESS_DIR=${CLI_SUCCESS:-$(env_or OVPN_SUCCESS_DIR "$ROOT/success")}
 SITETEST_DIR=${CLI_SITETEST:-$(env_or OVPN_SITETEST_DIR "$ROOT/sitetest")}

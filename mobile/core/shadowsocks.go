@@ -93,6 +93,9 @@ func (s *ShadowsocksServer) Open(target string, timeout time.Duration) (net.Conn
 // Close has nothing to end: there is no session between connections.
 func (s *ShadowsocksServer) Close() error { return nil }
 
+// Reset has nothing to drop, for the same reason.
+func (s *ShadowsocksServer) Reset() error { return nil }
+
 // SeenPin is empty: nothing on this path has a certificate. The server's API
 // still does, and is pinned separately (see serverapi.go).
 func (s *ShadowsocksServer) SeenPin() string { return "" }
@@ -101,7 +104,10 @@ func (s *ShadowsocksServer) SeenPin() string { return "" }
 // binding holds while one is carrying, and closes when it stops.
 type ServerWay interface {
 	Way
+	// Close stops it for good; nothing is dialled through it afterwards.
 	Close() error
+	// Reset drops whatever session is held, leaving it usable.
+	Reset() error
 	SeenPin() string
 }
 

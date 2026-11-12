@@ -73,6 +73,179 @@ LINE_FAIL = re.compile(r'^\s*\[fail\]\s+(.+?)\s*$')
 FROM_NAME = re.compile(r'_\d{1,3}(?:\.\d{1,3}){3}\.ovpn$')
 
 
+# -- what a pinned config may not say ---------------------------------------
+#
+# A pinned config is a provider's file with one line changed, and the sweep
+# hands it to openvpn.exe running as administrator. OpenVPN configs can run
+# programs: `up`, `down` and the rest name a command, and `script-security 2`
+# lets them run it. A config that arrived with those - a download from
+# somewhere other than the provider, an inbox somebody else can write to -
+# would be a program run elevated on the next sweep. Nothing this app does
+# needs any of them, so they are taken out wherever a pinned file is written
+# or about to be used, and a comment says what went.
+#
+# And the ones that do not run anything themselves but point an elevated
+# openvpn at the file system or at another config: `config` pulls in a file
+# the strip never saw, `cd`/`chroot` move where relative paths land, the log,
+# status, pid and replay files are written as administrator wherever they
+# say, `management` opens a control port, and `iproute`/`askpass` name
+# programs or files to read. None of them belongs in a pinned config either.
+SCRIPT_DIRECTIVES = frozenset((
+    'up', 'down', 'route-up', 'route-pre-down', 'ipchange', 'tls-verify',
+    'auth-user-pass-verify', 'client-connect', 'client-disconnect',
+    'learn-address', 'plugin', 'script-security', 'setenv', 'setenv-safe',
+    'up-restart', 'down-pre', 'tls-crypt-v2-verify',
+    'config', 'cd', 'chroot', 'log', 'log-append', 'status', 'writepid',
+    'tmp-dir', 'management', 'replay-persist', 'iproute', 'daemon',
+    'askpass'))
+STRIPPED_NOTE = '# relay: removed script directives:'
+
+# Inline blocks whose contents are data - certificates, keys, a password
+# file - and pass through untouched. <connection> is not among them: what is
+# inside it is options, parsed like the rest of the file, and filtered so.
+DATA_BLOCKS = frozenset((
+    'ca', 'cert', 'key', 'tls-auth', 'tls-crypt', 'tls-crypt-v2',
+    'extra-certs', 'secret', 'pkcs12', 'crl-verify', 'http-proxy-user-pass',
+    'auth-user-pass', 'dh'))
+
+
+def _first_token(line):
+    """The option a config line names, read the way OpenVPN's own parser
+    reads it - or None for a blank line or a comment.
+
+    Matching the first whitespace-separated word is not enough, because
+    OpenVPN unquotes and unescapes before it looks the word up: "up",
+    'plugin' and u\\p all name the option they spell. So: leading
+    whitespace skipped, # or ; at the start of a token is a comment,
+    double quotes (with backslash escapes inside), single quotes (without),
+    a backslash outside single quotes taking the next character literally,
+    and a leading -- dropped, as OpenVPN does for options in a file.
+    Lower-cased, so the match is case-insensitive.
+    """
+    # A byte-order mark is skipped too: OpenVPN skips one at the start of a
+    # file, so "<BOM>up evil" on the first line is the `up` option. Skipped
+    # wherever it starts a line, which is never wrong to do here.
+    s = line.lstrip().lstrip('﻿').lstrip()
+    if not s or s[0] in '#;':
+        return None
+    tok, quote, i = [], None, 0
+    while i < len(s):
+        c = s[i]
+        if quote == "'":
+            if c == "'":
+                quote = None
+            else:
+                tok.append(c)
+        elif c == '\\' and i + 1 < len(s):
+            i += 1
+            tok.append(s[i])
+        elif quote == '"':
+            if c == '"':
+                quote = None
+            else:
+                tok.append(c)
+        elif c in '"\'':
+            quote = c
+        elif c.isspace():
+            break
+        else:
+            tok.append(c)
+        i += 1
+    word = ''.join(tok)
+    if word.startswith('--'):
+        word = word[2:]
+    return word.lower()
+
+
+def strip_script_directives(text):
+    """(text, removed) - the config without any option that runs a program
+    or points openvpn somewhere it should not, and what was taken out.
+
+    Options are recognised as OpenVPN recognises them (_first_token): quoted,
+    escaped or prefixed with --, in any case. Inline data blocks such as
+    <ca>...</ca> pass through untouched, and end the way OpenVPN ends them -
+    at the first line that *begins* with the closing tag, so a `</ca> up x`
+    trick cannot keep the rest of the file hidden inside the block.
+    <connection> blocks are options, and filtered like the rest; an inline
+    block named after one of the directives (<plugin>...</plugin>) is
+    removed whole. Line endings are kept as the file had them.
+    """
+    out, removed = [], []
+    block, dropping = None, False
+    for line in text.splitlines(keepends=True):
+        if block:
+            if not dropping:
+                out.append(line)
+            if line.lstrip().lower().startswith(f'</{block}>'):
+                block, dropping = None, False
+            continue
+        word = _first_token(line)
+        if word and len(word) > 2 and word[0] == '<' and word[-1] == '>' \
+                and word[1] != '/':
+            tag = word[1:-1]
+            if tag in SCRIPT_DIRECTIVES:
+                block, dropping = tag, True
+                removed.append(tag)
+                continue
+            if tag in DATA_BLOCKS:
+                block = tag
+            # <connection>, and any tag not known to hold data, are read on
+            # as options: filtering a line that only looked like one costs
+            # less than letting through one that was.
+            out.append(line)
+            continue
+        if word in SCRIPT_DIRECTIVES:
+            removed.append(word)
+            continue
+        out.append(line)
+    if removed:
+        ending = '\r\n' if '\r\n' in text else '\n'
+        names = ', '.join(dict.fromkeys(removed))
+        note = (f'{STRIPPED_NOTE} {names} - a pinned config never runs '
+                f'programs{ending}')
+        if out and not out[-1].endswith(('\n', '\r')):
+            out[-1] += ending
+        out.append(note)
+    return ''.join(out), removed
+
+
+def sanitize_file(path):
+    """Strip one config in place. Returns what was removed (empty if the
+    file was already clean, or could not be read)."""
+    try:
+        with open(path, encoding='utf-8', errors='surrogateescape',
+                  newline='') as f:
+            text = f.read()
+    except OSError:
+        return []
+    clean, removed = strip_script_directives(text)
+    if not removed:
+        return []
+    tmp = f'{path}.{os.getpid()}.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8', errors='surrogateescape',
+                  newline='') as f:
+            f.write(clean)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return []
+    return removed
+
+
+def sanitize_folder(folder):
+    """Every .ovpn in a folder, as sanitize_file. {name: removed}."""
+    done = {}
+    for name in sweep.configs_in(folder):
+        removed = sanitize_file(os.path.join(folder, name))
+        if removed:
+            done[name] = removed
+    return done
+
+
 def source_dir():
     """The inbox: where the files you downloaded from the provider go.
 
@@ -423,6 +596,10 @@ class Pin:
         m = LINE_WROTE.search(line)
         if m:
             name, ip, port, note = m.groups()
+            # The script copies the provider's file and changes one line;
+            # whatever else the file said comes with it. Scripts do not.
+            if self.out:
+                sanitize_file(os.path.join(self.out, os.path.basename(name)))
             self._result(emit, FROM_NAME.sub('.ovpn', name), name,
                          outcome_of(note), ip=ip, port=int(port))
             return None
@@ -455,6 +632,13 @@ class Pin:
               **row})
 
     def _finish(self, emit, error=None, cancelled=False):
+        # Once more over the whole folder: a file whose line was not
+        # recognised above, or one written by an earlier copy of this app.
+        if self.out:
+            try:
+                sanitize_folder(self.out)
+            except Exception:
+                pass
         self.state = 'done'
         self.error = error
         written = [r for r in self.results if r['outcome'] != 'skipped']

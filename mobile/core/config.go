@@ -35,7 +35,7 @@ var (
 // to claim to be.
 type Server struct {
 	Addr string // the pinned IPv4, dialled literally
-	Name string // the name it was pinned from, verified but never sent
+	Name string // the name it was pinned from: always verified, sent only for Windscribe (see sniFor)
 	Path string
 
 	// Filled in by Scan from the filename rather than from the file. All of

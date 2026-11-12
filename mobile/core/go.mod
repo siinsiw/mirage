@@ -1,4 +1,4 @@
-module github.com/ERelay/ovpn-pin/mobile/core
+module github.com/siinsiw/ovpn-pin/mobile/core
 
 go 1.26.0
 

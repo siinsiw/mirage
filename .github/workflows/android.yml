@@ -22,10 +22,18 @@ on:
   # any of this compiles - there is no Android toolchain on the machine this
   # is written on - so a branch that cannot be built is a branch that cannot
   # be reviewed either.
+  #
+  # lists/ and app/countries.py are inputs to the core too - the split
+  # tunnel's Iranian lists come from lists/, and mobile/tools/gen-countries.py
+  # writes countries.go out of app/countries.py - so a change there is a
+  # change to what the core job tests, even with nothing under mobile/ touched.
   push:
     paths:
       - 'android/**'
       - 'mobile/**'
+      - 'mobile/tools/**'
+      - 'lists/**'
+      - 'app/countries.py'
       - 'tunnel/install-server.sh'
       - '.github/workflows/android.yml'
   # And on every pull request into main that touches the phone, so a merge
@@ -35,6 +43,9 @@ on:
     paths:
       - 'android/**'
       - 'mobile/**'
+      - 'mobile/tools/**'
+      - 'lists/**'
+      - 'app/countries.py'
       - 'tunnel/install-server.sh'
       - '.github/workflows/android.yml'
   workflow_dispatch:
@@ -48,8 +59,9 @@ on:
       release:
         description: >-
           Build the release variant and sign it. Needs RELAY_KEYSTORE_B64 and
-          RELAY_KEYSTORE_PASSWORD; without them it still builds, signed with
-          the debug key, and says so.
+          RELAY_KEYSTORE_PASSWORD, and fails without them: a release signed
+          with a runner's throwaway debug key cannot be upgraded over, and
+          cannot be told apart from somebody else's build.
         type: boolean
         default: false
     secrets:
@@ -58,18 +70,23 @@ on:
       RELAY_KEYSTORE_PASSWORD:
         required: false
 
+# Read the repository and nothing else. Nothing here publishes; release.yml
+# does that in a job of its own.
+permissions:
+  contents: read
+
 env:
   NDK_VERSION: '27.3.13750724'
   GO_VERSION: '1.27'
 
 jobs:
-  # The core on its own, and allowed to be yellow. Its tests reach real exits
-  # on the real line on purpose - a stubbed certificate would prove the
-  # harness works and nothing about the exits - so on a runner they skip, and
-  # a skip is not a reason to withhold an APK.
+  # The core on its own, and it has to pass. Its tests that reach real exits
+  # on the real line skip on a runner - a stubbed certificate would prove the
+  # harness works and nothing about the exits - and a skip is a pass; the
+  # rest (pinning, the split, the LAN share, the server API) are ordinary
+  # tests, and a failure in one of them is a reason to withhold an APK.
   core:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -85,6 +102,9 @@ jobs:
 
   apk:
     runs-on: ubuntu-latest
+    # Beside the core job rather than after it, so a push still gets its APK
+    # as fast as before; a failing core job fails the run all the same, and
+    # release.yml publishes only from a run that passed.
     steps:
       - uses: actions/checkout@v4
 
@@ -135,29 +155,34 @@ jobs:
       # in version control is a signing key everybody has. Outside the working
       # tree as well, so no `git add -A` anywhere can pick it up.
       #
-      # If the secret is not set the step does nothing and the build falls
-      # back to the debug key, which installs fine and cannot be upgraded
-      # over.
+      # A release without the key fails here. It used to fall back to the
+      # runner's debug key - a key made fresh on every runner, so each such
+      # release could not be installed over the last, and nothing marked it
+      # as not ours. RELAY_REQUIRE_SIGNING makes Gradle refuse the same way,
+      # should the key be set and still not be usable.
       - name: unpack the signing key
         if: inputs.release
         env:
           KEYSTORE_B64: ${{ secrets.RELAY_KEYSTORE_B64 }}
           KEYSTORE_PASSWORD: ${{ secrets.RELAY_KEYSTORE_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "::warning::no signing key configured - this build is signed with the debug key"
-            exit 0
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::no signing key configured (RELAY_KEYSTORE_B64 and RELAY_KEYSTORE_PASSWORD) - a release is not built without it"
+            exit 1
           fi
           printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/relay-release.p12"
           echo "RELAY_KEYSTORE=$RUNNER_TEMP/relay-release.p12" >> "$GITHUB_ENV"
           echo "RELAY_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
           echo "RELAY_KEY_ALIAS=relay" >> "$GITHUB_ENV"
+          echo "RELAY_REQUIRE_SIGNING=true" >> "$GITHUB_ENV"
 
+      # The unit tests run on both paths: a release is the build that most
+      # needs them, and it used to be the one that skipped them.
       - name: build the APK
         working-directory: android
         run: |
           if [ "${{ inputs.release }}" = "true" ]; then
-            ./gradlew --no-daemon :app:assembleRelease
+            ./gradlew --no-daemon :app:testReleaseUnitTest :app:assembleRelease
           else
             ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
           fi

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/ERelay/ovpn-pin/mobile/core"
+	"github.com/siinsiw/ovpn-pin/mobile/core"
 	"rsc.io/qr"
 )
 
@@ -27,13 +27,14 @@ import (
 // run first, as for BestServerExit.
 //
 // The Result names the exit; its TookMs is the measured upload, in KB/s.
+// verify is SetServerExit's, and applies to the slot as to the search.
 func (c *Client) ExportSlot(cfg *ServerConfig, apiPassword string, k int, code, ssUser, ssPassword,
-	wsUser, wsPassword string, tries, timeoutMs int) (*Result, error) {
+	wsUser, wsPassword string, verify bool, tries, timeoutMs int) (*Result, error) {
 
 	if k < 1 || k > core.MaxExportSlots {
 		return nil, errors.New("that slot is not one the server has")
 	}
-	best, err := c.BestServerExit(cfg, apiPassword, code, ssUser, ssPassword, wsUser, wsPassword, tries, timeoutMs)
+	best, err := c.BestServerExit(cfg, apiPassword, code, ssUser, ssPassword, wsUser, wsPassword, verify, tries, timeoutMs)
 	if err != nil {
 		return nil, err
 	}
@@ -41,8 +42,9 @@ func (c *Client) ExportSlot(cfg *ServerConfig, apiPassword string, k int, code, 
 	if best.Provider == "windscribe" {
 		user, pass = wsUser, wsPassword
 	}
-	if err := core.SetSlot(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, k, best.Addr, user, pass, best.File,
-		15*time.Second); err != nil {
+	if err := core.SetSlot(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, k, core.ExitHop{
+		IP: best.Addr, Hostname: best.Name, User: user, Password: pass, Node: best.File, Verify: verify,
+	}, 15*time.Second); err != nil {
 		return nil, err
 	}
 	return best, nil

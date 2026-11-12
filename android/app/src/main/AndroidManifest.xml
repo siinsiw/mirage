@@ -20,12 +20,24 @@
     <!-- OpenGL ES 3.0 for the orb. Every phone this app runs on has it. -->
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
 
+    <!--
+        Nothing of this app leaves the phone in a backup or a transfer.
+        allowBackup="false" turns off the cloud backup, but from Android 12
+        a device-to-device transfer ignores it and copies the app's data
+        anyway - shared_prefs/relay.secrets included, sealed with a keystore
+        key that does not come along, which leaves a store that cannot be
+        opened on the new phone. dataExtractionRules (12 and up) and
+        fullBackupContent (older) exclude every domain from both.
+    -->
     <application
         android:name=".RelayApp"
         android:label="Relay"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
-        android:theme="@style/Theme.Relay">
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:theme="@style/Theme.Relay"
+        tools:targetApi="31">
 
         <activity
             android:name=".MainActivity"
