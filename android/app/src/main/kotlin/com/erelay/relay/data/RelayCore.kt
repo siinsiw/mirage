@@ -1168,6 +1168,19 @@ class RelayCore(private val app: Application) {
                 ?.let { Keys.serverPasswordProblem(it, "The key's API password") }
             ?: ss?.let { Keys.serverPasswordProblem(it.optString("password"), "The key's Shadowsocks password") }
             )?.let { return@withContext Said.no(it) }
+        // Which way in a key with Shadowsocks starts on. Measured 2026-11-12
+        // from a phone on a mobile line in Iran: Shadowsocks to a server
+        // abroad connected and then carried nothing (the filter drops a
+        // fully encrypted stream to a foreign address), while to a server in
+        // Iran it is domestic traffic and the quickest way in. So Shadowsocks
+        // only for a server in Iran; the WebSocket, which is TLS like any
+        // site, for one abroad - and for one that could not be placed, since
+        // the WebSocket works from anywhere and Shadowsocks only from here.
+        val ssFirst = ss != null && try {
+            Relay.serverInIran(key.optString("host"), 4000L)
+        } catch (e: Exception) {
+            false
+        }
         val stale = key.optString("host") != prefs.getString(Keys.TUNNEL_DOMAIN, "") ||
             exportId != prefs.getString(Keys.TUNNEL_EXPORT_ID, "") ||
             key.optInt("port", 443) != prefs.getInt(Keys.TUNNEL_PORT, 443)
@@ -1196,7 +1209,7 @@ class RelayCore(private val app: Application) {
                 putString(Keys.TUNNEL_SS_METHOD, ss.optString("method"))
                 putInt(Keys.TUNNEL_SS_PORT, ss.optInt("port"))
                 putInt(Keys.TUNNEL_SS_EXIT_PORT, ss.optInt("exitPort"))
-                putString(Keys.TUNNEL_TRANSPORT, "ss")
+                putString(Keys.TUNNEL_TRANSPORT, if (ssFirst) "ss" else "ws")
             } else {
                 remove(Keys.TUNNEL_SS_METHOD)
                 remove(Keys.TUNNEL_SS_PORT); remove(Keys.TUNNEL_SS_EXIT_PORT)
@@ -1207,7 +1220,8 @@ class RelayCore(private val app: Application) {
         _tunnel.value = readTunnel()
         _export.update { readExport(it) }
         Said(true, "Set up for ${key.optString("host")}" +
-            (if (ss != null) ", over Shadowsocks" else "") + ". Press Test to check it carries.")
+            (if (ssFirst) ", over Shadowsocks" else if (ss != null) ", over the WebSocket" else "") +
+            ". Press Test to check it carries.")
     }
 
     /** Shadowsocks or the WebSocket, for a server whose key offered both. */

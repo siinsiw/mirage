@@ -366,6 +366,7 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
     var password by remember { mutableStateOf("") }
     var api by remember { mutableStateOf("") }
     var said by remember { mutableStateOf<Said?>(null) }
+    var modeSaid by remember { mutableStateOf<Said?>(null) }
     var busy by remember { mutableStateOf(false) }
     var key by remember { mutableStateOf("") }
 
@@ -402,11 +403,17 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
                 Spacer(Modifier.height(Space.x3))
                 Segment(listOf("ss", "ws"), tunnel.transport,
                     { if (it == "ss") "Shadowsocks" else "WebSocket" },
-                    { t -> scope.launch { said = core.setTunnelTransport(t) } }, enabled = !busy)
+                    { t -> scope.launch { modeSaid = core.setTunnelTransport(t) } }, enabled = !busy)
                 if (tunnel.transport == "ss") {
                     Text("Straight to ${tunnel.domain}:${tunnel.ssPort}, and :${tunnel.ssPort + 1} " +
-                        "for server + exit.", style = Type.mono, modifier = Modifier.padding(top = Space.x2))
+                        "for server + exit. Best for a server in Iran; from Iran to a server " +
+                        "abroad it connects and then carries nothing - use the WebSocket there.",
+                        style = Type.mono, modifier = Modifier.padding(top = Space.x2))
                 }
+                // Right under the switch, not at the foot of the next section:
+                // a refusal said out of sight looked like a switch that did
+                // nothing.
+                modeSaid?.let { SaidLine(it.text, bad = !it.ok) }
             }
         }
     }
