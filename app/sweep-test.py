@@ -178,5 +178,61 @@ finally:
 
 
 print()
+print('quotes PowerShell reads as quotes')
+
+# PowerShell takes U+2018-U+201B as single quotes too. Each one is doubled,
+# so a company or folder called O’Brien stays one literal rather than
+# ending the string and running the rest as code.
+for q in ("'", '‘', '’', '‚', '‛'):
+    check(f'U+{ord(q):04X} is doubled', sweep._ps_string(f'a{q}b'),
+          f"'a{q}{q}b'")
+evil = "O’Brien'; Set-Content x pwned; '‘‚‛"
+try:
+    r = subprocess.run(
+        ['powershell', '-NoProfile', '-Command',
+         '[Console]::OutputEncoding = [Text.Encoding]::UTF8; '
+         'Write-Output ' + sweep._ps_string(evil)],
+        capture_output=True, timeout=60)
+    check('PowerShell reads it back as the same one string',
+          r.stdout.decode('utf-8', 'replace').strip(), evil)
+except Exception as exc:                                      # noqa: BLE001
+    print(f'  FAIL  could not run the quoting check - {exc!r}')
+    failed.append('quoting check')
+
+check('owner names lose quotes and control characters',
+      sweep.clean_owner('O’Brien "Hosting"\x07 ‮AS1\n'),
+      'OBrien Hosting AS1')
+
+# The elevated side runs a script only if it is still the one written: the
+# hash is checked against the text in memory, and a changed file runs
+# nothing (exit 87).
+box = tempfile.mkdtemp(prefix='ovpn-elev-')
+try:
+    out = os.path.join(box, 'it’s ran.txt')
+    for tamper in (False, True):
+        if os.path.exists(out):
+            os.remove(out)
+        argv, path = sweep.elevated(
+            'Set-Content -LiteralPath ' + sweep._ps_string(out)
+            + " -Value 'ran' -Encoding ascii\n", box, 'probe')
+        check('the script has an unguessable name',
+              os.path.basename(path).startswith('probe-')
+              and len(os.path.basename(path)) > 24, True)
+        if tamper:
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write('\nSet-Content x pwned\n')
+        r = subprocess.run(['powershell'] + argv, capture_output=True,
+                           timeout=60)
+        check('tampered script refused' if tamper else 'clean script ran',
+              (r.returncode, os.path.exists(out)),
+              (87, False) if tamper else (0, True))
+except Exception as exc:                                      # noqa: BLE001
+    print(f'  FAIL  could not run the elevation check - {exc!r}')
+    failed.append('elevation check')
+finally:
+    shutil.rmtree(box, ignore_errors=True)
+
+
+print()
 print('failed: ' + ', '.join(failed) if failed else 'all pass')
 raise SystemExit(1 if failed else 0)

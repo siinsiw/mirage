@@ -129,10 +129,15 @@ fun Root(core: RelayCore) {
         if (conn.mode != Mode.OFF) said = null
     }
 
+    // connect() and ready() suspend: they read the folder and the secret
+    // store on the core's own thread. The answers land back here, on the
+    // main thread, where the launchers and `said` live.
     val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         if (r.resultCode == Activity.RESULT_OK) {
-            val out = core.connect(pendingCode)
-            if (!out.ok) said = out.text to true
+            scope.launch {
+                val out = core.connect(pendingCode)
+                if (!out.ok) said = out.text to true
+            }
         } else {
             core.consentRefused()
         }
@@ -143,8 +148,10 @@ fun Root(core: RelayCore) {
         if (ask != null) {
             consent.launch(ask)
         } else {
-            val out = core.connect(code)
-            if (!out.ok) said = out.text to true
+            scope.launch {
+                val out = core.connect(code)
+                if (!out.ok) said = out.text to true
+            }
         }
     }
 
@@ -156,13 +163,19 @@ fun Root(core: RelayCore) {
     fun connect(code: String) {
         pendingCode = code
         said = null
-        core.ready().let { if (!it.ok) { said = it.text to true; return } }
-        if (core.shouldAskNotifications()) {
-            core.askedNotifications()
-            notifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            return
+        scope.launch {
+            val ready = core.ready()
+            if (!ready.ok) {
+                said = ready.text to true
+                return@launch
+            }
+            if (core.shouldAskNotifications()) {
+                core.askedNotifications()
+                notifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                return@launch
+            }
+            consentThenConnect(code)
         }
-        consentThenConnect(code)
     }
 
     // A folder of configs, from Android's own picker. Copied in by the core.

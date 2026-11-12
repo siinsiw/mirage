@@ -556,5 +556,169 @@ func pinnedText(text, host, ip string) string {
 	head := fmt.Sprintf(
 		"# pinned by Relay on %s - cloudflare over DoH\n#   %s -> %s\n",
 		time.Now().Format("2006-01-02 15:04"), host, ip)
-	return head + swapRemote(text, ip)
+	return head + stripScripts(swapRemote(text, ip))
+}
+
+// scriptDirectives are the OpenVPN options that run a program, load one, set
+// what a program would be run with, or reach outside the config into the
+// machine - reading another file in, changing directory or root, writing
+// logs, status, pid or replay files where they say, opening a management
+// port, daemonising, or prompting. A config that went in as a provider's
+// download comes out as a file this app wrote and vouched for - and it may
+// be handed on to a desktop's OpenVPN, which would do whatever these say.
+// This app never needs any of them: it speaks to the exit's proxy and never
+// runs OpenVPN at all.
+var scriptDirectives = map[string]bool{
+	"up": true, "down": true, "route-up": true, "route-pre-down": true,
+	"ipchange": true, "tls-verify": true, "auth-user-pass-verify": true,
+	"client-connect": true, "client-disconnect": true, "learn-address": true,
+	"plugin": true, "script-security": true, "setenv": true, "setenv-safe": true,
+	"up-restart": true, "down-pre": true, "tls-crypt-v2-verify": true,
+	"config": true, "cd": true, "chroot": true, "log": true, "log-append": true,
+	"status": true, "writepid": true, "tmp-dir": true, "management": true,
+	"replay-persist": true, "iproute": true, "daemon": true, "askpass": true,
+}
+
+// inlineDataTags are the inline blocks whose content is data - certificates,
+// keys, credentials - rather than options: what is between <ca> and </ca> is
+// never read as a directive, so it is kept exactly as it is. <connection> is
+// not one of them: what it holds is options, and they are filtered like the
+// rest.
+var inlineDataTags = map[string]bool{
+	"ca": true, "cert": true, "key": true, "tls-auth": true, "tls-crypt": true,
+	"tls-crypt-v2": true, "extra-certs": true, "secret": true, "pkcs12": true,
+	"crl-verify": true, "http-proxy-user-pass": true, "auth-user-pass": true, "dh": true,
+}
+
+// stripScripts drops every line OpenVPN would read as one of
+// scriptDirectives, and says at the top that it did - a config that quietly
+// stopped doing something would be a worse surprise than one that says so.
+//
+// "Would read as" is the point, and it is why this is not a look at the first
+// word. OpenVPN unquotes and unescapes a line before it knows which option it
+// is, so "up" x, 'plugin' evil.so and u\p evil all mean the option they spell;
+// it drops a leading --; and an inline block ends at the first line that
+// merely begins with its closing tag. So each line's first token is read the
+// way OpenVPN's parse_line reads it (ovpnTokens), compared without dashes
+// and without case - OpenVPN refuses UP outright, so treating it as up costs
+// nothing - and a block is only skipped over when OpenVPN would have read it
+// as one: a known data tag (inlineDataTags), alone on its line, closed by the
+// first line that starts with </tag>. Anything else that looks like a tag -
+// <a b>, or <connection> - is filtered through like any other line.
+//
+// This filter is the defence, not script-security: a plugin is loaded
+// whatever script-security says.
+func stripScripts(text string) string {
+	// OpenVPN skips a UTF-8 byte-order mark at the start of a file, so
+	// "<BOM>up evil" is the up option to it - and a first token with the
+	// mark still on it would match nothing here. Taken off before anything
+	// is read; the file is written without it, which OpenVPN reads the same.
+	text = strings.TrimPrefix(text, utf8BOM)
+	lines := strings.SplitAfter(text, "\n")
+	var kept []string
+	var dropped []string
+	closing := "" // the closing tag of the data block being passed over
+	for _, line := range lines {
+		if closing != "" {
+			// OpenVPN's own test: the line, with its ending taken off,
+			// starting with the closing tag - case and all.
+			if strings.HasPrefix(strings.TrimRight(line, "\r\n"), closing) {
+				closing = ""
+			}
+			kept = append(kept, line)
+			continue
+		}
+		tokens := ovpnTokens(line)
+		if len(tokens) == 0 {
+			kept = append(kept, line)
+			continue
+		}
+		first := tokens[0]
+		if len(tokens) == 1 && len(first) > 2 && first[0] == '<' && first[len(first)-1] == '>' {
+			if tag := first[1 : len(first)-1]; inlineDataTags[tag] {
+				closing = "</" + tag + ">"
+				kept = append(kept, line)
+				continue
+			}
+		}
+		name := strings.ToLower(strings.TrimLeft(first, "-"))
+		if scriptDirectives[name] {
+			dropped = append(dropped, name)
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if len(dropped) == 0 {
+		return text
+	}
+	note := "# removed by Relay: " + strings.Join(dropped, ", ") +
+		" - options that run programs or reach outside the config have no place in a pinned config\n"
+	return note + strings.Join(kept, "")
+}
+
+// utf8BOM is the byte-order mark, as bytes.
+const utf8BOM = "\xef\xbb\xbf"
+
+// ovpnTokens splits one config line the way OpenVPN's parse_line does:
+// whitespace between tokens; a token that starts with " runs to the next
+// unescaped ", one that starts with ' to the next ' (no escapes inside); a
+// backslash outside single quotes makes the next character literal; and a
+// line whose first non-space character is # or ; is a comment, with no
+// tokens. Where OpenVPN is stricter than this, the difference only ever
+// finds more to remove.
+func ovpnTokens(line string) []string {
+	var (
+		tokens    []string
+		tok       []byte
+		inToken   bool
+		quote     byte // '"' or '\'' while inside a quoted token
+		backslash bool
+	)
+	end := func() {
+		if inToken {
+			tokens = append(tokens, string(tok))
+		}
+		tok, inToken, quote = nil, false, 0
+	}
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if c == 0 {
+			break
+		}
+		if backslash {
+			tok = append(tok, c)
+			inToken, backslash = true, false
+			continue
+		}
+		if c == '\\' && quote != '\'' {
+			backslash = true
+			continue
+		}
+		space := c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f'
+		switch {
+		case quote != 0:
+			if c == quote {
+				end()
+			} else {
+				tok = append(tok, c)
+			}
+		case !inToken:
+			switch {
+			case space:
+			case (c == '#' || c == ';') && len(tokens) == 0:
+				return nil
+			case c == '"' || c == '\'':
+				inToken, quote = true, c
+			default:
+				inToken = true
+				tok = append(tok, c)
+			}
+		case space:
+			end()
+		default:
+			tok = append(tok, c)
+		}
+	}
+	end()
+	return tokens
 }

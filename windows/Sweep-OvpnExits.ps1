@@ -166,8 +166,9 @@
     Do not look up who owns each exit. The lookup names the hosting company
     behind an address - M247, Datacamp, Leaseweb - which is usually the thing
     a site is blocking when it blocks "a VPN", so exits sharing one tend to be
-    flagged together. It costs one HTTP request per exit and, on the free tier
-    of the service that answers it, that request is not encrypted.
+    flagged together. It costs one HTTPS request to ipwho.is per exit not
+    already in .state\owners.tsv, and that request carries the exit's address.
+    With -NoOwner nothing is sent; only what the table already knows is shown.
 
 .PARAMETER AuthFile
     An OpenVPN auth file - username on the first line, password on the second.
@@ -264,8 +265,11 @@ $root = Split-Path -Parent $here
 # name the two blocks share is reset to its default the moment this line runs.
 # $Site is one of them, and -Site had been quietly dying here: bound, wiped a
 # few lines later, and never passed to a single probe. Held across the call.
+# -NoOwner is another, and is passed in rather than held: the pinner's
+# Get-IpOwner reads it, so with it set no address leaves for the lookup
+# service from anywhere in the sweep, not only from the per-exit line.
 $sweepSite = $Site
-. (Join-Path $here 'Resolve-OvpnRemote.ps1') -AsLibrary -StateDir $StateDir
+. (Join-Path $here 'Resolve-OvpnRemote.ps1') -AsLibrary -StateDir $StateDir -NoOwner:$NoOwner
 $Site = $sweepSite
 
 
@@ -580,13 +584,79 @@ function New-AuthFile {
 
 #--------------------------------------------------------------- the connexion
 
+# A folder for the copies openvpn is actually given: made fresh with a random
+# name, and with its access list - this account, Administrators, SYSTEM, and
+# nobody else, nothing inherited - in place from the moment it exists, since
+# it is created with it rather than having it applied afterwards. Removed at
+# the end of the run.
+$script:PrivateDir = $null
+function Get-PrivateDir {
+    if ($script:PrivateDir -and (Test-Path -LiteralPath $script:PrivateDir)) { return $script:PrivateDir }
+    $sec = New-Object Security.AccessControl.DirectorySecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    $inherit = [Security.AccessControl.InheritanceFlags] 'ContainerInherit, ObjectInherit'
+    $none = [Security.AccessControl.PropagationFlags]::None
+    $who = @(
+        [Security.Principal.WindowsIdentity]::GetCurrent().User
+        (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544'))   # Administrators
+        (New-Object Security.Principal.SecurityIdentifier('S-1-5-18'))       # SYSTEM
+    )
+    foreach ($sid in $who) {
+        $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+            $sid, 'FullControl', $inherit, $none, 'Allow')))
+    }
+    $path = Join-Path ([IO.Path]::GetTempPath()) ('ovpn-sweep-' + [guid]::NewGuid().ToString('N'))
+    [void] [IO.Directory]::CreateDirectory($path, $sec)
+    $script:PrivateDir = $path
+    $path
+}
+
+# The config as openvpn will get it: read once, cleaned of everything
+# Remove-ScriptDirectives takes out, and written under a random name into the
+# private folder. The check and the copy come from the same read, so the file
+# cannot be swapped between the two. A config with nothing to take out is
+# copied byte for byte, so it behaves exactly as it always did.
+function New-SafeConfigCopy {
+    param([IO.FileInfo] $Config)
+    $bytes = [IO.File]::ReadAllBytes($Config.FullName)
+    $utf8 = New-Object Text.UTF8Encoding($false)
+    $text = $utf8.GetString($bytes)
+    $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $safe = Remove-ScriptDirectives ($text -split "`r?`n")
+    if ($safe.Dropped.Count) {
+        Write-Warn "$($Config.Name) asks openvpn to run programs or write files: $($safe.Dropped -join ' ')"
+        Write-Info 'those lines were left out of what openvpn is given.'
+        $bytes = $utf8.GetBytes($safe.Lines -join $nl)
+    }
+    $copy = Join-Path (Get-PrivateDir) ([guid]::NewGuid().ToString('N') + '.ovpn')
+    [IO.File]::WriteAllBytes($copy, $bytes)
+    $copy
+}
+
 function Start-Tunnel {
     param([string] $Exe, [IO.FileInfo] $Config, [string] $LogPath, [int] $MgmtPort, [string] $Auth)
 
     if (Test-Path $LogPath) { Remove-Item $LogPath -Force }
 
+    # This runs elevated, and a config is somebody else's text - including
+    # one dropped into the folder by hand, never pinned. Two things stand
+    # between the two:
+    #
+    #   - openvpn is never handed the file itself, only a cleaned copy
+    #     (New-SafeConfigCopy): no script hooks, no `plugin` (a DLL loaded
+    #     into openvpn), no `config` (another file read in), nothing that
+    #     writes a file. Deleted again by Stop-Tunnel.
+    #   - --script-security 1 straight after --config, so it wins over
+    #     anything the copy could still say. It covers the script hooks only,
+    #     which is why the copy is made at all. 1 still lets openvpn call
+    #     route and netsh itself.
+    #
+    # The working directory stays the config's own folder, so a `ca ca.crt`
+    # beside it is found just as before.
+    $copy = New-SafeConfigCopy $Config
     $a = @(
-        '--config', "`"$($Config.FullName)`""
+        '--config', "`"$copy`""
+        '--script-security', '1'
         '--log', "`"$LogPath`""
         '--management', '127.0.0.1', $MgmtPort
         '--verb', '3'
@@ -597,8 +667,24 @@ function Start-Tunnel {
     # After --config, so it wins over the bare auth-user-pass inside it.
     if ($Auth) { $a += @('--auth-user-pass', "`"$Auth`"") }
 
-    Start-Process -FilePath $Exe -ArgumentList $a -PassThru -WindowStyle Hidden `
-                  -WorkingDirectory $Config.DirectoryName
+    try {
+        $p = Start-Process -FilePath $Exe -ArgumentList $a -PassThru -WindowStyle Hidden `
+                           -WorkingDirectory $Config.DirectoryName
+    }
+    catch {
+        Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
+        throw
+    }
+    # Carried on the process, so whoever stops it can delete the copy.
+    $p | Add-Member -NotePropertyName ConfigCopy -NotePropertyValue $copy -Force
+    $p
+}
+
+function Remove-ConfigCopy {
+    param($Process)
+    if ($Process -and $Process.PSObject.Properties['ConfigCopy'] -and $Process.ConfigCopy) {
+        Remove-Item -LiteralPath $Process.ConfigCopy -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # openvpn keeps its log open for writing for as long as it runs, and
@@ -664,7 +750,8 @@ function Wait-Tunnel {
 # every result after the first one.
 function Stop-Tunnel {
     param($Process, [int] $MgmtPort, [int] $TunnelIndex = 0)
-    if (-not $Process -or $Process.HasExited) { return }
+    if (-not $Process) { return }
+    if ($Process.HasExited) { Remove-ConfigCopy $Process; return }
     try {
         $c = New-Object Net.Sockets.TcpClient('127.0.0.1', $MgmtPort)
         $w = New-Object IO.StreamWriter($c.GetStream())
@@ -679,6 +766,7 @@ function Stop-Tunnel {
         try { Stop-Process -Id $Process.Id -Force } catch { }
         $Process.WaitForExit(5000) | Out-Null
     }
+    Remove-ConfigCopy $Process
 
     # The routes usually go before the process does - openvpn deletes them on
     # the way out - but "usually" is not something to start the next connect
@@ -1706,6 +1794,10 @@ catch {
 }
 finally {
     if ($authTemp -and $auth -and (Test-Path $auth)) { Remove-Item $auth -Force -ErrorAction SilentlyContinue }
+    # The cleaned copies' folder, and anything a killed run left in it.
+    if ($script:PrivateDir -and (Test-Path -LiteralPath $script:PrivateDir)) {
+        Remove-Item -LiteralPath $script:PrivateDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 if ($Elevated) { Read-Host '         Press Enter to close' | Out-Null }

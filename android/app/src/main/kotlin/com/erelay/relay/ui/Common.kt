@@ -714,6 +714,52 @@ fun FieldLabel(text: String, hint: String? = null) {
     }
 }
 
+/**
+ * A question that has to be answered before the screen goes on: a title, what
+ * is at stake in a sentence or two, whatever has to be typed ([content]), and
+ * two buttons. A [Block] lifted off the page rather than a platform dialog, so
+ * it reads as part of the app; tapping outside or Back is Cancel.
+ *
+ * [danger] is for the answer that makes something less safe: the confirm
+ * button is drawn in the fail colour rather than as the primary.
+ */
+@Composable
+fun Prompt(
+    title: String,
+    text: String,
+    confirm: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    confirmEnabled: Boolean = true,
+    danger: Boolean = false,
+    content: (@Composable ColumnScope.() -> Unit)? = null,
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        val shape = RoundedCornerShape(Shape.card)
+        Column(
+            Modifier
+                .widthIn(max = 420.dp)
+                .fillMaxWidth()
+                .clip(shape)
+                .background(Tone.surface)
+                .border(1.dp, Tone.stroke, shape)
+                .padding(Space.x5),
+        ) {
+            Text(title, style = Type.subtitle)
+            Text(text, style = Type.body, modifier = Modifier.padding(top = Space.x2))
+            if (content != null) {
+                Spacer(Modifier.height(Space.x4))
+                content()
+            }
+            ButtonRow {
+                Grow()
+                Btn("Cancel", onDismiss)
+                Btn(confirm, onConfirm, enabled = confirmEnabled, strong = !danger, danger = danger)
+            }
+        }
+    }
+}
+
 /** A row's trailing chevron: this opens something. */
 @Composable
 fun Chevron() = Icon(Glyph.chevRight, null, Modifier.size(16.dp), tint = Tone.text3)

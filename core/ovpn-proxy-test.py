@@ -24,6 +24,7 @@ forwarding path and the failure is silent everywhere a browser can see.
 import importlib.util
 import os
 import socket
+import ssl
 import sys
 import threading
 import time
@@ -508,11 +509,187 @@ def test_ledger():
     check('and goes when the proxy does', px.read_hosts(port), None)
 
 
+def hello_from(host):
+    """The ClientHello Exit.connect() sends to an exit named `host`.
+
+    A plain socket rather than a TLS server: it takes the first message,
+    keeps it, and hangs up. The handshake fails on the client side, as it
+    should, and the name - or its absence - is already on the wire by then.
+    """
+    srv = socket.socket()
+    srv.bind(('127.0.0.1', 0))
+    srv.listen(1)
+    got = []
+
+    def take():
+        conn, _ = srv.accept()
+        conn.settimeout(5)
+        try:
+            got.append(conn.recv(16384))
+        except OSError:
+            got.append(b'')
+        conn.close()
+
+    t = threading.Thread(target=take, daemon=True)
+    t.start()
+    exit_ = px.Exit('127.0.0.1', srv.getsockname()[1], host, 'u', 'p')
+    try:
+        exit_.connect().close()
+        connected = True
+    except (OSError, ValueError):
+        connected = False
+    t.join(5)
+    srv.close()
+    return connected, (got[0] if got else b'')
+
+
+def test_exit_sni():
+    # Measured 2026-11-12 from a server in Iran: a Windscribe exit dialled
+    # without SNI carries about 10 KB/s of upload, with its real name full
+    # speed. Surfshark exits keep the no-SNI handshake. Invisible anywhere
+    # else - either way the dial "works" - so the bytes are read here.
+    print('\nthe name an exit is dialled with')
+    check('a Windscribe exit is sent its name',
+          px.sni_for('ch-019.totallyacdn.com'), 'ch-019.totallyacdn.com')
+    check('whatever case it is written in',
+          px.sni_for('CH-019.TotallyACDN.com.'), 'CH-019.TotallyACDN.com.')
+    check('a Surfshark exit is sent nothing',
+          px.sni_for('de-fra.prod.surfshark.com'), None)
+    check('a name that only contains the domain is not Windscribe',
+          px.sni_for('totallyacdn.com.example.net'), None)
+
+    connected, hello = hello_from('ch-019.totallyacdn.com')
+    check('a dropped handshake is not a connection', connected, False)
+    check('the Windscribe ClientHello carries the name',
+          b'ch-019.totallyacdn.com' in hello, True)
+    connected, hello = hello_from('de-fra.prod.surfshark.com')
+    check('the Surfshark ClientHello was sent', hello[:1], b'\x16')
+    check('and carries no name', b'surfshark' in hello, False)
+
+
+def cutting_line():
+    """A listener that resets every connection whose ClientHello names
+    something - the way a filtering line would - and hangs up on the rest.
+    Returns (port, hellos seen, stop)."""
+    import struct
+    srv = socket.socket()
+    srv.bind(('127.0.0.1', 0))
+    srv.listen(8)
+    seen = []
+    done = threading.Event()
+
+    def run():
+        srv.settimeout(0.2)
+        while not done.is_set():
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                continue
+            conn.settimeout(5)
+            try:
+                hello = conn.recv(16384)
+            except OSError:
+                hello = b''
+            named = b'totallyacdn' in hello
+            seen.append('named' if named else 'nameless')
+            if named:
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                struct.pack('ii', 1, 0))
+            conn.close()
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def stop():
+        done.set()
+        srv.close()
+    return srv.getsockname()[1], seen, stop
+
+
+def test_sni_fallback():
+    # The real name was measured from one datacentre line; a home or mobile
+    # line may cut a handshake carrying it. connect() then tries once
+    # without the name, still verified, and remembers which worked.
+    print('\nthe nameless retry')
+
+    # On the wire: a reset named hello is followed by a nameless one.
+    port, seen, stop = cutting_line()
+    exit_ = px.Exit('127.0.0.1', port, 'ch-019.totallyacdn.com', 'u', 'p')
+    try:
+        exit_.connect().close()
+        got = 'connected'
+    except (OSError, ValueError):
+        got = 'refused'
+    stop()
+    check('a stand-in that hangs up on everything is not a connection',
+          got, 'refused')
+    check('a reset named handshake is retried once without the name',
+          seen, ['named', 'nameless'])
+
+    # The decisions, with the socket stubbed: what is retried, what is not,
+    # and what is remembered.
+    def stubbed(host, fail_named):
+        e = px.Exit('127.0.0.1', 9, host, 'u', 'p')
+        e.asked = []
+
+        def _open(sni):
+            e.asked.append(sni)
+            if sni and fail_named:
+                err = fail_named()
+                err.during_tls = True
+                raise err
+            return 'tls'
+        e._open = _open
+        return e
+
+    px.SNI_WORKED.clear()
+    e = stubbed('ch-019.totallyacdn.com', ConnectionResetError)
+    check('a reset named handshake falls back and connects',
+          e.connect(), 'tls')
+    check('asked with the name, then without', e.asked,
+          ['ch-019.totallyacdn.com', None])
+    e.asked.clear()
+    e.connect()
+    check('and next time asks without the name straight away', e.asked, [None])
+
+    e = stubbed('fr-030.totallyacdn.com', lambda: ssl.SSLCertVerificationError(
+        'the certificate at 127.0.0.1 does not serve fr-030.totallyacdn.com'))
+    try:
+        e.connect()
+        raised = None
+    except ssl.SSLCertVerificationError:
+        raised = 'cert'
+    check('a certificate failure is not retried', (raised, e.asked),
+          ('cert', ['fr-030.totallyacdn.com']))
+
+    e = stubbed('nl-005.totallyacdn.com', None)
+    e.connect()
+    e.connect()
+    check('a named handshake that works keeps being named', e.asked,
+          ['nl-005.totallyacdn.com', 'nl-005.totallyacdn.com'])
+
+    def block_page():
+        # What OpenSSL raises when a filter answers the hello with HTTP.
+        err = ssl.SSLError(1, '[SSL: WRONG_VERSION_NUMBER] wrong version number')
+        err.reason = 'WRONG_VERSION_NUMBER'
+        return err
+    e = stubbed('ch-017.totallyacdn.com', block_page)
+    check('a block page in place of the ServerHello falls back and connects',
+          (e.connect(), e.asked), ('tls', ['ch-017.totallyacdn.com', None]))
+
+    e = stubbed('de-fra.prod.surfshark.com', ConnectionResetError)
+    e.connect()
+    check('a Surfshark exit is asked once, without a name', e.asked, [None])
+
+    check('a TCP failure is not a cut handshake',
+          px.cut_on_the_way(ConnectionRefusedError()), False)
+    px.SNI_WORKED.clear()
+
+
 def main():
     for test in (test_keepalive, test_body, test_pipelining, test_connect,
                  test_connect_refused, test_long_poll, test_dead_exit,
                  test_chunked, test_socks5, test_socks5_refused, test_meter,
-                 test_ledger):
+                 test_ledger, test_exit_sni, test_sni_fallback):
         test()
     print()
     if failed:

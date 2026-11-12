@@ -10,6 +10,22 @@ import (
 	"time"
 )
 
+// whereAmITransport is one transport for every WhereAmI, rather than a new
+// one per call that was never closed - each left its connection to 1.1.1.1
+// open until the server gave up on it. Idle ones are closed after a while.
+// The timeout of each call is its context's and its client's; the dial's own
+// is only a ceiling.
+var whereAmITransport = &http.Transport{
+	// No proxy, and said explicitly: http.DefaultTransport reads HTTP_PROXY
+	// from the environment, and a phone that had one set would answer this
+	// question about the proxy instead.
+	Proxy:               nil,
+	DialContext:         (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+	TLSHandshakeTimeout: 30 * time.Second,
+	IdleConnTimeout:     30 * time.Second,
+	MaxIdleConnsPerHost: 1,
+}
+
 // WhereAmI is the address this machine comes out at, and the country a
 // content network puts it in.
 //
@@ -32,17 +48,7 @@ func WhereAmI(ctx context.Context, timeout time.Duration) (ip, country string, e
 		return "", "", err
 	}
 
-	client := &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			// No proxy, and said explicitly: http.DefaultTransport reads
-			// HTTP_PROXY from the environment, and a phone that had one set
-			// would answer this question about the proxy instead.
-			Proxy:               nil,
-			DialContext:         (&net.Dialer{Timeout: timeout}).DialContext,
-			TLSHandshakeTimeout: timeout,
-		},
-	}
+	client := &http.Client{Timeout: timeout, Transport: whereAmITransport}
 
 	resp, err := client.Do(req)
 	if err != nil {

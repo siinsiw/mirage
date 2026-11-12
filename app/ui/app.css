@@ -2350,6 +2350,11 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .split__warn .ico { width: 12px; height: 12px; margin-top: 1.5px; }
 
+/* The same shape as advice rather than a warning: the Iran note beside
+   "Checking the exits" says to keep a switch where it already is. */
+.note.split__warn--calm { color: var(--text-2); }
+.split__warn--calm .ico { color: var(--ok); }
+
 .split__go { margin-top: 12px; }
 
 .split__go .note { flex: 1; min-width: 0; }
@@ -4920,6 +4925,10 @@ body {
 }
 
 .hint.is-bad { color: var(--fail); }
+
+/* The kill switch holding the line: one way out besides reconnecting. */
+.blocked { margin-top: 8px; display: flex; justify-content: flex-start; }
+.blocked[hidden] { display: none; }
 
 /* --------------------------------------------------------------- the flag disc */
 

@@ -300,8 +300,9 @@ was off, and a narrower restore would have silently deleted it.
 ### Nothing about the protocol is reimplemented
 
 `engine.py` loads `ovpn-proxy.py` and uses its `Exit`, `can_connect`,
-`read_config` and `read_auth` directly. The certificate check, the withheld
-SNI and the CONNECT probe are all that file's. The same goes for the tunnel:
+`read_config` and `read_auth` directly. The certificate check, the SNI choice
+(withheld for Surfshark, the exit's real name for Windscribe - see `sni_for`)
+and the CONNECT probe are all that file's. The same goes for the tunnel:
 the ports, the paths and the client configuration written from them live in
 `ovpn-proxy.py` and `app/tunnel.py` borrows them, because three copies of an
 agreement the window, the command line and the server's installer all share is

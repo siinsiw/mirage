@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ERelay/ovpn-pin/mobile/core"
+	"github.com/siinsiw/ovpn-pin/mobile/core"
 )
 
 // What the list is made of, on the phone's side of the bridge.

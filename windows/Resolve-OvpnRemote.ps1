@@ -76,6 +76,13 @@
     about. Cloudflare rules are per-customer, so a strict site can refuse an
     exit that Cloudflare's own pages serve happily.
 
+.PARAMETER WhoIs
+    Pin nothing - name the hosting company behind each pinned address.
+
+.PARAMETER NoOwner
+    Do not send any address to the owner-lookup service (ipwho.is). -WhoIs
+    then shows only what .state\owners.tsv already knows.
+
 .EXAMPLE
     .\windows\Resolve-OvpnRemote.ps1
     .\windows\Resolve-OvpnRemote.ps1 -Path .\configs -MaxIps 2
@@ -103,6 +110,11 @@ param(
     [string[]] $Site,
 
     [switch] $WhoIs,
+
+    # Never ask the owner-lookup service anything: Get-IpOwner answers from
+    # .state\owners.tsv alone. Sweep-OvpnExits.ps1 and the app pass theirs
+    # through when they dot-source this.
+    [switch] $NoOwner,
 
     # Dot-sourced by Sweep-OvpnExits.ps1, which wants the probes and the
     # writers below and nothing else. Not for the command line.
@@ -133,14 +145,24 @@ $ProxyPorts = 10808, 10809, 7890, 7891, 2080, 2081, 1080, 1081, 8889, 8080, 2017
 # Everything a public hostname has no business resolving to. Rejecting the
 # whole of RFC1918 and friends rather than a list of known-forged addresses
 # means this keeps working when the censor picks a different one tomorrow.
+# Everything Python's ipaddress calls not is_global is here too - carrier-grade
+# NAT, the benchmarking range, the documentation ranges, 240/4 - so the script
+# and the app refuse the same answers.
 $Reserved = @(
-    @{ Net = '0.0.0.0';     Bits = 8  },
-    @{ Net = '10.0.0.0';    Bits = 8  },
-    @{ Net = '127.0.0.0';   Bits = 8  },
-    @{ Net = '169.254.0.0'; Bits = 16 },
-    @{ Net = '172.16.0.0';  Bits = 12 },
-    @{ Net = '192.168.0.0'; Bits = 16 },
-    @{ Net = '224.0.0.0';   Bits = 4  }
+    @{ Net = '0.0.0.0';      Bits = 8  },
+    @{ Net = '10.0.0.0';     Bits = 8  },
+    @{ Net = '100.64.0.0';   Bits = 10 },
+    @{ Net = '127.0.0.0';    Bits = 8  },
+    @{ Net = '169.254.0.0';  Bits = 16 },
+    @{ Net = '172.16.0.0';   Bits = 12 },
+    @{ Net = '192.0.0.0';    Bits = 24 },
+    @{ Net = '192.0.2.0';    Bits = 24 },
+    @{ Net = '192.168.0.0';  Bits = 16 },
+    @{ Net = '198.18.0.0';   Bits = 15 },
+    @{ Net = '198.51.100.0'; Bits = 24 },
+    @{ Net = '203.0.113.0';  Bits = 24 },
+    @{ Net = '224.0.0.0';    Bits = 4  },
+    @{ Net = '240.0.0.0';    Bits = 4  }
 )
 
 
@@ -303,6 +325,76 @@ function Select-DohRoute {
 
 #--------------------------------------------------------------------- config
 
+# The directives that make openvpn run a program - or load one, or change how
+# willing it is to. A downloaded config is somebody else's text and openvpn
+# runs elevated, so a pinned copy never carries them: one `up C:\x.cmd` line
+# would run whatever the file's author liked as an administrator. The sweep
+# also passes --script-security 1 after --config, but that only covers the
+# script hooks: it does not stop `plugin`, which loads a DLL into openvpn
+# itself, nor `config`, which reads another file. So the copy is cleaned here
+# - and is safe to hand to any other client too.
+$ScriptDirectives = @(
+    'up', 'down', 'route-up', 'route-pre-down', 'ipchange', 'tls-verify',
+    'auth-user-pass-verify', 'client-connect', 'client-disconnect',
+    'learn-address', 'plugin', 'script-security', 'setenv', 'setenv-safe',
+    'up-restart', 'down-pre', 'tls-crypt-v2-verify',
+    # These write files, read others, or move openvpn elsewhere - a `status`
+    # or `writepid` line is an elevated process writing wherever the config's
+    # author said, and `config` pulls in a file nobody looked at. The sweep
+    # names its own log and management port on the command line.
+    'config', 'cd', 'chroot', 'log', 'log-append', 'status', 'writepid',
+    'tmp-dir', 'management', 'replay-persist', 'iproute', 'daemon', 'askpass'
+)
+
+# Lines in, { Lines, Dropped } out, Dropped naming what went once each. The
+# first word is read the way openvpn reads it, near enough to never miss
+# one: backslashes and quotes taken out (`u\p` and `"up"` are both `up` to
+# openvpn), the `--` it also accepts in a file dropped, and compared without
+# case.
+#
+# Inline blocks are passed through untouched - a line of base64 is not a
+# directive, however it happens to read - but only the blocks openvpn has,
+# opened exactly as openvpn opens them: the tag alone on its line, spelled as
+# it spells it (-cmatch, case and all). Anything else that merely looks like
+# a tag is read as a line like any other, so an `<a b>` cannot hide the rest
+# of the file. The block ends where openvpn ends it, at the first line that
+# starts with the closing tag. <connection> holds options of its own, so it
+# is looked inside.
+$InlineTags = @(
+    'ca', 'cert', 'key', 'tls-auth', 'tls-crypt', 'tls-crypt-v2', 'extra-certs',
+    'secret', 'pkcs12', 'crl-verify', 'http-proxy-user-pass', 'auth-user-pass', 'dh'
+)
+function Remove-ScriptDirectives {
+    param([string[]] $Lines)
+    $kept = New-Object 'System.Collections.Generic.List[string]'
+    $dropped = New-Object 'System.Collections.Generic.List[string]'
+    $inBlock = $null
+    foreach ($line in $Lines) {
+        if ($inBlock) {
+            $kept.Add($line)
+            if ($line -cmatch ('^\s*</' + [regex]::Escape($inBlock) + '>')) { $inBlock = $null }
+            continue
+        }
+        if ($line -cmatch '^\s*<([a-z0-9-]+)>\s*$' -and $InlineTags -ccontains $Matches[1]) {
+            $inBlock = $Matches[1]
+            $kept.Add($line)
+            continue
+        }
+        $tok = ''
+        # A byte-order mark is skipped by openvpn on the first line, so here.
+        if ($line -match '^\s*(\S+)') {
+            $tok = $Matches[1].TrimStart([char]0xFEFF).ToLowerInvariant() -replace '["''\\]', ''
+        }
+        if ($tok.StartsWith('--')) { $tok = $tok.Substring(2) }
+        if ($tok -and $ScriptDirectives -contains $tok) {
+            if (-not $dropped.Contains($tok)) { $dropped.Add($tok) }
+            continue
+        }
+        $kept.Add($line)
+    }
+    [pscustomobject]@{ Lines = $kept.ToArray(); Dropped = $dropped.ToArray() }
+}
+
 # OpenVPN accepts `remote HOST [PORT] [PROTO]`, several of them as a failover
 # list, and the same line inside <connection> blocks. Everything after the
 # hostname is kept exactly as it was - the port and protocol are not ours to
@@ -358,12 +450,20 @@ function Test-TcpReachable {
 # landlord tend to be flagged together, and four addresses that turn out to be
 # one operator in one city are not four alternatives.
 #
-# ip-api.com answers a hundred addresses in one request and names the operator
-# outright - "M247", not a registry handle. Its free tier is HTTP only, so the
-# query crosses the line in clear: a list of VPN addresses, to a third party.
-# Nothing in it your DNS and SNI did not already say, but you should be the one
-# deciding that, which is what -NoOwner is for. If the plain request does not
-# come back at all, ipwho.is is asked over HTTPS instead, one address at a time.
+# ipwho.is is asked, over HTTPS, one address at a time. This used to be
+# ip-api.com's batch endpoint, a hundred at once, but its free tier is HTTP
+# only, so the list of VPN addresses crossed the line in clear for anybody on
+# the way to read or rewrite. No free service answers a batch over HTTPS
+# without an account (ipapi.is and ipwhois.io both want a key for bulk), so
+# it is one request per address, each answer cached for good in
+# .state\owners.tsv, and ipwho.is's free allowance - 1,000 a day per address
+# asking - is plenty for that. A 429 ends the run's asking rather than
+# hammering on. The addresses still go to a third party; -NoOwner (and the
+# app's setting) keeps them at home.
+#
+# Whatever comes back is a stranger's text going into a table, a console and
+# file names, so control characters and anything quote-like are stripped
+# from it before it is kept (ConvertTo-CleanText).
 
 # Select-Object -Unique compares every item against every item it has already
 # seen, so a thousand addresses is half a million comparisons and the better
@@ -487,87 +587,65 @@ function Save-OwnerCache {
     $script:OwnerDirty = $false
 }
 
-function Invoke-OwnerBatch {
-    param([string[]] $Ips, [string] $ProxyUrl)
-
-    $url = 'http://ip-api.com/batch?fields=status,query,country,city,isp,org,as,asname,hosting'
-    $req = [Net.HttpWebRequest]::Create($url)
-    $req.Method = 'POST'
-    $req.ContentType = 'application/json'
-    $req.UserAgent = 'ovpn-pin'
-    $req.Timeout = 20000
-    $req.ReadWriteTimeout = 20000
-    $req.Proxy = if ($ProxyUrl) { New-Object Net.WebProxy($ProxyUrl) } else { $null }
-    # Same reason as the Cloudflare probe: this gets asked from inside a
-    # tunnel that has just come up.
-    $req.KeepAlive = $false
-    # .NET puts `Expect: 100-continue` on every POST and waits to be invited
-    # before sending the body. This server answers that with 200 and an empty
-    # body, so the request appears to succeed and returns nothing - which is a
-    # far more annoying failure than an error would have been.
-    $req.ServicePoint.Expect100Continue = $false
-
-    $payload = '["' + ($Ips -join '","') + '"]'
-    $bytes = [Text.Encoding]::UTF8.GetBytes($payload)
-    $req.ContentLength = $bytes.Length
-    $s = $req.GetRequestStream()
-    try { $s.Write($bytes, 0, $bytes.Length) } finally { $s.Close() }
-
-    $resp = $req.GetResponse()
-    try { (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd() }
-    finally { $resp.Close() }
+# A name from the lookup service, made safe to keep: control and format
+# characters (\p{C}: tabs and newlines would break owners.tsv), quotes of
+# every kind - ' " ` and the curly U+2018-U+201F - and backslashes are
+# dropped, runs of spaces folded, and the length capped. What is left is
+# still the name, "M247 Europe SRL", just unable to be anything else.
+function ConvertTo-CleanText {
+    param([string] $Text, [int] $Max = 80)
+    if (-not $Text) { return '' }
+    $t = $Text -replace '[\p{C}"''`\\\u2018-\u201F]', ''
+    $t = ($t -replace '\s+', ' ').Trim()
+    if ($t.Length -gt $Max) { $t = $t.Substring(0, $Max).TrimEnd() }
+    $t
 }
 
-# Same regex-rather-than-ConvertFrom-Json reasoning as the DoH parser above.
-# Only flat fields are asked for, so an object is everything between one pair
-# of braces and nothing nests.
-function ConvertFrom-OwnerJson {
-    param([string] $Body)
-    foreach ($m in [regex]::Matches($Body, '\{[^{}]*\}')) {
-        $o = $m.Value
-        $get = {
-            param($k)
-            if ($o -match ('"' + $k + '"\s*:\s*"([^"]*)"')) { $Matches[1] } else { '' }
-        }
-        $ip = & $get 'query'
-        if (-not $ip) { continue }
-        $as = & $get 'as'
-        $asn = if ($as -match '^(AS\d+)') { $Matches[1] } else { '' }
-        $owner = & $get 'asname'
-        if (-not $owner) { $owner = & $get 'isp' }
-        if (-not $owner) { $owner = & $get 'org' }
-        [pscustomobject]@{
-            Ip      = $ip
-            Asn     = $asn
-            Owner   = $owner
-            Country = & $get 'country'
-            City    = & $get 'city'
-        }
-    }
-}
-
+# One address, over HTTPS. Returns the owner object, $null when the service
+# had no name for it, and throws when it could not be asked - with
+# $script:OwnerThrottled set when the answer was a 429, so the caller stops.
+#
+# Same regex-rather-than-ConvertFrom-Json reasoning as the DoH parser above:
+# only flat string fields and one number are read out of it.
+$script:OwnerThrottled = $false
 function Invoke-OwnerHttps {
     param([string] $Ip, [string] $ProxyUrl)
-    $req = [Net.HttpWebRequest]::Create("https://ipwho.is/$Ip")
+    # Only an address goes in the URL - nothing that could add a path or a
+    # query of its own.
+    $parsed = $null
+    if (-not [Net.IPAddress]::TryParse($Ip, [ref] $parsed)) { return $null }
+    $url = 'https://ipwho.is/' + $parsed.ToString() + '?fields=success,message,ip,country,city,connection'
+    $req = [Net.HttpWebRequest]::Create($url)
     $req.UserAgent = 'ovpn-pin'
     $req.Timeout = 15000
     $req.ReadWriteTimeout = 15000
+    # Same reason as the Cloudflare probe: this gets asked from inside a
+    # tunnel that has just come up.
     $req.KeepAlive = $false
     $req.Proxy = if ($ProxyUrl) { New-Object Net.WebProxy($ProxyUrl) } else { $null }
-    $resp = $req.GetResponse()
+    try { $resp = $req.GetResponse() }
+    catch [Net.WebException] {
+        $r = $_.Exception.Response
+        if ($r -and [int]$r.StatusCode -eq 429) { $script:OwnerThrottled = $true }
+        throw
+    }
     $body = try { (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } finally { $resp.Close() }
+    if ($body.Length -gt 20000) { return $null }
+    if ($body -notmatch '"success"\s*:\s*true') { return $null }
 
     $f = { param($k) if ($body -match ('"' + $k + '"\s*:\s*"([^"]*)"')) { $Matches[1] } else { '' } }
-    $asn = if ($body -match '"asn"\s*:\s*(\d+)') { 'AS' + $Matches[1] } else { '' }
+    $asn = if ($body -match '"asn"\s*:\s*(\d{1,10})\b') { 'AS' + $Matches[1] } else { '' }
     # org and isp live inside the "connection" object; the outer body has the
     # location fields. One flat regex over the whole thing gets both. isp is
     # the tidier of the two here - "M247 Europe SRL" against org's
     # "M247 LTD Frankfurt Infrastructure".
-    $owner = & $f 'isp'
-    if (-not $owner) { $owner = & $f 'org' }
+    $owner = ConvertTo-CleanText (& $f 'isp')
+    if (-not $owner) { $owner = ConvertTo-CleanText (& $f 'org') }
+    if (-not $owner) { return $null }
     [pscustomobject]@{
         Ip = $Ip; Asn = $asn; Owner = $owner
-        Country = (& $f 'country'); City = (& $f 'city')
+        Country = (ConvertTo-CleanText (& $f 'country') 60)
+        City    = (ConvertTo-CleanText (& $f 'city') 60)
     }
 }
 
@@ -593,68 +671,77 @@ function Get-IpOwner {
 
     if (-not $want) { return (Select-KnownOwners $cache $asked) }
 
+    # Told not to ask: the table is all there is.
+    if ($NoOwner) { return (Select-KnownOwners $cache $asked) }
+
     $learned = 0
     $proxy = $ProxyUrl
+    $triedProxy = [bool]$ProxyUrl
+    $script:OwnerThrottled = $false
 
-    # Say what is happening while it happens. A hundred addresses go in one
-    # request, and there is a deliberate five second wait between requests -
-    # so a few hundred new ones is half a minute in which the screen would
-    # otherwise show nothing at all, which reads as broken rather than busy.
-    # Not for one or two, which is what the sweep asks about after each config.
-    $batches = [math]::Ceiling($want.Count / 100)
-    $chatty  = $want.Count -gt 10
+    # Say what is happening while it happens. One request per address, a
+    # moment apart, so a few hundred new ones take a few minutes in which the
+    # screen would otherwise show nothing at all, which reads as broken rather
+    # than busy. Not for one or two, which is what the sweep asks about after
+    # each config.
+    $chatty = $want.Count -gt 10
     if ($chatty) {
-        Write-Info "asking about $($want.Count) new address(es), $batches request(s)"
+        Write-Info "asking about $($want.Count) new address(es), one request each over HTTPS"
     }
 
-    for ($i = 0; $i -lt $want.Count; $i += 100) {
-        $chunk = @($want[$i..([math]::Min($i + 99, $want.Count - 1))])
-        if ($chatty) {
-            Write-Info ('  request {0} of {1} - {2} addresses' -f ([int]($i / 100) + 1), $batches, $chunk.Count)
+    $n = 0
+    $unreached = 0
+    foreach ($ip in $want) {
+        $n++
+        if ($chatty -and ($n % 50) -eq 1) {
+            Write-Info ('  {0} of {1}' -f $n, $want.Count)
         }
-        $body = $null
-        try { $body = Invoke-OwnerBatch $chunk $proxy }
+        $o = $null
+        $answered = $false
+        try { $o = Invoke-OwnerHttps $ip $proxy; $answered = $true }
         catch {
-            # Plain HTTP is the first thing a filtering middlebox eats. Try it
-            # through a local proxy once before giving up on the fast path.
-            if (-not $proxy) {
-                $proxy = Find-Proxy
-                if ($proxy) { try { $body = Invoke-OwnerBatch $chunk $proxy } catch { } }
-            }
-        }
-        if ($body) {
-            foreach ($o in (ConvertFrom-OwnerJson $body)) {
-                if ($o.Owner) { $cache[$o.Ip] = (Add-Checked $o); $learned++ }
-            }
-        }
-        else {
-            foreach ($ip in $chunk) {
-                try {
-                    $o = Invoke-OwnerHttps $ip $proxy
-                    if ($o.Owner) { $cache[$ip] = (Add-Checked $o); $learned++ }
+            # A filtering middlebox can eat the request outright. Try once
+            # through a local proxy before calling the service unreachable.
+            if (-not $script:OwnerThrottled -and -not $triedProxy) {
+                $triedProxy = $true
+                $found = Find-Proxy
+                if ($found) {
+                    $proxy = $found
+                    try { $o = Invoke-OwnerHttps $ip $proxy; $answered = $true } catch { }
                 }
-                catch { }
             }
         }
 
-        # Whatever is still missing after both services had their turn gets
-        # written down as missing, so the next run does not start from here.
-        foreach ($ip in $chunk) {
-            if (-not $cache[$ip] -or $cache[$ip].Owner -eq '-') {
-                $cache[$ip] = [pscustomobject]@{
-                    Ip = $ip; Asn = ''; Owner = '-'; Country = ''; City = ''
-                    Checked = (Get-Date)
-                }
+        if ($script:OwnerThrottled) {
+            # The free allowance is used up for today. Stop asking - the rest
+            # are left unrecorded, so a later run asks about them afresh.
+            Write-Warn 'the owner lookup service says that is enough for today - the rest are left for another run'
+            break
+        }
+        if ($o) { $cache[$ip] = (Add-Checked $o); $learned++ }
+        elseif ($answered) {
+            # Asked and nobody would name it gets written down as missing, so
+            # the next week of runs does not ask again. Not reachable at all
+            # says nothing about the address, so it is left unrecorded and
+            # asked about next time.
+            $cache[$ip] = [pscustomobject]@{
+                Ip = $ip; Asn = ''; Owner = '-'; Country = ''; City = ''
+                Checked = (Get-Date)
             }
         }
         $script:OwnerDirty = $true
 
-        # 15 batch requests a minute on the free tier, and being throttled
-        # returns nothing rather than waiting.
-        if ($i + 100 -lt $want.Count) {
-            if ($chatty) { Write-Info '  waiting 5s - the free tier allows 15 requests a minute' }
-            Start-Sleep -Seconds 5
+        # Three in a row that could not be asked at all means the service is
+        # out of reach from here; fifteen seconds each for the rest would be
+        # minutes of nothing.
+        if ($answered) { $unreached = 0 }
+        elseif (++$unreached -ge 3) {
+            Write-Warn 'the owner lookup service is not answering - the rest are left for another run'
+            break
         }
+
+        # A free service, asked politely: a few requests a second at most.
+        Start-Sleep -Milliseconds 250
     }
 
     if ($chatty) { Write-Info "$learned of $($want.Count) came back with a name" }
@@ -1165,7 +1252,14 @@ try {
             foreach ($p in $picked) {
                 if ($p.Host -ne $p.Ip) { $header += "#   $($p.Host) -> $($p.Ip)" }
             }
-            $body = $header + $copy
+            # Anything in the file that would have openvpn run a program or
+            # write a file goes, and the header says what went (see
+            # Remove-ScriptDirectives).
+            $safe = Remove-ScriptDirectives $copy
+            if ($safe.Dropped.Count) {
+                $header += "#   removed, as they run programs or write files: $($safe.Dropped -join ' ')"
+            }
+            $body = $header + $safe.Lines
 
             $first = $picked[0]
             $target = if ($InPlace) {

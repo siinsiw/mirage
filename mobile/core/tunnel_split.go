@@ -17,8 +17,10 @@ package core
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
+	"syscall"
 	"time"
 
 	"github.com/sagernet/sing/common/bufio"
@@ -42,29 +44,37 @@ func (t *Tunnel) Split() *Split { return t.split.Load() }
 // goesStraight decides one TCP connection, before anything is dialled.
 //
 // Cheapest evidence first. The address is a lookup in a sorted table; the
-// app is a binder call, asked only when apps are listed; the name is
-// usually already known from the DNS answer that produced the address, and
-// only when it is not - and names are listed, and nothing else settled it -
-// is the client's first message read for one. That read is the ClientHello
-// for anything over TLS, which arrives as soon as the stack accepts, so it
-// costs a few milliseconds there and at most firstBytes' short deadline for
-// a protocol where the server speaks first.
+// app is a binder call, asked only when apps are listed. Then the name, when
+// names are listed and neither of those settled it - and for a destination
+// that arrived as an address, the client's first message is read for it
+// before the name remembered for that address is believed: the SNI in a
+// ClientHello is what this connection asked for, and the remembered name is
+// only the last lookup that produced the address (see ListedByName). That
+// read is the ClientHello for anything over TLS, which arrives as soon as
+// the stack accepts, so it costs a few milliseconds there and at most
+// firstBytes' short deadline for a protocol where the server speaks first.
+//
+// given is the destination's own name when it arrived as one, and
+// remembered the name dnsnames.go holds for its address when it did not.
 //
 // Returns whatever was read, so the caller can send it on: those bytes are
 // the start of the connection and belong at the far end whichever way it
 // goes.
-func (h *handler) goesStraight(conn net.Conn, s *Split, source, destination M.Socksaddr, name string) (straight bool, first []byte, sni string) {
+func (h *handler) goesStraight(conn net.Conn, s *Split, source, destination M.Socksaddr, given, remembered string) (straight bool, first []byte, sni string) {
 	ip := destination.Addr.Unmap()
-	listed := s.AddrListed(ip) || s.NameListed(name)
+	listed := destination.IsIP() && s.AddrListed(ip)
 	if !listed && s.NeedsOwner() {
 		listed = s.UidListed(ownerOf(ipProtoTCP, source.String(), destination.String()))
 	}
-	if !listed && name == "" && s.NeedsName() {
-		if b, err := firstBytes(conn); err == nil && len(b) > 0 {
-			first = b
-			if sni = sniFrom(b); sni != "" {
-				listed = s.NameListed(sni)
+	if !listed && s.NeedsName() {
+		if given != "" {
+			listed = s.NameListed(given)
+		} else {
+			if b, err := firstBytes(conn); err == nil && len(b) > 0 {
+				first = b
+				sni = sniFrom(b)
 			}
+			listed = s.ListedByName(sni, remembered)
 		}
 	}
 	return s.Direct(listed), first, sni
@@ -84,8 +94,23 @@ func (h *handler) udpGoesStraight(s *Split, source, destination netip.AddrPort) 
 
 // dialStraight is one TCP connection on the phone's own line.
 func dialStraight(ctx context.Context, target string, timeout time.Duration) (net.Conn, error) {
-	d := net.Dialer{Timeout: timeout, Control: dialControl}
+	d := net.Dialer{Timeout: timeout, Control: straightGuard}
 	return d.DialContext(ctx, "tcp4", target)
+}
+
+// straightGuard refuses, on the address actually dialled, what no connection
+// out of the tun can mean: loopback, the unspecified address, link-local and
+// multicast. Nothing the tun hands over is addressed so - which is why it is
+// safe to be strict - and a dial that ends up there anyway is this process
+// reaching into the phone itself. Then the socket is protected like any.
+func straightGuard(network, address string, c syscall.RawConn) error {
+	if ap, err := netip.ParseAddrPort(address); err == nil {
+		a := ap.Addr().Unmap()
+		if a.IsLoopback() || a.IsUnspecified() || a.IsLinkLocalUnicast() || a.IsMulticast() {
+			return errors.New("not dialling " + address + " on the phone's own line")
+		}
+	}
+	return dialControl(network, address, c)
 }
 
 // carryUDP carries one UDP flow both ways on the phone's own line, until the

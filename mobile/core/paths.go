@@ -22,11 +22,10 @@ import (
 //	windscribe/      Windscribe's inbox, same
 //	dropped/         set aside by hand, one shelf per folder they came from
 //	.state/          what was measured and what was remembered
-//	auth             the Surfshark service credential, two lines
-//	auth-windscribe  the Windscribe proxy credential, two lines
 //
-// auth keeps that name because setup-phone.sh pushes it there, and renaming
-// it would quietly strand every phone already set up.
+// No credential files. Provider sign-ins are not kept here: the app holds
+// them itself and hands them over with SetCredentials, so nothing in this
+// folder - or pushed to it from a computer - is a password.
 var dataDir atomic.Value // string
 
 // SetDataDir names the directory Android gave this app.
@@ -61,8 +60,6 @@ func WindscribeMetaPath() string { return filepath.Join(StateDir(), "windscribe-
 func SurfsharkMetaPath() string  { return filepath.Join(StateDir(), "surfshark-meta.json") }
 func DroppedIndexPath() string   { return filepath.Join(StateDir(), "dropped.json") }
 func AccountsPath() string       { return filepath.Join(StateDir(), "accounts.json") }
-func AuthPath() string           { return under("auth") }
-func WindscribeAuthPath() string { return under("auth-windscribe") }
 
 // EnsureDirs makes the ones that get written to.
 //

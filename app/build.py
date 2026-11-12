@@ -85,6 +85,7 @@ SERVER_SOURCES = ('servers', 'success', 'pinned')
 # hour earlier - which is exactly the report this list exists to answer.
 KEEP = (
     '.state/settings.json',        # the port, the pick, and the tunnel domain
+    '.state/settings.json.bak',    # its last good copy (settingsfile.py)
     '.state/accounts.json',        # the roster, sealed to this Windows account
     '.state/windscribe.json',      # a session that cost a captcha to get
     '.state/windscribe-meta.json',
@@ -706,14 +707,14 @@ def main():
     else:
         print('landlords: none on record - the app can look them up itself')
 
-    auth = '' if PUBLIC_RELEASE else os.path.join(ROOT, '.ovpn-auth')
-    if os.path.isfile(auth):
-        shutil.copy2(auth, os.path.join(out, '.ovpn-auth'))
-        print('credentials: copied')
-    elif PUBLIC_RELEASE:
-        print('credentials: intentionally omitted from the public build')
-    else:
-        print('credentials: .ovpn-auth NOT FOUND - the app cannot connect')
+    # Never copied out of the repo, for any build. It used to be, for private
+    # builds, and that put the developer's provider password in plain text in
+    # a folder that gets zipped and handed around. A rebuild on this machine
+    # still keeps the user's own credential - restore_user_data below carries
+    # whatever the previous dist/ had - and a fresh install signs in through
+    # the window like any other.
+    print('credentials: not bundled - signed in from the window, or kept '
+          'from the previous build')
 
     # Last, so that everything the repo had to give is already in place and
     # this only fills the gaps it left.

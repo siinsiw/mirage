@@ -10,23 +10,34 @@ import java.util.UUID
 /**
  * More than one account, and one place to keep them.
  *
- * app/accounts.py, on a phone. The roster is a thing on top: activating an
- * account rewrites the credential file that was already there - `auth` for
- * Surfshark, `auth-windscribe` for Windscribe - and nothing underneath learns
- * what an account is. The service still reads two files and does not know it
- * is being switched.
+ * app/accounts.py, on a phone. The roster is a thing on top: whichever
+ * account is active for a provider is the credential that provider's exits
+ * are asked with, and [credentials] is the one place that is read.
  *
  * Two things differ from the desktop, and both are about where a phone keeps
- * things. Passwords go to [Secrets] rather than to DPAPI. And `auth` keeps
- * its name and its place, because setup-phone.sh pushes it there and a phone
- * already set up that way must keep working: the first run adopts whatever
- * is in that file as an account, exactly as the desktop adopts an existing
- * .ovpn-auth.
+ * things. Passwords go to [Secrets] rather than to DPAPI - all of them,
+ * including the credential in use. That used to be written out again as
+ * two lines of plain text, `auth` and `auth-windscribe`, on shared storage
+ * where anybody with a cable could read it; nothing is written there now.
+ * A phone set up that way, or handed `.ovpn-auth` by setup-phone.sh, still
+ * works: [adopt] reads such a file into an account, exactly as the desktop
+ * adopts an existing .ovpn-auth, and deletes it.
  */
 object Accounts {
 
     const val SURFSHARK = "surfshark"
     const val WINDSCRIBE = "windscribe"
+
+    /**
+     * Surfshark as the exit of a server in Iran, in the words Settings and a
+     * failed server + exit both use. Measured 2026-11-12 from a server in
+     * Iran: the TLS handshake failed on all 142 Surfshark clusters - with the
+     * exit's name, without it, with a decoy - while the same exits answered
+     * normally from a server outside Iran. Their addresses are blocked there,
+     * not the account. Said, never enforced: blocks change.
+     */
+    const val SURFSHARK_FROM_IRAN = "Surfshark's exits cannot currently be reached from " +
+        "servers in Iran - they are blocked at the network level, whatever your server sends."
 
     private val LABELS = mapOf(SURFSHARK to "Surfshark", WINDSCRIBE to "Windscribe")
 
@@ -80,59 +91,108 @@ object Accounts {
     // -- adopting what was already here ----------------------------------------
 
     /**
-     * Turn a pre-existing sign-in into an account, once.
+     * Turn a credential handed over as a file into an account, and the file
+     * into nothing.
      *
-     * A phone set up with `adb push .ovpn-auth` has a working credential and
-     * no roster. Showing it an empty account list and a "not set up" screen
-     * would be wrong about a phone that connects perfectly well, so the file
-     * is read and believed - without a password, because the file holds a
-     * service credential rather than the sign-in that produced it.
+     * Two places, both two lines of username and password. The old one on
+     * shared storage, `Android/data/<id>/files/auth`, which every install
+     * before this one wrote and which setup-phone.sh used to push to; and
+     * [AppFiles.authInbox] in the app's private folder, which is where the
+     * scripts push it now. A phone with a working credential and no roster
+     * should not be shown an empty account list and a "not set up" screen,
+     * so the file is read and believed - and stored in [Secrets], and
+     * deleted, so the only copy left in plain text is none.
+     *
+     * Every time rather than once: a file pushed after the first run is a
+     * credential somebody means to be used, and the check is two stat calls
+     * when there is nothing there. Synchronized because the window and the
+     * service both call it on the way up, and two of these at once would
+     * each add the same account.
      */
+    @Synchronized
     fun adopt(ctx: Context) {
-        val state = load(ctx)
-        if (state.optBoolean("adopted")) return
-        state.put("adopted", true)
-
-        readCredentials(AppFiles.auth(ctx))?.let { (user, _) ->
-            if (!has(state, SURFSHARK, user)) {
-                val id = fresh()
-                rows(state).put(JSONObject().apply {
-                    put("id", id)
-                    put("provider", SURFSHARK)
-                    put("label", user)
-                    put("username", user)
-                    put("added", System.currentTimeMillis() / 1000)
-                    put("hasPassword", false)
-                })
-                state.optJSONObject("active")?.put(SURFSHARK, id)
-            }
+        for (provider in listOf(SURFSHARK, WINDSCRIBE)) {
+            AppFiles.legacyAuth(ctx, provider)?.let { if (it.isFile) take(ctx, provider, it) }
+            val inbox = AppFiles.authInbox(ctx, provider)
+            if (inbox.isFile) take(ctx, provider, inbox)
         }
-        readCredentials(AppFiles.windscribeAuth(ctx))?.let { (user, _) ->
-            if (!has(state, WINDSCRIBE, user)) {
-                val id = fresh()
-                rows(state).put(JSONObject().apply {
-                    put("id", id)
-                    put("provider", WINDSCRIBE)
-                    put("label", user)
-                    put("username", user)
-                    put("added", System.currentTimeMillis() / 1000)
-                    put("hasPassword", false)
-                })
-                state.optJSONObject("active")?.put(WINDSCRIBE, id)
-            }
-        }
-        save(ctx, state)
     }
 
-    private fun has(state: JSONObject, provider: String, username: String): Boolean {
+    /** One file's credential into the roster and [Secrets]; see [adopt]. */
+    private fun take(ctx: Context, provider: String, file: File) {
+        val inbox = AppFiles.authInbox(ctx, provider)
+        val pair = try {
+            readCredentials(file)
+        } catch (e: Exception) {
+            Log.w(RelayVpnService.TAG, "credential file not read: ${e.message}")
+            return
+        }
+        if (pair == null) {
+            // Not two lines: not a credential, and nothing to keep. Left on
+            // shared storage it would only be read again next time.
+            file.delete()
+            return
+        }
+        val (user, pass) = pair
+
+        val state = load(ctx)
+        val row = matching(ctx, state, provider, user) ?: JSONObject().apply {
+            put("id", fresh())
+            put("provider", provider)
+            put("label", user)
+            put("username", user)
+            put("added", System.currentTimeMillis() / 1000)
+            put("hasPassword", false)
+        }.also { rows(state).put(it) }
+        val id = row.optString("id")
+
+        // Surfshark's file is the account itself: a service username and its
+        // password. Windscribe's is the proxy credential its sign-in produced,
+        // which is what its exits are asked with.
+        val stored = if (provider == WINDSCRIBE) {
+            Secrets.put(ctx, "proxyUser:$id", user) && Secrets.put(ctx, "proxyPass:$id", pass)
+        } else {
+            Secrets.put(ctx, "pw:$id", pass).also { if (it) row.put("hasPassword", true) }
+        }
+        state.optJSONObject("active")?.put(provider, id)
+        state.put("adopted", true)
+        save(ctx, state)
+
+        if (stored) {
+            if (file.delete()) {
+                Log.i(RelayVpnService.TAG, "${LABELS[provider]} credential moved into the secret store")
+            } else {
+                Log.w(RelayVpnService.TAG, "${LABELS[provider]} credential stored, but its file was not deleted")
+            }
+        } else if (file.absolutePath != inbox.absolutePath) {
+            // No secret store on this phone. Off shared storage all the same:
+            // into the app's own folder, where it goes on being the credential
+            // ([credentials] falls back on it) without anything else reading it.
+            try {
+                inbox.parentFile?.mkdirs()
+                file.copyTo(inbox, overwrite = true)
+                file.delete()
+            } catch (e: Exception) {
+                Log.w(RelayVpnService.TAG, "credential not moved off shared storage: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * The account a credential file belongs to. By username; and for
+     * Windscribe also by the proxy username it holds, because the file an
+     * older install wrote for a signed-in account carries the proxy
+     * credential, not the login name the row is listed under.
+     */
+    private fun matching(ctx: Context, state: JSONObject, provider: String, user: String): JSONObject? {
         val all = rows(state)
         for (i in 0 until all.length()) {
             val a = all.getJSONObject(i)
-            if (a.optString("provider") == provider &&
-                a.optString("username").equals(username, ignoreCase = true)
-            ) return true
+            if (a.optString("provider") != provider) continue
+            if (a.optString("username").equals(user, ignoreCase = true)) return a
+            if (provider == WINDSCRIBE && Secrets.get(ctx, "proxyUser:${a.optString("id")}") == user) return a
         }
-        return false
+        return null
     }
 
     private fun fresh() = UUID.randomUUID().toString().replace("-", "").take(8)
@@ -142,10 +202,11 @@ object Accounts {
     /**
      * The roster, without any of the secrets in it.
      *
-     * `signedIn` is not `hasPassword`. An adopted Surfshark account has no
-     * stored password and works: the credential file it was adopted from is
-     * still the credential in use. What it cannot do is be switched away from
-     * and back again, which is what `hasPassword` says.
+     * `signedIn` is not `hasPassword`. On a phone with no working secret
+     * store an adopted account has no stored password and works: the file it
+     * was adopted from stays, privately, as the credential in use. What it
+     * cannot do is be switched away from and back again, which is what
+     * `hasPassword` says.
      */
     fun listing(ctx: Context): JSONArray {
         adopt(ctx)
@@ -163,8 +224,8 @@ object Accounts {
                 Secrets.get(ctx, "pw:$id") != null
             val signedIn = when (provider) {
                 WINDSCRIBE -> Secrets.get(ctx, "proxyUser:$id") != null ||
-                    (isActive && AppFiles.windscribeAuth(ctx).isFile)
-                else -> hasPassword || (isActive && AppFiles.auth(ctx).isFile)
+                    (isActive && AppFiles.authInbox(ctx, WINDSCRIBE).isFile)
+                else -> hasPassword || (isActive && AppFiles.authInbox(ctx, SURFSHARK).isFile)
             }
             out.add(JSONObject().apply {
                 put("id", id)
@@ -234,7 +295,6 @@ object Accounts {
         state.optJSONObject("active")?.put(provider, id)
         state.put("adopted", true)
         save(ctx, state)
-        writeActive(ctx, provider)
         return found
     }
 
@@ -244,15 +304,15 @@ object Accounts {
         val a = row(state, id) ?: return null
         state.optJSONObject("active")?.put(a.optString("provider"), id)
         save(ctx, state)
-        writeActive(ctx, a.optString("provider"))
         return a
     }
 
     /**
      * Remove one, and hand its place to whatever is left.
      *
-     * The credential file goes only when nothing of that provider remains -
-     * removing one of two accounts should leave the other one connecting.
+     * A credential kept in a file (a phone with no secret store) goes only
+     * when nothing of that provider remains - removing one of two accounts
+     * should leave the other one connecting.
      */
     fun remove(ctx: Context, id: String): JSONObject? {
         val state = load(ctx)
@@ -274,47 +334,48 @@ object Accounts {
         save(ctx, state)
         Secrets.dropAll(ctx, id)
 
-        if (heir != null) writeActive(ctx, provider) else credentialFile(ctx, provider).delete()
+        if (heir == null) {
+            AppFiles.authInbox(ctx, provider).delete()
+            // And one from an older install that was never read in, so a
+            // removed account cannot come back from it on the next start.
+            AppFiles.legacyAuth(ctx, provider)?.delete()
+        }
         return gone
     }
 
     // -- where the rest of the app reads it ------------------------------------
 
-    private fun credentialFile(ctx: Context, provider: String): File =
-        if (provider == WINDSCRIBE) AppFiles.windscribeAuth(ctx) else AppFiles.auth(ctx)
-
     /**
-     * Write the active account's credential to the file that provider is read
-     * from. Two lines, the way OpenVPN would have been given them - the same
-     * shape setup-phone.sh pushes, so both routes produce one kind of file.
+     * The credential in use for a provider: the active account's, out of
+     * [Secrets], handed to the core in memory and never written down again.
      *
-     * An account with nothing stored leaves the file alone rather than
-     * emptying it: that is the adopted case, where the file is the only copy
-     * of the credential there has ever been.
+     * Surfshark's is the account's own username and password; Windscribe's
+     * is the proxy credential its sign-in produced. A phone with no working
+     * secret store falls back on the file the credential was handed over in,
+     * kept privately for exactly that ([AppFiles.authInbox]).
+     *
+     * Reads [Secrets], so not on the main thread.
      */
-    fun writeActive(ctx: Context, provider: String) {
-        val a = active(ctx, provider) ?: return
-        val id = a.optString("id")
-        val pair = if (provider == WINDSCRIBE) {
-            val user = Secrets.get(ctx, "proxyUser:$id")
-            val pass = Secrets.get(ctx, "proxyPass:$id")
-            if (user.isNullOrEmpty() || pass.isNullOrEmpty()) null else user to pass
-        } else {
-            val pass = Secrets.get(ctx, "pw:$id")
-            val user = a.optString("username")
-            if (user.isEmpty() || pass.isNullOrEmpty()) null else user to pass
-        } ?: return
-
-        try {
-            credentialFile(ctx, provider).writeText("${pair.first}\n${pair.second}\n")
+    fun credentials(ctx: Context, provider: String): Pair<String, String>? {
+        active(ctx, provider)?.let { a ->
+            val id = a.optString("id")
+            val pair = if (provider == WINDSCRIBE) {
+                val user = Secrets.get(ctx, "proxyUser:$id")
+                val pass = Secrets.get(ctx, "proxyPass:$id")
+                if (user.isNullOrEmpty() || pass.isNullOrEmpty()) null else user to pass
+            } else {
+                val user = a.optString("username")
+                val pass = Secrets.get(ctx, "pw:$id")
+                if (user.isEmpty() || pass.isNullOrEmpty()) null else user to pass
+            }
+            if (pair != null) return pair
+        }
+        return try {
+            readCredentials(AppFiles.authInbox(ctx, provider))
         } catch (e: Exception) {
-            Log.w(RelayVpnService.TAG, "credential not written: ${e.message}")
+            null
         }
     }
-
-    /** The credential in use for a provider, read from the file it lives in. */
-    fun credentials(ctx: Context, provider: String): Pair<String, String>? =
-        readCredentials(credentialFile(ctx, provider))
 
     /** Two lines: a username and a password, as OpenVPN would have been given. */
     private fun readCredentials(file: java.io.File): Pair<String, String>? {

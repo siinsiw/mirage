@@ -71,8 +71,18 @@ type Tunnel struct {
 	// Which connections go around the exit; nil for none. See split.go.
 	split atomic.Pointer[Split]
 
+	// One token per DNS query being asked; see NewDNSPacket.
+	dnsSlots chan struct{}
+
 	closeOnce sync.Once
 }
+
+// dnsInFlight bounds the DNS queries asked at once. Each is a goroutine and,
+// through the exit, a connection; an app - or something on a shared device -
+// that fires queries faster than the exit answers them would otherwise grow
+// both without limit. Past this, a query is dropped, which the phone's
+// resolver treats as a lost packet and asks again.
+const dnsInFlight = 64
 
 // wayBox is a Way that atomic.Pointer can hold - it takes a concrete type,
 // and a Way is an interface.
@@ -148,7 +158,7 @@ func StartTunnel(fd int, mtu int, exit Way) (started *Tunnel, err error) {
 		mtu = TunMTU
 	}
 
-	t := &Tunnel{hosts: newHosts(), names: newDNSNames()}
+	t := &Tunnel{hosts: newHosts(), names: newDNSNames(), dnsSlots: make(chan struct{}, dnsInFlight)}
 	t.exit.Store(&wayBox{exit})
 	t.health.reset()
 	t.dns = &http.Client{
@@ -365,14 +375,13 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 		peeked   bool
 	)
 	if s := (*Tunnel)(h).Split(); s != nil {
-		var sni string
-		name := ""
+		var sni, given, remembered string
 		if destination.IsIP() {
-			name = h.names.Name(destination.Addr.Unmap())
+			remembered = h.names.Name(destination.Addr.Unmap())
 		} else {
-			name = destination.AddrString()
+			given = destination.AddrString()
 		}
-		straight, held, sni = h.goesStraight(conn, s, source, destination, name)
+		straight, held, sni = h.goesStraight(conn, s, source, destination, given, remembered)
 		peeked = held != nil
 		if sni != "" {
 			h.hosts.rename(destination.String(),
@@ -492,10 +501,19 @@ func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 // bytes the phone put on the wire and gives back the same bytes it expects,
 // so nothing here has to know what a DNS record is.
 func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, destination M.Socksaddr, writer N.PacketWriter) {
+	// A slot first, and no waiting for one: this is called on the stack's
+	// own goroutine, and blocking it would stall every packet behind this
+	// one. Full means dropped - see dnsInFlight.
+	select {
+	case h.dnsSlots <- struct{}{}:
+	default:
+		return
+	}
 	query := make([]byte, len(payload))
 	copy(query, payload)
 
 	go func() {
+		defer func() { <-h.dnsSlots }()
 		answer, err := h.askDNSFor(query)
 		if err != nil || len(answer) == 0 {
 			// Nothing written. The phone's resolver retries and then gives

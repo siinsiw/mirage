@@ -2,12 +2,20 @@ package core
 
 // How fast a way out carries an upload, measured rather than assumed.
 //
-// From a server in Iran, the line throttles upload per foreign exit IP: most
-// exits carry 10-20 KB/s up while downloading at megabytes, and a few in the
-// same city carry the full rate (measured 2026-10-31 from 203.0.113.10: ch-017
-// 16 KB/s, ch-019 3 MB/s). Which exit is which does not show in a ping or a
-// download, so server + exit asks each candidate to carry a small upload and
-// keeps the first that does.
+// From a server in Iran, the line throttles upload to foreign exits: most
+// carried 10-20 KB/s up while downloading at megabytes, and a few in the same
+// city carried the full rate (measured 2026-10-31 from 203.0.113.10: ch-017
+// 16 KB/s, ch-019 3 MB/s). That looked like a per-IP choice. Measured again
+// on 2026-11-12 from a VPS in Iran it turned out to be mostly about the
+// handshake: TLS to a Windscribe exit without SNI ran at 0-17 KB/s on every
+// exit, and per connection (four parallel uploads each got 8-12 KB/s); with
+// the exit's real name as SNI and its certificate verified, six of seven
+// exits ran at 1,237-1,915 KB/s against a 3.4-4.1 MB/s uplink; an unrelated
+// decoy name did not help (4-17 KB/s). One exit (ch-020) stayed at 12-17 KB/s
+// whatever was sent, so a bad exit still exists, and Surfshark's exits did
+// not complete TLS from that server at all. Which exit is which still does
+// not show in a ping or a download, so server + exit asks each candidate to
+// carry a small upload and keeps the first that does.
 
 import (
 	"bytes"

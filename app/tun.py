@@ -44,11 +44,15 @@ small elevated PowerShell script: one UAC prompt per connect, none if Relay
 is already elevated. An unelevated window cannot stop an elevated process,
 so it asks - the same way the sweep is asked. It drops a stop file, and the
 script ends sing-box and says so in a done file. The script also watches the
-worker, and if that goes it takes the adapter down with it, rather than
-leave every program on the machine pointed at a port nobody answers.
+worker. With the kill switch off, if that goes it takes the adapter down with
+it, rather than leave every program on the machine pointed at a port nobody
+answers. With it on (the default) leaving them pointed there is the point:
+the adapter stays and traffic fails until the window reconnects or is told
+to disconnect - see WRAPPER.
 """
 
 import ctypes
+import hashlib
 import ipaddress
 import json
 import os
@@ -57,7 +61,7 @@ import subprocess
 import time
 
 import paths
-from sweep import CREATE_NO_WINDOW, _ps_array, _ps_string
+from sweep import CREATE_NO_WINDOW, _ps_array, _ps_string, discard, elevated
 
 # The adapter's name in Network Connections, and what the script waits for.
 ADAPTER = 'RelayTun'
@@ -301,6 +305,24 @@ def build_config(port, keep=(), own=(), carriers=(), log_path=None,
 # Run elevated. Doubled braces are literal; single ones are filled in by
 # str.format. Everything it says, it says in a file, because elevation
 # leaves no pipe to say it down.
+#
+# Two things it does that are about trust rather than about sing-box:
+#
+#   The configuration is inside the script, not beside it. The elevated side
+#   writes it, as raw UTF-8, to a file of its own in Windows' temp folder
+#   that only SYSTEM and Administrators can change, and points sing-box at
+#   that - so there is no config.json in a folder this user can write for
+#   something else to swap between the UAC prompt and sing-box reading it
+#   (an elevated sing-box with somebody else's configuration writes its log
+#   wherever it is told). The script itself is checked by hash before it
+#   runs (sweep.elevated).
+#
+#   The kill switch. With a `hold` file present, the worker it carries
+#   traffic to going away no longer takes the adapter down: every program
+#   keeps going into the adapter and from there to a port nobody answers, so
+#   nothing reaches the internet on the bare line until the window says
+#   otherwise - a stop file (Disconnect, quitting) or a new worker's pid in
+#   `watch`, which it then watches instead. It says so in `held`.
 WRAPPER = r'''
 $ErrorActionPreference = 'Continue'
 $exe    = {exe}
@@ -313,14 +335,48 @@ $stop   = {stop}
 $done   = {done}
 $nic    = {nic}
 $watch  = {watch}
+$ui     = {ui}
+$holdf  = {holdf}
+$held   = {held}
+$watchf = {watchf}
+$config = {config}
 
 Remove-Item -LiteralPath $done -Force -ErrorAction SilentlyContinue
+$cfg = $null
 try {{
-    $box = Start-Process -FilePath $exe -ArgumentList {argv} -NoNewWindow `
-               -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
-    # Without a handle taken now, ExitCode reads as nothing once it has exited.
-    $null = $box.Handle
+    # The configuration goes to a file only SYSTEM and Administrators can
+    # touch, created here (CreateNew, so a file somebody planted under the
+    # same random name makes this fail rather than be used) in Windows' own
+    # temp folder, where an ordinary user can add files but not change or
+    # delete anyone else's. Raw UTF-8 bytes, no byte-order mark, which
+    # sing-box's JSON reader would refuse.
+    $cfg = Join-Path (Join-Path $env:SystemRoot 'Temp') ('relay-sing-box-' + [guid]::NewGuid().ToString('N') + '.json')
+    $sec = New-Object System.Security.AccessControl.FileSecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    foreach ($sid in 'S-1-5-18', 'S-1-5-32-544') {{
+        $who = New-Object System.Security.Principal.SecurityIdentifier $sid
+        $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule $who, 'FullControl', 'Allow'))
+    }}
+    $fs = New-Object System.IO.FileStream $cfg, ([IO.FileMode]::CreateNew), ([System.Security.AccessControl.FileSystemRights]::FullControl), ([IO.FileShare]::Read), 4096, ([IO.FileOptions]::None), $sec
+    $bytes = (New-Object System.Text.UTF8Encoding $false).GetBytes($config)
+    $fs.Write($bytes, 0, $bytes.Length)
+    $fs.Close()
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $exe
+    $psi.Arguments = 'run -c "' + $cfg + '" --disable-color'
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $box = [System.Diagnostics.Process]::Start($psi)
+    # Read as they come, or a chatty sing-box would fill the pipe and stall.
+    # What it logs while it runs goes to sing-box.log as well (the config's
+    # log.output), which is what the window reads live.
+    $outTask = $box.StandardOutput.ReadToEndAsync()
+    $errTask = $box.StandardError.ReadToEndAsync()
 }} catch {{
+    if ($cfg) {{ Remove-Item -LiteralPath $cfg -Force -ErrorAction SilentlyContinue }}
     Set-Content -LiteralPath $failed -Value "sing-box would not start: $_" -Encoding utf8
     Set-Content -LiteralPath $done -Value 'failed' -Encoding ascii
     exit 1
@@ -335,8 +391,32 @@ $deadline = $began.AddSeconds({startup})
 $canAsk = [bool](Get-Command Get-NetAdapter -ErrorAction SilentlyContinue)
 while (-not $box.HasExited) {{
     if (Test-Path -LiteralPath $stop) {{ break }}
+    if (Test-Path -LiteralPath $watchf) {{
+        # A new worker on the same port: carry on, watching it instead.
+        $next = 0
+        try {{ $next = [int]((Get-Content -LiteralPath $watchf -Raw).Trim()) }} catch {{ $next = 0 }}
+        Remove-Item -LiteralPath $watchf -Force -ErrorAction SilentlyContinue
+        if ($next -gt 0) {{
+            $watch = $next
+            Remove-Item -LiteralPath $held -Force -ErrorAction SilentlyContinue
+        }}
+    }}
+    # The window itself. Holding the line is the window's promise to undo
+    # it - by reconnecting or by Disconnect - and a window that has gone (a
+    # crash, a kill) can keep neither, so with it gone a hold is let go of
+    # rather than leaving the machine offline until somebody notices.
+    $uiGone = ($ui -and -not (Get-Process -Id $ui -ErrorAction SilentlyContinue))
     if ($watch -and -not (Get-Process -Id $watch -ErrorAction SilentlyContinue)) {{
-        Set-Content -LiteralPath $failed -Value 'the proxy it was carrying traffic to has stopped' -Encoding utf8
+        if ((Test-Path -LiteralPath $holdf) -and -not $uiGone) {{
+            Set-Content -LiteralPath $held -Value 'the proxy it was carrying traffic to has stopped; traffic is held' -Encoding utf8
+            $watch = 0
+        }} else {{
+            Set-Content -LiteralPath $failed -Value 'the proxy it was carrying traffic to has stopped' -Encoding utf8
+            break
+        }}
+    }}
+    if ($watch -eq 0 -and $uiGone) {{
+        Set-Content -LiteralPath $failed -Value 'Relay went away while holding traffic; the adapter was taken down' -Encoding utf8
         break
     }}
     if (-not $up) {{
@@ -369,7 +449,13 @@ if ($box.HasExited) {{
     Stop-Process -Id $box.Id -Force -ErrorAction SilentlyContinue
     $box.WaitForExit(5000) | Out-Null
 }}
+try {{
+    if ($outTask.Wait(2000)) {{ Set-Content -LiteralPath $out -Value $outTask.Result -Encoding utf8 }}
+    if ($errTask.Wait(2000)) {{ Set-Content -LiteralPath $err -Value $errTask.Result -Encoding utf8 }}
+}} catch {{ }}
+Remove-Item -LiteralPath $cfg -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $pidf -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $held -Force -ErrorAction SilentlyContinue
 Set-Content -LiteralPath $done -Value 'done' -Encoding ascii
 '''
 
@@ -449,45 +535,104 @@ class Tun:
 
     # -- up ------------------------------------------------------------------
 
+    @staticmethod
+    def fingerprint(port, own=(), carriers=(), split_rules=None, **_):
+        """What decides whether a running adapter is the one a connection
+        wants: everything in its configuration except the exit address it
+        routes around, which changes with every exit and is covered by the
+        process rule anyway (see Engine._engage)."""
+        cfg = build_config(port, (), own, carriers, None,
+                           split_rules=split_rules, line_resolver=None)
+        text = json.dumps(cfg, sort_keys=True)
+        return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+    def same_config(self, port, **want):
+        rec = self.record() or {}
+        return rec.get('fingerprint') == self.fingerprint(port, **want)
+
+    def rewatch(self, pid):
+        """A new worker on the same port: the running script watches it
+        from now on, and stops saying traffic is held."""
+        try:
+            with open(self._path('watch'), 'w', encoding='ascii') as f:
+                f.write(str(int(pid or 0)))
+        except OSError:
+            return False
+        rec = self.record() or {}
+        rec['watch'] = pid
+        try:
+            with open(self._path('state.json'), 'w', encoding='utf-8') as f:
+                json.dump(rec, f)
+        except OSError:
+            pass
+        return True
+
+    def set_hold(self, on):
+        """The kill switch, as the running script reads it: with the `hold`
+        file there, the worker going away leaves the adapter up."""
+        if on:
+            try:
+                os.makedirs(self.dir, exist_ok=True)
+                with open(self._path('hold'), 'w', encoding='ascii') as f:
+                    f.write('hold')
+            except OSError:
+                return False
+        else:
+            self._remove('hold')
+        return True
+
+    def held(self):
+        """Whether the script has said the worker went and it is holding."""
+        return os.path.exists(self._path('held'))
+
     def start(self, port, keep=(), watch=None, own=(), carriers=(),
-              split_rules=None):
+              split_rules=None, hold=False):
         exe = paths.singbox_exe()
         if not exe:
             raise RuntimeError('tun-missing: sing-box.exe was not found')
         self.stop()
         os.makedirs(self.dir, exist_ok=True)
         self._remove('ready', 'failed', 'stop', 'done', 'sing-box.pid',
-                     'sing-box.out', 'sing-box.err', 'sing-box.log')
+                     'sing-box.out', 'sing-box.err', 'sing-box.log',
+                     'held', 'watch', 'config.json', 'run.ps1')
+        self.set_hold(hold)
 
-        config = self._path('config.json')
-        with open(config, 'w', encoding='utf-8') as f:
-            json.dump(build_config(port, keep, own, carriers,
-                                   self._path('sing-box.log'),
-                                   split_rules=split_rules,
-                                   line_resolver=line_dns()
-                                   if split_rules else None), f, indent=2)
+        # ensure_ascii, so the text is the same bytes whatever PowerShell 5.1
+        # makes of the script's encoding - a path with a Persian user name in
+        # it comes out the other side unchanged.
+        config = json.dumps(build_config(port, keep, own, carriers,
+                                         self._path('sing-box.log'),
+                                         split_rules=split_rules,
+                                         line_resolver=line_dns()
+                                         if split_rules else None),
+                            ensure_ascii=True)
 
-        wrapper = self._path('run.ps1')
-        with open(wrapper, 'w', encoding='utf-8') as f:
-            f.write(WRAPPER.format(
-                exe=_ps_string(exe),
-                argv=_ps_array(['run', '-c', config, '--disable-color']),
-                out=_ps_string(self._path('sing-box.out')),
-                err=_ps_string(self._path('sing-box.err')),
-                pidf=_ps_string(self._path('sing-box.pid')),
-                ready=_ps_string(self._path('ready')),
-                failed=_ps_string(self._path('failed')),
-                stop=_ps_string(self._path('stop')),
-                done=_ps_string(self._path('done')),
-                nic=_ps_string(ADAPTER),
-                watch=int(watch or 0),
-                startup=STARTUP_SECONDS))
+        wrapper = WRAPPER.format(
+            exe=_ps_string(exe),
+            ui=int(os.getpid()),
+            out=_ps_string(self._path('sing-box.out')),
+            err=_ps_string(self._path('sing-box.err')),
+            pidf=_ps_string(self._path('sing-box.pid')),
+            ready=_ps_string(self._path('ready')),
+            failed=_ps_string(self._path('failed')),
+            stop=_ps_string(self._path('stop')),
+            done=_ps_string(self._path('done')),
+            nic=_ps_string(ADAPTER),
+            watch=int(watch or 0),
+            holdf=_ps_string(self._path('hold')),
+            held=_ps_string(self._path('held')),
+            watchf=_ps_string(self._path('watch')),
+            config=_ps_string(config),
+            startup=STARTUP_SECONDS)
 
         with open(self._path('state.json'), 'w', encoding='utf-8') as f:
-            json.dump({'port': port, 'watch': watch, 'since': time.time()}, f)
+            json.dump({'port': port, 'watch': watch, 'since': time.time(),
+                       'fingerprint': self.fingerprint(
+                           port, own=own, carriers=carriers,
+                           split_rules=split_rules)}, f)
 
-        script = ['-NoProfile', '-ExecutionPolicy', 'Bypass',
-                  '-WindowStyle', 'Hidden', '-File', wrapper]
+        # Hash-checked by the elevated side before it runs (sweep.elevated).
+        script, script_path = elevated(wrapper, self.dir, 'run')
         if is_admin():
             # Already elevated: no prompt to wait for. Its own process group
             # and no console, so it outlives this window when the setting
@@ -506,10 +651,12 @@ class Tun:
                     capture_output=True, text=True, timeout=300,
                     creationflags=CREATE_NO_WINDOW)
             except (OSError, subprocess.SubprocessError) as e:
+                discard(script_path)
                 self._remove('state.json')
                 raise RuntimeError(f'tun-failed: could not ask for elevation: {e}')
             if done.returncode != 0:
                 # The one that actually happens: the UAC prompt was dismissed.
+                discard(script_path)
                 self._remove('state.json')
                 raise RuntimeError('tun-refused: administrator rights were refused')
 
@@ -563,7 +710,8 @@ class Tun:
                 # stop - so it is ended directly, which needs the same rights
                 # it was started with.
                 self._kill(pid)
-        self._remove('state.json', 'stop', 'ready', 'sing-box.pid')
+        self._remove('state.json', 'stop', 'ready', 'sing-box.pid', 'hold',
+                     'held', 'watch')
         return was_up
 
     def _kill(self, pid):
