@@ -1094,19 +1094,31 @@
                     aria-labelledby="tunnelVerifyName"
                     aria-describedby="tunnelVerifySaid"><span></span></button>
           </div>
-          <!-- Only when the server's address is Iranian and checking is on. -->
-          <p class="note split__warn" id="tunnelIranNote" hidden>
-            <svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg>
-            <span>Your server looks like it is in Iran. Checking an exit means
-              your server sends the provider's name (such as
-              <span class="mono">*.prod.surfshark.com</span>) in the clear when
-              it connects, and Iran's filtering may block connections that
-              name a VPN provider. If server + exit keeps failing, turn
-              checking off for this server.</span>
+          <!-- Only when the server's address is Iranian. Measured 2026-11-12
+               from a server in Iran: an exit reached without its real name
+               is held to about 10 KB/s of upload, and checked (real name
+               sent) it runs at full speed - so the advice is to keep it on.
+               The switch above still turns it off, after asking. -->
+          <p class="note split__warn split__warn--calm" id="tunnelIranNote" hidden>
+            <svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>
+            <span>Your server looks like it is in Iran. Keep checking on:
+              from Iran, an exit reached without its real name is held to
+              about 10 KB/s of upload, and with checking on uploads run at
+              full speed. Turn it off only if connecting through the exit
+              fails entirely.</span>
           </p>
-          <div class="pane__row pane__row--acts" id="tunnelIranRow" hidden>
-            <button class="btn btn--quiet btn--auto" id="tunnelVerifyOff" type="button">Turn checking off&hellip;</button>
-          </div>
+          <!-- Only when the server's address is Iranian and Surfshark is one
+               of the providers server + exit can pick from. From a server in
+               Iran the TLS handshake failed on all 142 Surfshark clusters
+               (2026-11-12), with or without the name: the addresses are
+               blocked, not the account. Not enforced - blocks change. -->
+          <p class="note split__warn" id="tunnelSurfsharkNote" hidden>
+            <svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg>
+            <span id="tunnelSurfsharkSaid">Surfshark's exits cannot currently
+              be reached from servers in Iran - they are blocked at the
+              network level, whatever your server sends. Add a Windscribe
+              account and use it for server + exit.</span>
+          </p>
           <p class="note" id="tunnelVerifyNote" role="status" aria-live="polite"></p>
         </div>
       </div>

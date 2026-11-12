@@ -16,6 +16,8 @@ changes a feature updates its row.
 | Pin from the account cards | part | yes | Windows: on the provider cards only |
 | Race the provider's exits, first to answer wins | yes | yes | |
 | Own server, and server + exit | yes | yes | by IP (self-signed, pinned on first Test) or domain; one install command from Settings with the app's own passwords; server + exit sends the picked location and its provider's account |
+| Exit check for server + exit, per server, with Iran notices | yes | yes | on by default; the server sends the exit's real name and checks its certificate (from Iran this is what keeps upload fast - without it about 10 KB/s); turning it off asks first. Server in Iran: "keep it on", plus a Surfshark-is-blocked-from-Iran notice when a Surfshark account is in use, and that reason in a failed server + exit through Surfshark |
+| Direct exits: Windscribe dialled with its real name (SNI), Surfshark without | yes | yes | certificate checked by hand against the pinned name either way; Windows core/ovpn-proxy.py sni_for, Android mobile/core/exit.go sniFor |
 | Every program through it, not only proxy-aware ones (TUN) | yes | yes | Windows: Settings → Connection → Tunnel, sing-box + UAC; Android: always, VpnService |
 | Own server set up from one pasted key (relay://…) | yes | yes | printed by install-server.sh, kept in /etc/relay/key; carries the pin, both passwords, Shadowsocks and the TLS port when it is not 443 (--port) |
 | Shadowsocks straight to your own server's address | yes | yes | the server's port exits there, the next port goes through the exit-chain (server + exit); Windows via gost, Android in the Go core |

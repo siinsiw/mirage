@@ -401,11 +401,19 @@ class Tunnel:
         """How fast that mode carries an upload, in bytes a second; 0 if not
         at all within timeout.
 
-        From a server in Iran, upload is throttled per foreign exit IP: most
-        exits carry 10-20 KB/s up while downloading at megabytes, and a few in
-        the same city carry the full rate. Timed to Cloudflare's answer, which
-        only comes once every byte has arrived, so buffers on the way cannot
-        flatter a slow exit.
+        From a server in Iran, upload to a foreign exit can be throttled to
+        10-20 KB/s while downloads run at megabytes. It first looked like a
+        per-exit-IP choice; measured 2026-11-12 from a VPS in Iran it is
+        mostly the handshake. TLS to a Windscribe exit without SNI carried
+        0-17 KB/s per connection; with the exit's real name as SNI and its
+        certificate verified (verify_exit, the tunnel's `secure: true,
+        serverName`) six of seven exits carried 1.2-1.9 MB/s against a
+        3.4-4.1 MB/s uplink; an unrelated decoy name did not help. One exit
+        stayed slow whatever was sent, so bad exits still exist - which is
+        why this is measured rather than assumed. Surfshark's exits did not
+        complete TLS from that server at all. Timed to Cloudflare's answer,
+        which only comes once every byte has arrived, so buffers on the way
+        cannot flatter a slow exit.
         """
         opener = urllib.request.build_opener(urllib.request.ProxyHandler(
             {'https': f'http://127.0.0.1:{PORTS[mode]}'}))

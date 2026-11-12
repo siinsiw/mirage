@@ -15,9 +15,9 @@ same time, and no two of them are usually allowed together:
 
 | | |
 |---|---|
-| `ServerName: ""` | nothing is announced. A handshake that names `*.prod.surfshark.com` in the clear is killed on the way out. |
-| `InsecureSkipVerify: true` | not what it sounds like. With an empty `ServerName`, `crypto/tls` refuses to run at all unless this is set — so it is set, and everything it turns off is done by hand underneath. |
-| `VerifyPeerCertificate` | the chain still has to reach a system root, and the leaf still has to serve the real name. The name is proved, it is just never sent. |
+| `ServerName: sniFor(Name)` | nothing is announced to a Surfshark exit: a handshake that names `*.prod.surfshark.com` in the clear is killed on the way out. A Windscribe exit (`*.totallyacdn.com`) is sent its real name: measured 2026-11-12 from Iran, those exits reached without SNI carry about 10 KB/s of upload per connection, and with the name 1.2–1.9 MB/s. |
+| `InsecureSkipVerify: true` | not what it sounds like. With an empty `ServerName`, `crypto/tls` refuses to run at all unless this is set — so it is set, and everything it turns off is done by hand underneath, for both providers. |
+| `VerifyPeerCertificate` | the chain still has to reach a system root, and the leaf still has to serve the pinned name — whether or not that name was sent. |
 
 Kotlin can be argued into this with `SSLParameters` and a hand-rolled
 verifier. Dart cannot: `SecureSocket` sends the host you give it, and there is

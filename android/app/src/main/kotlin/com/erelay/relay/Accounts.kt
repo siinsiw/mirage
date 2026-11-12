@@ -28,6 +28,17 @@ object Accounts {
     const val SURFSHARK = "surfshark"
     const val WINDSCRIBE = "windscribe"
 
+    /**
+     * Surfshark as the exit of a server in Iran, in the words Settings and a
+     * failed server + exit both use. Measured 2026-11-12 from a server in
+     * Iran: the TLS handshake failed on all 142 Surfshark clusters - with the
+     * exit's name, without it, with a decoy - while the same exits answered
+     * normally from a server outside Iran. Their addresses are blocked there,
+     * not the account. Said, never enforced: blocks change.
+     */
+    const val SURFSHARK_FROM_IRAN = "Surfshark's exits cannot currently be reached from " +
+        "servers in Iran - they are blocked at the network level, whatever your server sends."
+
     private val LABELS = mapOf(SURFSHARK to "Surfshark", WINDSCRIBE to "Windscribe")
 
     private fun store(ctx: Context) = File(AppFiles.state(ctx), "accounts.json")

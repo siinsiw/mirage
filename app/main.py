@@ -478,6 +478,10 @@ class Api:
         self._holding = False
         # Whether the user's server is in Iran, by address: (domain, answer).
         self._iran_cache = (None, None)
+        # A sentence the page shows beside "Connected" for as long as this
+        # connection lasts: server + exit came up, but no exit it tried
+        # carried an upload (see _through_tunnel). Cleared by every connect.
+        self._exit_warning = None
         self._window = None
         self._hwnd_cache = None
         self._tray = None
@@ -513,6 +517,12 @@ class Api:
     def _emit(self, name, payload=None):
         if not self._window:
             return
+        if name == 'Connected' and self._exit_warning \
+                and isinstance(payload, dict):
+            # Every Connected, not only the first: the status is pushed
+            # again when the independent check answers, and the warning
+            # must not vanish with it.
+            payload = dict(payload, exitWarning=self._exit_warning)
         try:
             self._window.evaluate_js(
                 f'window.on{name}({json.dumps(payload or {}, ensure_ascii=False)})')
@@ -2659,7 +2669,10 @@ class Api:
     def setTunnelVerifyExit(self, on, confirmed=False):
         """The switch for this server. Turning it off needs `confirmed`: the
         page asks first, because it sends the provider account's password to
-        exits whose certificates are no longer checked."""
+        exits whose certificates are no longer checked - and, from a server
+        in Iran, because an exit reached without its name is held to about
+        10 KB/s of upload (measured 2026-11-12), so off is only ever the
+        answer when connecting through the exit fails entirely."""
         on = bool(on)
         if not on and not confirmed:
             return {'ok': False, 'needConfirm': True, 'verifyExit': True}
@@ -3140,6 +3153,14 @@ class Api:
         mode = self._settings.get('mode', 'surfshark')
 
         def work():
+            # Which providers' exits server + exit actually set on the server
+            # (the API took them), filled by _best_exit. Read back only if
+            # this fails: from a server in Iran, a failure through Surfshark
+            # exits has its own explanation (their addresses are blocked
+            # there), and the page needs to know that was what was tried to
+            # give it. Empty when no exit was set, and then it is not said.
+            tried = set()
+            self._exit_warning = None
             try:
                 if mode == 'surfshark':
                     result = self._engine.connect(
@@ -3147,7 +3168,8 @@ class Api:
                         provider=want, only=only, city=city)
                 else:
                     result = self._through_tunnel(where, mode, provider=want,
-                                                  only=only, city=city)
+                                                  only=only, city=city,
+                                                  tried=tried)
                 self._since = time.time()
                 self._holding = False
                 self._retray('on')
@@ -3196,21 +3218,25 @@ class Api:
                 # the page has no other way to know which port was tried.
                 self._emit('Failed', {'kind': kind, 'detail': str(e),
                                       'port': self._engine.port,
-                                      'blocked': blocked})
+                                      'blocked': blocked,
+                                      'mode': mode,
+                                      'exitProviders': sorted(tried)})
             finally:
                 self._busy = False
 
         threading.Thread(target=work, daemon=True).start()
         return {'ok': True}
 
-    def _through_tunnel(self, country, mode, provider=None, only=None, city=None):
+    def _through_tunnel(self, country, mode, provider=None, only=None, city=None,
+                        tried=None):
         """Connect by way of the user's own server.
 
         Multi-IP mode is the only one with a choice to make, and it makes it
         on the server: the exit is set through the API before the worker
         comes up, so the change is in place by the time anything is carried.
         Picking here rather than probing from this machine is deliberate -
-        see Engine.address_for.
+        see Engine.address_for. `tried`, when given, collects the providers
+        of the exits that were set (see _best_exit).
         """
         progress = lambda p: self._emit('Progress', p)
         client = self._tunnel_client()
@@ -3233,9 +3259,10 @@ class Api:
                     provider=provider, only=only, city=city)
                 if not ordered:
                     raise RuntimeError('no-servers')
-                # From a server in Iran, upload is throttled per foreign exit
-                # IP: most in a city carry next to nothing up while
-                # downloading at megabytes. So each is set in turn and asked
+                # From a server in Iran, upload to an exit can crawl while
+                # downloads run at megabytes - mostly when the exit is not
+                # checked (no SNI, see _best_exit), but one exit in seven
+                # stayed slow even checked. So each is set in turn and asked
                 # to carry an upload end to end, and the first that does is
                 # kept - the location stays the one picked. A single server
                 # was picked by hand and is used as it is.
@@ -3243,22 +3270,61 @@ class Api:
                     client, ordered, 1 if only else 6,
                     lambda s: progress({
                         'phase': 'starting', 'country': s.country,
-                        'city': f'testing upload via {s.file.split("_")[0]}'}))
+                        'city': f'testing upload via {s.file.split("_")[0]}'}),
+                    tried=tried)
                 label = server.country
+                if not only and rate <= 0:
+                    # Every exit tried read 0: none carried the test upload
+                    # end to end within the time. The connection is still
+                    # made - downloads may work, and the slowest exit is not
+                    # always a dead one - but the page says so rather than
+                    # showing a plain "Connected" over an exit that carries
+                    # nothing up. From a server in Iran through Surfshark the
+                    # reason is known (their addresses are blocked there).
+                    self._exit_warning = self._dead_exits_warning(tried)
 
         return self._engine.connect_tunnel(
             client.address('multi' if mode == 'multi' else 'single'),
             label, progress)
 
-    def _best_exit(self, client, ordered, tries, testing=None):
+    # The same sentence app.js (surfsharkFromIran) and the Android app
+    # (Accounts.SURFSHARK_FROM_IRAN) use. Measured 2026-11-12: from a server
+    # in Iran the TLS handshake failed on all 142 Surfshark clusters, with the
+    # name, without it and with a decoy, while the same exits answered from
+    # outside Iran. Said, never enforced: blocks change.
+    SURFSHARK_FROM_IRAN = ("Surfshark's exits cannot currently be reached "
+                           "from servers in Iran - they are blocked at the "
+                           "network level, whatever your server sends.")
+
+    def _dead_exits_warning(self, tried):
+        """What the page says beside "Connected" when every exit server +
+        exit tried read 0 on the upload test."""
+        surfshark_only = tried == {accounts.SURFSHARK}
+        try:
+            iran = surfshark_only and self._server_in_iran() is True
+        except Exception:
+            iran = False
+        if iran:
+            return ('Connected, but no exit carried an upload. '
+                    + self.SURFSHARK_FROM_IRAN
+                    + ' Use a Windscribe account for server + exit.')
+        return ('Connected, but none of the exits your server tried carried '
+                'an upload, so sending may not work. Try another location.')
+
+    def _best_exit(self, client, ordered, tries, testing=None, tried=None):
         """The server's exit-chain on whichever of `ordered` carries an
         upload best, tried in order: (server, ip, user, password, rate).
 
-        From a server in Iran, upload is throttled per foreign exit IP: most
-        in a city carry next to nothing up while downloading at megabytes.
-        So each is set in turn and asked to carry an upload end to end, and
-        the first that does is kept - the location stays the one picked. A
-        single server (tries 1) was picked by hand and is used as it is.
+        From a server in Iran, upload to a foreign exit can crawl at 10-20
+        KB/s while downloads run at megabytes. Measured 2026-11-12, that is
+        mostly the handshake: an exit dialled without its name (the check
+        turned off) is held to about 10 KB/s per connection, and checked
+        with its real name six of seven Windscribe exits ran at 1.2-1.9 MB/s
+        - but one stayed slow whatever was sent. So each is set in turn and
+        asked to carry an upload end to end, and the first that does is
+        kept - the location stays the one picked. A single server (tries 1)
+        was picked by hand and is used as it is. `tried`, when given, is a
+        set that collects the provider of every exit set here.
         """
         best, last = None, None
         for server in ordered[:tries]:
@@ -3271,6 +3337,11 @@ class Api:
             # `host` is the name the config was pinned from, which the
             # server checks the exit's certificate against (px.exit_tls).
             client.set_exit(ip, user, password, name=server.file, host=host)
+            # Only once the server took it: an API that refused (a wrong
+            # password, a 401) set no exit, and "tried Surfshark" would then
+            # explain a failure that had nothing to do with Surfshark.
+            if tried is not None and getattr(server, 'provider', None):
+                tried.add(server.provider)
             last = server.file
             if tries == 1:
                 best = (server, ip, user, password, 0)

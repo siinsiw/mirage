@@ -888,6 +888,9 @@ class RelayVpnService : VpnService() {
             // picked location's first, with that exit's own provider's
             // account - before anything goes through it.
             var exitPlace = ""
+            // The provider of the exit the server was left on, for the one
+            // failure below that has a known cause: Surfshark from Iran.
+            var exitVia = ""
             if (mode == "multi") {
                 val surfshark = Accounts.credentials(applicationContext, Accounts.SURFSHARK)
                 val windscribe = Accounts.credentials(applicationContext, Accounts.WINDSCRIBE)
@@ -915,8 +918,10 @@ class RelayVpnService : VpnService() {
                 try {
                     pending = pick
                     pick.load()
-                    // From a server in Iran, upload is throttled per foreign
-                    // exit: most in a city carry next to nothing up. Each is
+                    // From a server in Iran, upload to an exit can crawl -
+                    // mostly when the exit is not checked (2026-11-12: about
+                    // 10 KB/s without the exit's name, full speed with it),
+                    // but one exit in seven stayed slow even checked. Each is
                     // set and asked to carry an upload, and the first that
                     // does is kept - the location stays the one picked.
                     //
@@ -938,7 +943,18 @@ class RelayVpnService : VpnService() {
                         }
                     }
                     exitPlace = at.name + if (at.tookMs > 0) ", ${at.tookMs} KB/s up" else ", upload throttled"
+                    exitVia = at.provider
+                    // Nothing went up through any exit tried. Through Surfshark
+                    // from a server in Iran the reason is known, and the
+                    // connection's name says it rather than only "throttled".
+                    if (at.tookMs <= 0 && surfsharkFromIran(a, domain, at.provider) != null) {
+                        exitPlace = at.name + ", no upload - Surfshark is blocked from Iran"
+                    }
                 } catch (e: Exception) {
+                    // Not the place for the Surfshark-from-Iran reason: this
+                    // throws only when the server's API refuses, or there is
+                    // no account or no exit to try - a dead exit measures 0
+                    // and does not throw. The real error is the one to show.
                     fail(a, "$domain did not take the exit: " + (e.message ?: e.toString()).take(140))
                     return
                 } finally {
@@ -964,7 +980,11 @@ class RelayVpnService : VpnService() {
                     prefs.edit().putString(Keys.TUNNEL_PIN, seenPin).apply()
                 }
             } catch (e: Exception) {
-                fail(a, "$domain did not carry a request: " + (e.message ?: e.toString()).take(140))
+                val why = "$domain did not carry a request: " + (e.message ?: e.toString()).take(140)
+                // Through a Surfshark exit from a server in Iran, the likely
+                // reason first, and the error itself after it.
+                val known = if (mode == "multi") surfsharkFromIran(a, domain, exitVia) else null
+                fail(a, if (known != null) "$known ($why)" else why)
                 return
             }
 
@@ -1516,6 +1536,36 @@ class RelayVpnService : VpnService() {
             // address" is something the person can fix, if told.
             lanShareError = e.message ?: e.toString()
             Log.w(TAG, "sharing on the local network: ${e.message}")
+        }
+    }
+
+    /**
+     * The failure text for server + exit through a Surfshark exit when the
+     * server is in Iran, or null when that is not what happened - [provider]
+     * is not Surfshark, the server is not at an Iranian address, or the core
+     * could not tell. From a server in Iran every Surfshark cluster failed
+     * TLS on 2026-11-12 ([Accounts.SURFSHARK_FROM_IRAN]), so that is the
+     * reason to give before the error itself. Only asked on the way to a
+     * failure, or when no exit tried carried an upload - both already off the
+     * main thread; the attempt itself is never refused for it, because
+     * blocks change.
+     */
+    private fun surfsharkFromIran(a: Attempt, domain: String, provider: String): String? {
+        if (provider != Accounts.SURFSHARK || domain.isEmpty() || !a.current) return null
+        // Settings has usually asked already (RelayCore.checkServerInIran);
+        // its answer is taken as it is. Only without one is the core asked,
+        // briefly, and an attempt overtaken meanwhile says nothing.
+        val inIran = (application as? RelayApp)?.core?.knownServerInIran(domain) ?: try {
+            Relay.serverInIran(domain, 3000L)
+        } catch (e: Exception) {
+            false
+        }
+        if (!a.current) return null
+        return if (inIran) {
+            "could not connect through the exit. ${Accounts.SURFSHARK_FROM_IRAN} " +
+                "Use a Windscribe account for server + exit."
+        } else {
+            null
         }
     }
 

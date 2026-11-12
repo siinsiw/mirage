@@ -16,15 +16,20 @@ Two things have to stay off the wire for that to hold:
                 the address back out of the pinned file rather than looking
                 anything up again.
 
-  the name      not sent as SNI. A handshake that names *.prod.surfshark.com
-                in the clear gets killed on the way out - which is worth
-                knowing, because it is the same inspection that makes the
-                tunnel unusable, just at a different layer.
+  the name      not sent as SNI to a Surfshark exit. A handshake that names
+                *.prod.surfshark.com in the clear gets killed on the way out
+                - which is worth knowing, because it is the same inspection
+                that makes the tunnel unusable, just at a different layer.
+                A Windscribe exit (*.totallyacdn.com) is the opposite and is
+                sent its name: measured 2026-11-12 from Iran, TLS to those
+                exits without SNI is held to about 10 KB/s of upload per
+                connection, and with the real name it runs at full speed
+                (sni_for has the numbers).
 
 Dropping SNI would normally cost you authentication, so the certificate is
-checked by hand instead: the chain still has to verify against the system
-CAs, and the name still has to match what the certificate says it serves.
-The name is proved, it is just never announced.
+checked by hand instead, for both providers: the chain still has to verify
+against the system CAs, and the name still has to match what the certificate
+says it serves. The name is always proved, whether or not it is announced.
 
 What the browser sees is an ordinary proxy on 127.0.0.1 - no certificate to
 approve, no password prompt, nothing to explain to it.
@@ -349,13 +354,80 @@ WARM_TTL = 120
 OUT_MAX = 8
 
 
+# Every Windscribe exit is named under this domain ("fr-030.totallyacdn.com"),
+# which is how a dial tells Windscribe from Surfshark by the name alone.
+WINDSCRIBE_SUFFIX = '.totallyacdn.com'
+
+
+def sni_for(host):
+    """The name a handshake to this exit announces: the exit's own name for a
+    Windscribe exit, None (no SNI at all) for anything else.
+
+    Measured rather than chosen. On 2026-11-12, uploads from a server in Iran
+    through seven Windscribe exits in Zurich, Frankfurt and Amsterdam (2 MB
+    each to speed.cloudflare.com, three interleaved rounds):
+
+      no SNI                     0-17 KB/s on every exit, some refused outright
+      the exit's real name       1,237-1,915 KB/s on six of seven
+      an unrelated decoy name    4-17 KB/s - a decoy does not help
+
+    Four uploads in parallel through one exit without SNI each got 8-12 KB/s,
+    so the limit is per connection. The line throttles TLS that names nothing
+    and lets through TLS that names the certificate it gets back, and
+    Windscribe's names are not what its inspection kills - so they are sent.
+
+    Surfshark stays without SNI, which is what the module docstring describes:
+    a handshake naming *.prod.surfshark.com was killed on the way out. The
+    same day showed it would not help anyway - from that server the handshake
+    failed on all 142 Surfshark clusters with SNI, without it and with a
+    decoy, while the same exits answered normally from outside Iran. That is
+    the addresses being blocked, and nothing in the handshake changes it.
+    """
+    if host and host.rstrip('.').lower().endswith(WINDSCRIBE_SUFFIX):
+        return host
+    return None
+
+
+# (ip, port, name) -> True when a named handshake worked from here, False
+# when only the nameless retry did. See Exit.connect. Plain dict operations,
+# which the GIL keeps whole; two dials racing to write the same answer is
+# harmless.
+SNI_WORKED = {}
+
+
+class Filtered(OSError):
+    """TCP answered and the TLS handshake got nothing back - see _open.
+    An OSError as it always was, with the same words; a class of its own
+    only so that the nameless retry can recognise it."""
+
+
+def cut_on_the_way(e):
+    """Whether a failed handshake looks like the line cutting it - reset,
+    closed, or left unanswered - rather than an answer from the far end.
+
+    A certificate that fails the check is an answer and is never in here,
+    nor is anything that happened before the handshake (no `during_tls`).
+    """
+    if isinstance(e, ssl.SSLCertVerificationError):
+        return False
+    if isinstance(e, Filtered):
+        return True
+    if not getattr(e, 'during_tls', False):
+        return False
+    return isinstance(e, (ConnectionError, ssl.SSLEOFError,
+                          ssl.SSLZeroReturnError, socket.timeout,
+                          TimeoutError))
+
+
 class Exit:
     def __init__(self, ip, port, host, user, password, bind=None, warm=0):
         self.ip, self.port, self.host, self.bind = ip, port, host, bind
         self.auth = base64.b64encode(f'{user}:{password}'.encode()).decode()
         self.ctx = ssl.create_default_context()
         # The chain is still verified - only the name check is taken over
-        # below, because doing it in OpenSSL would mean sending the name.
+        # below, because doing it in OpenSSL would mean sending the name,
+        # and a Surfshark exit is dialled without it. A Windscribe exit is
+        # sent its name (sni_for) and still goes through the same hand check.
         self.ctx.check_hostname = False
         # Off unless a caller asks. Everything that sweeps builds one of
         # these per exit, and pre-opening connections there would multiply
@@ -368,12 +440,53 @@ class Exit:
         self.tally = collections.Counter()
 
     def connect(self):
+        """The TLS connection to the exit, verified by hand.
+
+        The exit's own name goes out as SNI for Windscribe, none for
+        Surfshark (sni_for). A named handshake that the line cuts - reset,
+        closed, or never answered - is tried once more without the name and
+        verified the same way; which of the two worked is kept in SNI_WORKED
+        for the life of the process, so a race or a sweep does not pay for
+        the dead handshake on every dial. The name was measured from one
+        datacentre line in Iran (2026-11-12), and a home or mobile line may
+        well cut what that one let through.
+
+        A certificate that fails the check is an answer from the far end,
+        not a cut line, and is never retried: a nameless retry would only
+        ask the same impostor again.
+        """
+        sni = sni_for(self.host)
+        key = (self.ip, self.port, (self.host or '').lower())
+        known = SNI_WORKED.get(key)
+        if sni and known is False:
+            sni = None
+        try:
+            tls = self._open(sni)
+        except Exception as e:
+            if not sni or known is True or not cut_on_the_way(e):
+                raise
+            try:
+                tls = self._open(None)
+            except Exception:
+                raise e from None
+            SNI_WORKED[key] = False
+            return tls
+        if sni:
+            SNI_WORKED[key] = True
+        return tls
+
+    def _open(self, sni):
+        """One attempt: a fresh TCP connection and one handshake, sending sni
+        (or nothing, when it is None), the certificate checked either way."""
         raw = socket.create_connection(
             (self.ip, self.port), timeout=20,
             source_address=(self.bind, 0) if self.bind else None)
         raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
-            tls = self.ctx.wrap_socket(raw)      # no server_hostname: no SNI
+            # check_hostname stays off whatever is sent, so sending the name
+            # does not hand the name check to OpenSSL; it is done by hand
+            # below for both providers.
+            tls = self.ctx.wrap_socket(raw, server_hostname=sni)
         except (socket.timeout, TimeoutError):
             # A third thing, and worth telling apart from the other two: the
             # TCP handshake completes at the normal round trip and then the
@@ -384,9 +497,13 @@ class Exit:
             # line and no amount of retrying will change it. Re-pin the exit
             # and take a different address for it.
             raw.close()
-            raise OSError('filtered here - TCP answers, TLS gets nothing back')
-        except OSError:
+            raise Filtered('filtered here - TCP answers, TLS gets nothing back')
+        except OSError as e:
             raw.close()
+            # Marked, so connect() can tell a handshake the line cut from a
+            # TCP connection that never opened - which sent no name, so
+            # leaving the name out cannot help it.
+            e.during_tls = True
             raise
         if not name_matches(tls.getpeercert(), self.host):
             tls.close()
@@ -396,7 +513,8 @@ class Exit:
 
     # ---- connections opened before anyone asked ----------------------------
     #
-    # connect() above is left exactly as it was on purpose: it is the method
+    # connect() above keeps its shape on purpose (one call, a verified TLS
+    # connection back, whatever retry it does inside): it is the method
     # the tests stub out, and all of this is built on top of it rather than
     # inside it, so the suite keeps covering the part that reaches the exit.
     #
@@ -747,6 +865,16 @@ def can_connect(exit_, timeout):
 # timing. Same account, same exit, measured both ways within a minute: six
 # uploads straight at it were refused with `Proxy CONNECT aborted` while
 # every one through the server went at 1.2-1.8 MB/s.
+#
+# How the server's own leg is dialled matters as much as which leg is timed.
+# Measured 2026-11-12 from a server in Iran: a Windscribe exit reached over
+# TLS without SNI carried 0-17 KB/s up (per connection - four in parallel got
+# 8-12 KB/s each), with the exit's real name as SNI and its certificate
+# verified 1,237-1,915 KB/s on six of seven exits, and with an unrelated
+# decoy name 4-17 KB/s. Surfshark's exits did not complete TLS from that
+# server at all, with or without a name. So server+exit is only fast with the
+# exit check on (the tunnel's `secure: true, serverName`), and this side
+# sends Windscribe exits their name too (sni_for).
 SWEEP_ROUTES = ('provider', 'server', 'server+exit')
 ROUTE_SAYS = {
     'provider':    'dialled straight at each exit from this line',
@@ -4333,12 +4461,17 @@ def exit_tls(host, verify=True):
     whoever answers at that address. Checked against the exit's own name -
     the one its config was pinned from - with the server's system CAs.
 
-    The cost is that the name then travels in the SNI of the server's
-    connection to the exit. That is invisible from here, but where the server
-    itself sits behind filtering that reads SNI (a server in Iran), a
-    provider's name in it can be what gets the connection reset. So it can be
-    turned off per server (`verifyExit: false` in tunnel.json, or the switch
-    in the window), which brings back the old unverified form.
+    The name then travels in the SNI of the server's connection to the exit,
+    and from a server in Iran that turned out to be the point rather than the
+    cost. Measured 2026-11-12 from one: Windscribe exits reached without SNI
+    carried 0-17 KB/s of upload, per connection; with the real name and the
+    certificate checked, six of seven carried 1,237-1,915 KB/s; an unrelated
+    decoy name did not help (4-17 KB/s). It can still be turned off per
+    server (`verifyExit: false` in tunnel.json, or the switch in the window),
+    which brings back the old unverified, nameless form - for a server whose
+    connection through the exit fails entirely, and at the price of that
+    upload speed. (Surfshark's exits did not complete TLS from that server
+    either way: their addresses are blocked from Iran.)
 
     Fails closed: with checking on and no name to check against, this
     raises rather than quietly sending the password unchecked. A pinned

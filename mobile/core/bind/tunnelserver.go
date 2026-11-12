@@ -184,10 +184,12 @@ func SetServerExit(cfg *ServerConfig, apiPassword, exitIP, exitName, user, passw
 // ServerInIran is whether the user's server is at an Iranian address, by the
 // Iran split-tunnelling preset's ranges: host as an IPv4 address, or a name
 // resolved over DoH (Cloudflare, pinned) - true when any of its addresses is
-// in the list. The settings screen asks it to decide whether to offer turning
-// the exit's certificate check (verify, above) off - with a confirmation:
-// from inside Iran, a handshake that names the provider is the kind the line
-// kills, and without the name nothing can be checked.
+// in the list. The settings screen asks it for its Iran notices - keep the
+// exit's certificate check (verify, above) on, because from Iran an exit
+// reached without its name is held to about 10 KB/s of upload and with it
+// runs at full speed (measured 2026-11-12); and Surfshark's exits cannot be
+// reached from a server in Iran at all - and the service asks it when server
+// + exit through Surfshark fails, to say why.
 //
 // An error is "could not tell" (a name that does not resolve, no network) -
 // not a no.

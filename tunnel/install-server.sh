@@ -16,11 +16,18 @@
 # ASCII characters and none of ' " ` $ \ { } #, the rule the apps share.
 #
 # --no-verify-exit keeps the old exit-chain dialer, TLS to the provider with
-# its certificate unchecked, where the default checks it against the
-# provider's hostname. Needed only when this server is in Iran and the SNI of
-# the provider's hostname is blocked on the way out, so a checked handshake
-# never completes; without it a man in the middle between here and the
-# provider could read the provider credential the chain carries.
+# its certificate unchecked and no SNI, where the default sends the exit's
+# real hostname (the one the app hands over with each exit) and checks the
+# certificate against it. Keep the default,
+# above all on a server in Iran: measured 2026-11-12 from one, uploads
+# through Windscribe exits ran at 1.2-1.9 MB/s with the real hostname and
+# about 10 KB/s per connection without it (an unrelated decoy name did not
+# help either). Use --no-verify-exit only if connecting through the exit
+# fails entirely; and without the check, a man in the middle between here
+# and the provider could read the provider credential the chain carries.
+# (Surfshark's exits did not complete TLS from that server at all, checked
+# or not: their addresses are blocked from Iran, and this flag does not
+# change that.)
 #
 # It only decides the placeholder chains this script writes. The real exit
 # chain is the app's: it sends one through the API every time it connects,
@@ -87,9 +94,11 @@ USAGE="usage: $0 <ip-or-domain> [--password P|-] [--api-password A|-] [--port N]
   --no-verify-exit  only the placeholder exit chains written here skip the
                     provider certificate check; the app pushes its own chain
                     when it connects, so turn exit checking off in the app
-                    for this server too (needed when SNI to the provider is
-                    blocked from here). Passwords given as - are read from
-                    stdin; RELAY_PASSWORD / RELAY_API_PASSWORD also work."
+                    for this server too. Checking is what keeps upload fast
+                    from a server in Iran (without it, about 10 KB/s), so use
+                    this only if connecting through the exit fails entirely.
+                    Passwords given as - are read from stdin;
+                    RELAY_PASSWORD / RELAY_API_PASSWORD also work."
 # `-` reads the value as one line from stdin, so it never sits in argv.
 from_stdin() { local v; IFS= read -r v || [ -n "$v" ] || { echo "$1: nothing on stdin" >&2; exit 1; }; printf '%s' "$v"; }
 while [ $# -gt 0 ]; do
@@ -809,8 +818,9 @@ if [ "$VERIFY_EXIT" = 0 ]; then
   --no-verify-exit: the exit chains written here do not check the provider's
   certificate, but the app replaces them with its own every time it
   connects. Turn exit checking off in the app for this server ("check the
-  exit"), or the chains it sends will be checked - and, with SNI to the
-  provider blocked from here, will not connect.
+  exit") only if connecting through the exit fails entirely: checking is
+  what keeps upload fast from a server in Iran, and without it uploads
+  through the exit are likely to drop to about 10 KB/s.
 
 SUMMARY
 fi

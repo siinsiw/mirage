@@ -35,10 +35,12 @@ type ExitHop struct {
 	// when empty) - a label, nothing is checked against it.
 	Node string
 	// Verify has the server check the exit's certificate against Hostname,
-	// as the phone does in exit.go. The default for every server; turned off
-	// only by the person, for a server whose own line kills a handshake that
-	// names the provider (one inside Iran - see ServerInIran), where checking
-	// would mean no exit works at all.
+	// as the phone does in exit.go, which also sends Hostname as SNI. The
+	// default for every server, and from a server in Iran the fast one:
+	// measured 2026-11-12, Windscribe exits reached without SNI carried about
+	// 10 KB/s of upload per connection, and with the real name 1.2-1.9 MB/s.
+	// Turned off only by the person, for a server whose connection through
+	// the exit fails entirely.
 	Verify bool
 }
 
@@ -102,9 +104,11 @@ func setChain(host string, port int, apiPassword, pin, chain string, hop ExitHop
 // ServerInIran is whether the user's server sits at an Iranian address -
 // by the Iran preset's own ranges, for an address as it is and for a name
 // as DoH answers it (any one of its addresses is enough). What the settings
-// screen asks before offering to turn ExitHop.Verify off: from inside Iran a
-// handshake that names the provider is the kind the line kills, and checking
-// the exit's certificate needs the name in it.
+// screen asks to show its Iran notices: keep ExitHop.Verify on (from Iran an
+// exit reached without its name is held to about 10 KB/s of upload, with it
+// full speed - measured 2026-11-12), and that Surfshark's exits cannot be
+// reached from there at all (every cluster failed TLS from a server in Iran
+// the same day, with or without the name).
 //
 // An error is "could not tell" - a name that would not resolve - and is not
 // a no.
