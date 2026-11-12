@@ -1,0 +1,98 @@
+"""Draw the Relay application icon.
+
+A multi-size .ico, not one image scaled down. Windows picks 16px for the
+taskbar and Alt-Tab, 32 for small views, 256 for large ones, and anything
+drawn once at 256 and resampled turns to grey mush at 16 - which is exactly
+the size the user sees most often.
+
+The mark is the one the Android app has: a disc, the ring around it open
+across the upper right, and the bead that has left through the opening.
+Drawn here on the same 256 grid as android/.../res/drawable/ic_launcher_fg.xml
+and ui/Logo.kt, so the two apps' icons are one drawing, not two that drift.
+"""
+
+import math
+import os
+
+from PIL import Image, ImageDraw
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, 'assets', 'app.ico')
+PNG = os.path.join(HERE, 'assets', 'app.png')
+
+# The disc white, the ring and bead the connected green (--ok).
+DISC = (255, 255, 255, 255)
+RING = (63, 207, 142, 255)
+EDGE = (150, 158, 172, 255)
+
+# The grid. The ring runs clockwise from 10 degrees above three o'clock to
+# 10 degrees right of twelve; the bead sits on the opening's bisector, a
+# little outside the ring.
+GRID = 256
+DISC_R = 56
+RING_R, RING_W = 100, 20
+RING_FROM, RING_TO = -10, 280
+BEAD_R, BEAD_ANGLE, BEAD_OUT = 16, -45, 132
+
+SIZES = (16, 24, 32, 48, 64, 128, 256)
+
+
+def mark(d, s, inset):
+    """The mark, in a square of side s, `inset` in from each edge."""
+    k = (s - 2 * inset) / GRID
+    cx = cy = s / 2
+
+    def at(angle, radius):
+        a = math.radians(angle)
+        return cx + radius * k * math.cos(a), cy + radius * k * math.sin(a)
+
+    def dot(x, y, r, fill):
+        d.ellipse([x - r, y - r, x + r, y + r], fill=fill)
+
+    # The white disc over a slightly wider grey one: with no panel behind it,
+    # white on a light taskbar is not there at all.
+    dot(cx, cy, DISC_R * k + max(1, 4 * k), EDGE)
+    dot(cx, cy, DISC_R * k, DISC)
+
+    def ring_and_bead(colour, grow):
+        r, w = RING_R * k, RING_W * k + 2 * grow
+        d.arc([cx - r - w / 2, cy - r - w / 2, cx + r + w / 2, cy + r + w / 2],
+              RING_FROM, RING_TO, fill=colour, width=max(1, round(w)))
+        # PIL's arc has square ends; the mark's are round.
+        for end in (RING_FROM, RING_TO):
+            dot(*at(end, RING_R), w / 2, colour)
+        dot(*at(BEAD_ANGLE, BEAD_OUT), BEAD_R * k + grow, colour)
+
+    # Green reads on a light taskbar and a dark one alike, so the ring needs
+    # no edge of its own.
+    ring_and_bead(RING, 0)
+
+
+def draw(size):
+    # 4x supersampling, then one clean resize, each size on its own.
+    # The mark on its own, with nothing behind it: Windows shows icons on
+    # the taskbar's own colour, and a dark square there is a tile nobody
+    # asked for. The square is the Android launcher's, which needs a shape.
+    s = size * 4
+    img = Image.new('RGBA', (s, s), (0, 0, 0, 0))
+    mark(ImageDraw.Draw(img), s, inset=s * 0.03)
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def main():
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    frames = [draw(n) for n in SIZES]
+    # Saved from the LARGEST frame. Pillow writes the image it is called on
+    # plus whatever is appended, so calling save() on the 16px one produces a
+    # 16px-only icon - which looks fine in the taskbar and like a smudge
+    # everywhere else.
+    frames[-1].save(OUT, format='ICO',
+                    sizes=[(n, n) for n in SIZES],
+                    append_images=frames[:-1])
+    draw(256).save(PNG)
+    print(f'{OUT}  ({os.path.getsize(OUT)} bytes, sizes {SIZES})')
+    print(PNG)
+
+
+if __name__ == '__main__':
+    main()

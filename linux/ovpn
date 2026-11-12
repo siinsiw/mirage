@@ -1,0 +1,751 @@
+#!/usr/bin/env bash
+#
+# ovpn - one name for the three scripts in this repo, and one idea on top of
+# them: the folder you are standing in is the folder you meant.
+#
+#     cd ~/ovpn-pin/success
+#     ovpn connect uk
+#
+# connects to a config in success/, not in pinned/. Nothing else in the repo
+# works that way - ovpn-connect.sh reads one folder, decided by OVPN_OUT_DIR
+# and defaulting to pinned/ - and that is deliberate: a script that quietly
+# acts on wherever you happen to be is a bad script. A command you typed the
+# name of, standing in a folder full of .ovpn files, is a different case. So
+# the convenience lives here, in the wrapper, and the scripts stay literal.
+#
+# Install it with `./linux/ovpn install`, which drops a symlink in ~/.local/bin.
+
+set -uo pipefail
+
+# Through the symlink, not from it. ~/.local/bin/ovpn is where this gets run
+# from; dirname of that is ~/.local/bin, which is not where ovpn-connect.sh
+# lives. readlink -f follows the link back to the repo.
+SELF_PATH=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null)
+[ -n "$SELF_PATH" ] || SELF_PATH=${BASH_SOURCE[0]}
+HERE=$(cd -- "$(dirname -- "$SELF_PATH")" && pwd)
+
+# Two answers, and one name for both is how this ends up reading configs out
+# of linux/ and finding none. HERE is linux/, where the other three scripts
+# are; ROOT is the repo above it, where configs/, pinned/, success/, .env and
+# the credentials live - beside the platform folders, not inside one of them.
+ROOT=$(cd -- "$HERE/.." && pwd)
+
+CON=$HERE/ovpn-connect.sh
+PIN=$HERE/resolve-ovpn-remote.sh
+MENU=$HERE/run.sh
+PRX=$ROOT/core/ovpn-proxy.py
+
+if [ -t 1 ]; then
+    # 37m rather than 90m for the asides. "Bright black" on a black terminal
+    # is very nearly nothing, and the asides are where the explanations are.
+    C_OFF=$'\033[0m'; C_CYAN=$'\033[36m'; C_GRAY=$'\033[37m'
+    C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
+else
+    C_OFF=''; C_CYAN=''; C_GRAY=''; C_RED=''; C_GREEN=''; C_YELLOW=''
+fi
+
+note() { printf '  %s%s%s\n' "$C_GRAY" "$*" "$C_OFF"; }
+ok()   { printf '  %s[ ok ]%s %s\n' "$C_GREEN" "$C_OFF" "$*"; }
+warn() { printf '  %s[warn]%s %s\n' "$C_YELLOW" "$C_OFF" "$*"; }
+die()  { printf '\n  %s[fail]%s %s\n\n' "$C_RED" "$C_OFF" "$*" >&2; exit 1; }
+
+for f in "$CON" "$PIN" "$MENU"; do
+    [ -f "$f" ] || die "$(basename -- "$f") is missing from $HERE.
+         The symlink points at a copy of the repo that has moved or been
+         deleted. Re-run ./linux/ovpn install from wherever the repo is now."
+done
+
+# --------------------------------------------------------------- the folder
+
+# Everything below decides one thing: whether to set OVPN_OUT_DIR to $PWD.
+#
+# It says no far more often than yes, because getting this wrong means acting
+# on a folder the user did not mean, and the failure would be silent - a sweep
+# of the wrong twenty configs looks exactly like a sweep of the right twenty.
+#
+# Answers it without acting on it, so that `ovpn where` can ask the same
+# question `ovpn connect` does and get the same answer. Two copies of this
+# would drift, and the whole value of `where` is that it tells you what the
+# other commands are about to do.
+#
+# Prints the folder, or fails if $PWD is not one.
+cwd_folder() {
+    local f
+
+    # Anything explicit outranks standing somewhere. If OVPN_OUT_DIR is
+    # already set, or the command line names a folder itself, that is an
+    # answer and this has no business overriding it.
+    [ -n "${OVPN_OUT_DIR:-}" ] && return 1
+    case " $* " in
+        *' --retest '*|*' --success-dir '*|*' --sitetest-dir '*) return 1 ;;
+    esac
+
+    # The repo root and linux/ hold folders and scripts, not configs. Running
+    # `ovpn connect` from either means pinned/, which is what the script does
+    # by itself.
+    if [ "$PWD" = "$ROOT" ] || [ "$PWD" = "$HERE" ]; then return 1; fi
+
+    # A folder with no .ovpn in it is not a config folder, and pretending it
+    # is would turn `ovpn stop` typed in your home directory into an error
+    # about there being no configs there.
+    for f in "$PWD"/*.ovpn; do
+        [ -e "$f" ] || return 1
+        break
+    done
+
+    printf '%s' "$PWD"
+}
+
+# configs/ holds the downloaded originals - the ones that still point at a
+# hostname. Connecting to those is precisely what this repo exists to avoid,
+# so it is worth saying rather than letting it fail puzzlingly later.
+warn_if_originals() {
+    [ "$1" = "$ROOT/configs" ] || return 0
+    warn 'these are the downloaded originals - they still name a hostname,'
+    note '       which is the thing your resolver lies about. Pin them first:'
+    note '            ovpn pin'
+    printf '\n'
+}
+
+use_cwd() {
+    local here
+    here=$(cwd_folder "$@") || return 0
+    warn_if_originals "$here"
+    export OVPN_OUT_DIR=$here
+    note "folder: $here  ($(count_configs "$here") configs)"
+}
+
+count_configs() {
+    local d=$1 f n=0
+    for f in "$d"/*.ovpn; do [ -e "$f" ] && n=$((n + 1)); done
+    printf '%s' "$n"
+}
+
+# ------------------------------------------------------------------ install
+
+# Debian and Ubuntu ship a ~/.profile that adds ~/.local/bin to the PATH *if
+# the folder exists*. Two things about that are easy to get wrong, and the
+# first version of this got both:
+#
+#   - the test runs at login. If the folder did not exist then - and until
+#     `ovpn install` ran, it did not - the line does nothing, and no amount of
+#     opening new terminals re-runs it. It takes a logout.
+#   - ~/.profile is for login shells. A new terminal window is an interactive
+#     non-login shell: it reads ~/.bashrc and never looks at ~/.profile at all.
+#
+# So "your ~/.profile already handles it" is true and useless. The rc file is
+# what a new terminal actually reads, so that is where the line goes.
+add_to_path() {
+    local bindir=$1 rc line
+    line="export PATH=\"$bindir:\$PATH\""
+
+    case ${SHELL##*/} in
+        zsh)  rc=$HOME/.zshrc ;;
+        bash) rc=$HOME/.bashrc ;;
+        *)    rc='' ;;
+    esac
+
+    if [ -z "$rc" ]; then
+        printf '\n'
+        warn "$bindir is not on your PATH."
+        note "       Your shell is ${SHELL##*/}, so add this wherever it keeps its PATH:"
+        note "            $line"
+        return 0
+    fi
+
+    if [ -f "$rc" ] && grep -qsF "$bindir" "$rc"; then
+        note "$rc already adds $bindir"
+        note 'so a new terminal will find it. This one will not - for that:'
+        note "     $line"
+        return 0
+    fi
+
+    { printf '\n# added by ovpn install\n%s\n' "$line" >> "$rc"; } 2>/dev/null || {
+        printf '\n'
+        warn "could not write $rc. Add this line to it yourself:"
+        note "            $line"
+        return 0
+    }
+
+    printf '\n'
+    ok "added $bindir to your PATH in $rc"
+    note 'Every new terminal will find it. This one already started, so for'
+    note 'the shell you are in now:'
+    printf '\n'
+    note "     $line"
+    printf '\n'
+    note "Undo by deleting that line from $rc."
+}
+
+# `px` has to be a shell function, not a script and not a symlink: it sets
+# variables in the shell you typed it into, and nothing run as a child can do
+# that to its parent. So the rc file has to source the file that defines it.
+add_shell_function() {
+    local rc line
+    line=". \"$HERE/ovpn-shell.sh\""
+
+    case ${SHELL##*/} in
+        zsh)  rc=$HOME/.zshrc ;;
+        bash) rc=$HOME/.bashrc ;;
+        *)    rc='' ;;
+    esac
+
+    if [ -z "$rc" ]; then
+        note "For the px command, add this wherever ${SHELL##*/} keeps its startup:"
+        note "     $line"
+        return 0
+    fi
+
+    if [ -f "$rc" ] && grep -qsF "$line" "$rc"; then
+        note "$rc already sources ovpn-shell.sh"
+        return 0
+    fi
+
+    # A line that names ovpn-shell.sh but is not this one is an older install
+    # pointing where the file used to be. Worth repairing rather than adding
+    # beside, and worth noticing at all: a `.` on a path that is gone fails
+    # that one startup line and the shell carries straight on, so the only
+    # symptom is px quietly not existing.
+    if [ -f "$rc" ] && grep -qsE '^[[:space:]]*\..*ovpn-shell\.sh' "$rc"; then
+        if sed -i.ovpn-bak "s|^[[:space:]]*\..*ovpn-shell\.sh.*$|$line|" "$rc" 2>/dev/null
+        then
+            ok "pointed $rc at this copy of ovpn-shell.sh"
+            note "     the line it replaced is in $rc.ovpn-bak"
+        else
+            warn "$rc sources ovpn-shell.sh from somewhere else, and could not"
+            note "       be rewritten. Change that line by hand to:"
+            note "     $line"
+        fi
+        return 0
+    fi
+
+    { printf '%s\n' "$line" >> "$rc"; } 2>/dev/null || {
+        warn "could not write $rc. For the px command, add this yourself:"
+        note "     $line"
+        return 0
+    }
+    ok "added the px command to $rc"
+}
+
+do_install() {
+    local bindir=${1:-$HOME/.local/bin} link rc
+
+    mkdir -p -- "$bindir" || die "cannot create $bindir"
+    link=$bindir/ovpn
+
+    if [ -e "$link" ] && [ ! -L "$link" ]; then
+        die "$link exists and is not a symlink. Move it out of the way first."
+    fi
+    ln -sfn -- "$SELF_PATH" "$link" || die "cannot write $link"
+
+    # The executable bit does not survive a zip, and a tree cloned on Windows
+    # never had one to record. Everything here is run through `bash` anyway,
+    # so this is only so that ./linux/ovpn-connect.sh keeps working by hand.
+    chmod +x -- "$SELF_PATH" "$CON" "$PIN" "$MENU" 2>/dev/null || true
+
+    printf '\n'
+    ok "$link  ->  $SELF_PATH"
+
+    case ":$PATH:" in
+        *":$bindir:"*) note "$bindir is on your PATH - type: ovpn" ;;
+        *)             add_to_path "$bindir" ;;
+    esac
+    add_shell_function
+    printf '\n'
+    note 'Then, from anywhere:'
+    note '     ovpn                     the menu'
+    note '     ovpn connect uk-lon      connect, by part of a name'
+    note '     ovpn sweep --one-per     test one address per location'
+    note '     ovpn status              what is up'
+    note '     ovpn stop                put everything back'
+    printf '\n'
+    note 'And the reason it is worth having on the PATH:'
+    note '     cd success && ovpn connect uk'
+    note 'acts on success/, because that is where you were standing.'
+    printf '\n'
+    note 'For the terminal itself, in a new shell:'
+    note '     px                       send this shell through the proxy'
+    note '     px off                   stop'
+    printf '\n'
+}
+
+do_uninstall() {
+    local bindir=${1:-$HOME/.local/bin} link rc
+    link=$bindir/ovpn
+    printf '\n'
+    if [ -L "$link" ]; then
+        rm -f -- "$link" && ok "removed $link"
+    else
+        note "nothing to remove at $link"
+    fi
+    note 'The repo itself is untouched.'
+    # Same reasoning as add_to_path: a line someone may have edited is not
+    # ours to delete on a guess, so it gets named rather than removed.
+    case ${SHELL##*/} in
+        zsh)  rc=$HOME/.zshrc ;;
+        bash) rc=$HOME/.bashrc ;;
+        *)    rc='' ;;
+    esac
+    if [ -n "$rc" ] && grep -qsF 'ovpn-shell.sh' "$rc"; then
+        note "$rc still sources ovpn-shell.sh, which is what defines px."
+        note 'Delete that line from it if you want px gone too.'
+    fi
+    printf '\n'
+}
+
+# --------------------------------------------------------------------- help
+
+usage() {
+    cat <<EOF
+
+  ${C_CYAN}ovpn${C_OFF} - pin OpenVPN configs to real addresses, connect to them, and find
+         out which of them the web will actually serve.
+
+  ${C_GRAY}Standing in a folder that has .ovpn files in it makes that the folder
+  every command below acts on. Otherwise pinned/. It says which one it
+  chose before anything happens - \`ovpn help folders\` for the rules.${C_OFF}
+
+  ${C_CYAN}Connecting${C_OFF}
+
+    ovpn
+        The menu. Every item prints the command your answers came to before
+        running it, so it is a way of learning the flags rather than hiding them.
+
+    ovpn connect [name]
+        A number from the list, a whole filename, or enough of one to be
+        unambiguous - \`ovpn connect uk-lon\`. Ambiguous is refused, not guessed.
+        No name at all lists what is there, with the last sweep's verdict beside
+        each. Probes the address first and only reaches for the proxy if it has
+        to, then switches the system proxy off once the tunnel is up.
+
+    ovpn <name>
+        Same thing. Any word that is not a command below is taken as a config
+        name, so \`ovpn uk-lon\` is the short form.
+
+    ovpn switch <name>
+        Bring down what is up, wait for its routes to go with it, then connect
+        that one. Not the same as stop-then-connect typed quickly.
+
+    ovpn stop
+        Tunnel down, system proxy back to what it was, kill switch removed.
+
+    ovpn status
+        What is up, which device it is on, and - by asking Cloudflare - where
+        your traffic is actually leaving from. That last part is the one your
+        own machine cannot tell you.
+
+  ${C_CYAN}When the tunnel connects but crawls${C_OFF}
+
+    ovpn proxy
+        What is running, and through which exit. Starts nothing. It has
+        commands of its own - connect, status, stop, sweep, env - and
+        \`ovpn proxy help\` lists them. Any one on its own:
+        \`ovpn proxy sweep -h\`.
+
+    ovpn proxy connect [name]
+        Serve a browser proxy through an exit. With no name it asks around
+        140 of them which will take the credentials and takes the quickest
+        that will - which is the way to use it, because a good many refuse at
+        any one time and there is no telling which from the config. Naming
+        one still works when you want a particular country; it asks before it
+        listens rather than coming up healthy and answering 502 to
+        everything.
+
+    ovpn proxy stop
+        Ends it, and says which one it ended. With more than one running it
+        will not guess - --port N ends that one, --all ends every one.
+
+    ovpn proxy connect de-ber --port 8899 --detach
+        A second proxy, on a second port, through a second exit. Worth doing
+        when something wants an exit that does not move under it - a
+        terminal, a chat client - while the browser's keeps being changed.
+        The two know nothing of each other: starting, stopping or
+        reconnecting one leaves the other serving.
+
+        --detach is what makes the second one worth having. It comes back
+        instead of holding the terminal, and having no terminal of its own
+        it outlives that one closing, and logging out. Without it the proxy
+        lives exactly as long as the window you started it in.
+
+        The exit is chosen, checked and proved before anything is detached,
+        so a failure lands here rather than in a log you have to go and
+        find. Output goes to .state/proxy-8899.out.
+
+    px
+        Send the shell you are typing in through the proxy that is running.
+
+          px            through whichever one is up
+          px 8899       through the one on that port
+          px off        stop
+          px status     what this shell is set to, and whether it still works
+
+        curl, git, npm, pip and wget read what it sets. The host you asked
+        for is resolved at the exit rather than here, so no local resolver
+        is given the chance to answer for it.
+
+        px is a shell function rather than a command, and has to be: it
+        changes the shell you typed it in, and nothing run as a child can do
+        that to its parent. \`ovpn install\` adds the line that defines it.
+        By hand, in ~/.bashrc:
+
+          . $HERE/ovpn-shell.sh
+
+        With more than one proxy up it wants to be told which - or name one
+        once, in the same rc file, and stop thinking about it:
+
+          export OVPN_PROXY_PORT=8899
+
+        The same exits also run an HTTPS proxy on 443, and a line that
+        throttles OpenVPN usually has no opinion about that - it cannot tell
+        it apart from any other HTTPS connection. Measured on one such line:
+        0.3 Mbit through the tunnel, 99 through the proxy. Same server, same
+        exit address, same credentials.
+
+        Serves a plain proxy on 127.0.0.1:8888 for the browser to point at.
+        No certificate to approve and no password prompt, because it hides
+        neither from you - it hides them from the browser:
+
+          --port N        listen somewhere else than 8888
+          --host NAME     the name the certificate must serve. Read out of
+                          the config's pin comment when you do not say
+          --bind ADDR     which address to leave from. Needed only when a
+                          tunnel owns the default route, or this goes out
+                          through the very thing it exists to avoid
+          --warm N        connections to the exit opened before they are
+                          asked for. Two by default, four at most, 0 off.
+                          Removes two round trips from every new connection:
+                          measured 343 ms down to 140 ms, one at a time
+
+        Carries HTTP and SOCKS5, on the one port, decided by the first byte
+        a client sends - 0x05 is SOCKS5, a letter is HTTP. Nothing has to be
+        configured to get both and there is no second port. Nothing else on
+        the machine goes through it. Ctrl-C ends it, and there is nothing to
+        put back - it changes no routes, no DNS and no system setting while
+        it runs.
+
+    ${C_CYAN}Telegram must be set to SOCKS5, not HTTP${C_OFF}
+
+        Told its proxy is HTTP, Telegram Desktop turns its TCP transport off
+        altogether:
+
+          const auto useTcp = (proxyType != ProxyData::Type::Http);
+
+        After that it never tunnels. Every MTProto packet becomes its own
+        POST to port 80 in the clear, one request per message, and no
+        setting changes it - the branch has no exception in it. On SOCKS5 it
+        keeps one long-lived connection instead, which is what the Windows
+        system proxy was quietly doing all along and why that always felt
+        quicker than pointing Telegram at this by hand.
+
+        So, in Connection type - Custom - SOCKS5:
+
+          127.0.0.1   the port this is on   no username, no password
+
+        No password because it listens on the loopback only, and one between
+        two programs on the same machine protects nothing the machine does
+        not already. The exit sees none of this: a SOCKS5 request becomes
+        the same CONNECT it has always been sent, so Surfshark's own SOCKS5
+        being discontinued has no bearing on it.
+
+        A name asked for over SOCKS5 is forwarded rather than resolved here
+        - the socks5h behaviour - so no local resolver is given the chance
+        to answer for it. Telegram asks by address anyway.
+
+        Two things stay off the wire so it survives the path: the address,
+        which is read out of the pinned config rather than looked up again,
+        and the name, which is never sent as SNI. A handshake that says
+        *.prod.surfshark.com in the clear gets killed on the way out. The
+        certificate is checked by hand instead, so the name is proved
+        without being announced.
+
+    ovpn proxy sweep
+        Ask every exit in the folder what it serves, over that same 443, and
+        rank them by how quickly it answered. Nothing is connected and no
+        route moves, so they go at once rather than one every half minute.
+
+        Forty at a time unless --first says otherwise, and that cap is the
+        point rather than a shortcut: sweep several hundred and the refusals
+        stop being about the exits. The same 17 configs come back 16/17
+        rested and 3/17 after a long run.
+
+          --site a.com,b.com   also ask each exit for those. An exit has to
+                               serve all of them to be kept
+          --one-per            one address per exit rather than all of them
+          --first N            stop after N
+          --jobs N             how many at once (12)
+          --connect-only       stop at the proxy, fetch nothing. Fast, and
+                               says only that an exit will talk to you
+
+        What served lands in proxy-ok/, named so that sorting the folder by
+        name sorts it by how quick the exit was - the same convention success/
+        uses. Every result including the failures goes to
+        .state/proxy-exits.tsv.
+
+        It does not write to success/ and does not read it. That folder means
+        "the tunnel came up here", which is a different question with a
+        different answer - on a throttled line, one that came up is not one
+        you can use.
+
+  ${C_CYAN}Finding out which exits are any good${C_OFF}
+
+    ovpn sweep [name]
+        Connect to each config in turn, ask Cloudflare what it makes of that
+        exit, drop it, next. Half a minute each. What comes up is copied into
+        success/ with the handshake time in the name, so that folder sorted by
+        name is "what to reach for when a tunnel drops". Narrow it:
+
+          --one-per                     one address per location   (~140)
+          --one-per-landlord            one per hosting company    (~20, start here)
+          --one-per-landlord-location   one per company per location
+          --landlord M247,Datacamp      only those companies
+          --pick-landlord               list the companies, choose by number
+          --retest                      sweep success/ instead of pinned/
+          --site a.com,b.com            also test those hosts on every exit
+          --first N                     stop after N
+          --pick                        connect the best one when it is done
+
+        Out of each group it takes whichever address connected quickest last
+        time, read off the names in success/.
+
+    ovpn check
+        Judge the exit you are on this second. Connects to nothing. Cloudflare
+        rules are per-customer, so a strict site can refuse an exit that
+        Cloudflare's own pages serve happily - \`--site\` names extra ones.
+
+    ovpn dns-check
+        Is DNS going through the tunnel, or still being answered by your ISP?
+        A poisoned answer reaches you through a perfectly good tunnel.
+
+    ovpn who
+        Name the hosting company behind each address - M247, Datacamp,
+        Clouvider - and group them by it. Connects to nothing. One company is
+        near enough one address as far as being blocked goes.
+
+  ${C_CYAN}Pinning${C_OFF}
+
+    ovpn pin
+        Read every file in configs/, look each hostname up over DNS-over-HTTPS,
+        and write copies into pinned/ with the real address written in. The
+        originals are never touched. Start here.
+
+    ovpn sync
+        Re-resolve the hostnames behind what is already pinned. Providers move
+        addresses; a pinned file cannot follow them.
+
+  ${C_CYAN}Housekeeping${C_OFF}
+
+    ovpn install [dir]     symlink this into ~/.local/bin, or dir
+    ovpn uninstall [dir]   remove that symlink. The repo is untouched
+    ovpn where             which repo this name points at, and which folder
+                           it would act on if you ran something now
+    ovpn version
+
+  ${C_CYAN}More${C_OFF}
+
+    ovpn help folders      the folder rules, and which ones get written to
+    ovpn help connect      every flag ovpn-connect.sh takes
+    ovpn help pin          every flag resolve-ovpn-remote.sh takes
+    ovpn help proxy        every flag ovpn-proxy.py takes
+
+  Flags are passed straight through, so anything in those two lists works here:
+
+      cd success && ovpn sweep --one-per --landlord M247 --site example.com
+
+EOF
+}
+
+help_folders() {
+    cat <<EOF
+
+  ${C_CYAN}Which folder ovpn acts on${C_OFF}
+
+  If the directory you are standing in has .ovpn files in it, that is the one.
+  Otherwise pinned/. Either way it says so on one line before anything runs:
+
+      folder: /home/you/ovpn-pin/success  (528 configs)
+
+  It declines more often than it accepts, because acting on a folder you did
+  not mean fails silently - a sweep of the wrong twenty configs looks exactly
+  like a sweep of the right twenty. It stays out of it when:
+
+    - OVPN_OUT_DIR is already set in your shell. You said it; it stands.
+    - the command line carries --retest, --success-dir or --sitetest-dir.
+      Same reason.
+    - you are in the repo root. That holds scripts, not configs.
+    - the folder has no .ovpn in it. Otherwise \`ovpn stop\` typed at home
+      would fail complaining there are no configs in your home directory.
+
+  configs/ it will use, with a warning: those are the files you downloaded,
+  and they still name a hostname - which is the thing your resolver lies
+  about, and the reason this repo exists. Pin them first.
+
+  ${C_CYAN}Which folders get written to${C_OFF}
+
+  A sweep only ever reads the folder you point it at. What it writes, it
+  writes to these, wherever it was pointed:
+
+      success/                    everything that connected, time in the name
+      success/landlord/           the quickest per company, per country
+      success/landlord/fastest/   the quickest per company, anywhere
+      sitetest/<host>/            what actually served that --site host
+
+  So sweeping configs/ cannot damage configs/. It is merely pointless, for the
+  hostname reason above.
+
+  ${C_CYAN}The two folders worth knowing about${C_OFF}
+
+  Point a sweep at success/ and it becomes a re-test: anything that has stopped
+  connecting is dropped from it, because a folder that says these all work
+  should not be quietly wrong. It says so before it starts. Every deletion
+  there is keyed on a config's own name, so nothing else is touched.
+
+  The landlord folders are the exception. They keep one entry per *company*,
+  so their deletions are keyed on a tag that several different configs share:
+  sweep one of them and the first M247 to come up deletes the other M247 files,
+  including ones still queued in that same sweep. Those are skipped and named
+  rather than reported as broken, and the sweep warns you at the start - but
+  the question is better asked as
+
+      ovpn sweep --retest --one-per-landlord
+
+  which tests one address per company out of success/ and prunes nothing.
+
+EOF
+}
+
+do_where() {
+    printf '\n'
+    note "repo   : $ROOT"
+    note "command: $SELF_PATH"
+    note "here   : $PWD"
+    local here
+    if [ -n "${OVPN_OUT_DIR:-}" ]; then
+        note "folder : $OVPN_OUT_DIR  ($(count_configs "$OVPN_OUT_DIR") configs, from OVPN_OUT_DIR in your shell)"
+        printf '\n'
+    elif here=$(cwd_folder); then
+        note "folder : $here  ($(count_configs "$here") configs, because you are standing in it)"
+        printf '\n'
+        warn_if_originals "$here"
+    else
+        note "folder : $ROOT/pinned  ($(count_configs "$ROOT/pinned") configs, the default)"
+        printf '\n'
+    fi
+}
+
+# ----------------------------------------------------------------- dispatch
+
+# Through `bash` rather than on the executable bit, for the same reason run.sh
+# does it: a tree that arrived by zip, or was cloned on Windows, has no such
+# bit, and "Permission denied" says nothing about which of those happened.
+con()  { use_cwd "$@"; exec bash "$CON" "$@"; }
+pin()  { exec bash "$PIN" "$@"; }
+
+# Whichever of these is python 3. On Windows the name is `python`, on most
+# Linux boxes `python3`, and on some both exist with only one of them being
+# version 3 - so ask each rather than trusting the name.
+find_python() {
+    local p
+    for p in python3 python; do
+        command -v "$p" >/dev/null 2>&1 || continue
+        "$p" -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)' \
+            >/dev/null 2>&1 && { printf '%s' "$p"; return 0; }
+    done
+    return 1
+}
+
+# The one command here that needs python, because it is the one that has to
+# hold a socket open in both directions for a browser and check a certificate
+# by hand along the way. Neither bash nor curl will do that.
+prx() {
+    local py
+    [ -f "$PRX" ] || die "ovpn-proxy.py is missing from $ROOT/core.
+         It ships with the repo - this copy is older than the command."
+    py=$(find_python) || die 'ovpn proxy needs python 3, and neither python3
+         nor python on your PATH is it. Nothing else in this repo needs it,
+         so the rest still works.'
+
+    # Bare `ovpn proxy` says what is running rather than starting something -
+    # the same courtesy `ovpn status` extends. Anything else is passed through
+    # untouched, so the verb stays at the front where ovpn-proxy.py looks for
+    # it, and a mistyped one gets named there rather than here.
+    [ $# -eq 0 ] && set -- status
+
+    # So that the messages can say `ovpn proxy stop` rather than `python3
+    # ovpn-proxy.py stop`. Told, not guessed: the script is perfectly usable
+    # without this wrapper - on Windows there is nothing else - and it should
+    # not name a command that only exists when it was started this way.
+    #
+    # Set above the help case rather than below it, which is where it was:
+    # the pages name the command on nearly every line, and `ovpn proxy help`
+    # is the one place you are certain to be reading rather than typing.
+    export OVPN_DISPATCHER=1
+
+    # "$@" rather than a bare `help`, so that `ovpn proxy help connect` keeps
+    # the word that says which page. use_cwd is skipped for the same reason
+    # `env` skips it: a help page reads no configs, so there is no folder to
+    # work out and no "folder: ..." line to print above it.
+    case ${1:-} in -h|--help|help) exec "$py" "$PRX" "$@" ;; esac
+
+    # `env` prints shell for `eval` to read, so nothing else may reach stdout
+    # on its way out - use_cwd's "folder: ..." line would be eval'd as a
+    # command. It reads no configs either, so there is nothing to work out.
+    case ${1:-} in env) exec "$py" "$PRX" "$@" ;; esac
+
+    use_cwd "$@"
+    # Appended rather than prepended, and only when they did not say - both so
+    # that a --dir they typed wins, and so that nothing lands in front of the
+    # verb.
+    case " $* " in
+        *' --dir '*) ;;
+        *) set -- "$@" --dir "${OVPN_OUT_DIR:-$ROOT/pinned}" ;;
+    esac
+    exec "$py" "$PRX" "$@"
+}
+
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+
+case $cmd in
+    ''|menu)              exec bash "$MENU" "$@" ;;
+
+    connect|c)            con "$@" ;;
+    switch)               [ $# -gt 0 ] || die 'switch needs a config name: ovpn switch uk-lon'
+                          con --switch "$@" ;;
+    sweep|s)              con --sweep "$@" ;;
+    stop)                 con --stop "$@" ;;
+    status|st)            con --status "$@" ;;
+    dns-check|dnscheck)   con --dns-check "$@" ;;
+    proxy|px)             prx "$@" ;;
+    unlock)               con --kill-switch-off "$@" ;;
+    service)              con --install-service "$@" ;;
+
+    pin|p)                pin "$@" ;;
+    sync)                 pin --sync "$@" ;;
+    who)                  pin --who "$@" ;;
+    check|cf)             pin --check-cloudflare "$@" ;;
+
+    install)              do_install "$@" ;;
+    uninstall)            do_uninstall "$@" ;;
+    where)                do_where ;;
+
+    version|-V|--version) exec bash "$CON" --version ;;
+    help|-h|--help)
+        case ${1:-} in
+            folders|folder|where)          help_folders ;;
+            connect|sweep|stop|status|switch|dns-check|c|s) exec bash "$CON" --help ;;
+            pin|sync|who|check|p)          exec bash "$PIN" --help ;;
+            proxy|px)                      shift; prx help "$@" ;;
+            '')                            usage ;;
+            *) die "no help for '$1'. Try one of:
+         ovpn help            every command, and what it does
+         ovpn help folders    which folder it acts on, and what gets written
+         ovpn help connect    every flag ovpn-connect.sh takes
+         ovpn help pin        every flag resolve-ovpn-remote.sh takes
+         ovpn help proxy      the proxy, and the commands it has of its own
+         ovpn help proxy stop one of those on its own" ;;
+        esac ;;
+
+    # Not a subcommand. Either a flag, which belongs to ovpn-connect.sh, or a
+    # config name - `ovpn uk-lon` being the short way to say connect.
+    *)                    con "$cmd" "$@" ;;
+esac

@@ -1,0 +1,69 @@
+pinned/
+# A one-off listing of what pinned/ held, written by hand. Same contents and
+# the same reason for staying out of git as the folder itself.
+pinned.txt
+success/
+sitetest/
+proxy-ok/
+
+# Local AI coding-agent configuration and generated indexes.
+.agents/
+.claude/
+.codex/
+.codebase-memory/
+
+# Exits taken out of the list by hand, kept so they can be put back. Same
+# contents as the folders above, and the same reason for staying out of git.
+dropped/
+
+# Written from Windscribe's published list, not by hand - 356 files that are
+# a download rather than a source, and stale the moment the fleet changes.
+windscribe/
+
+# Working notes - measurements, dead ends and links, kept so they do not have
+# to be rediscovered. Personal to this line and this account, not the repo's.
+note.md
+windscribe.md
+
+# The credentials themselves, and the auth file written from them.
+#
+# .env.* as well as .env: the moment anyone edits this file they make a copy
+# first - .env.bak, .env.old, .env.2 - and that copy holds the same password
+# while matching none of the rules below. Ignoring the pattern is easier than
+# noticing the one time it gets staged. .env.example is exempted after it,
+# since it is the one such file that is meant to be committed and has no real
+# password in it.
+.env
+.env.*
+!.env.example
+.ovpn-auth
+.ovpn-auth.*
+
+# Windscribe's proxy credential, which is fetched rather than typed but is a
+# password all the same. The session it is fetched with lives under .state/,
+# which is already ignored below.
+.windscribe-auth
+.windscribe-auth.*
+# Cloudflare API token and account id, for deploying worker/relay.js.
+cl_api.txt
+
+# pid, log and what-is-connected, written while a tunnel is up.
+.state/
+
+# left behind whenever anything imports ovpn-proxy.py
+__pycache__/
+
+# built app, and PyInstaller working files
+dist/
+build/
+release-build/
+
+# The tunnel client binary. 48 MB of somebody else's release; the
+# installer and the build fetch it rather than the repo carrying it.
+tunnel/gost.exe
+tunnel/gost
+# The same for what brings up the adapter in tunnel mode, and its licence,
+# which the release fetch writes beside it.
+tunnel/sing-box.exe
+tunnel/sing-box
+tunnel/sing-box-LICENSE.txt
