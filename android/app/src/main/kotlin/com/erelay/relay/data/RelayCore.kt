@@ -1348,6 +1348,16 @@ class RelayCore(private val app: Application) {
         _serverInIran.value = answer
     }
 
+    /**
+     * The answer [checkServerInIran] already has for [host], or null when it
+     * has none - not asked yet, another server, or it could not tell. For
+     * the service, which explains a failed server + exit through Surfshark
+     * from Iran and should not wait on a DoH lookup to do it when Settings
+     * has asked already.
+     */
+    fun knownServerInIran(host: String): Boolean? =
+        if (host.isNotEmpty() && host == inIranFor) _serverInIran.value else null
+
     // -- sharing on the Wi-Fi ---------------------------------------------------------
     //
     // The service starts the share after the tunnel is up when the pref is on

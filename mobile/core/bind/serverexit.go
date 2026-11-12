@@ -42,15 +42,20 @@ func (c *Client) exitPool(code string) ([]core.Server, error) {
 }
 
 // Upload worth keeping, in bytes a second. A throttled exit carries 10-20
-// KB/s up from an Iranian server; a free one carries whatever the phone's own
-// line does, which is hundreds.
+// KB/s up from an Iranian server (an unchecked, nameless one always did, on
+// 2026-11-12); a free one carries whatever the phone's own line does, which
+// is hundreds.
 const goodUpload = 64 << 10
 
 // BestServerExit points the server at the pick's exit that uploads, and says
 // which it was.
 //
-// From a server in Iran, upload is throttled per foreign exit IP, so the
-// first exit of a city is as likely as not to carry nothing up. Each is set
+// From a server in Iran, upload to an exit can crawl. Measured 2026-11-12
+// that is mostly the handshake - about 10 KB/s per connection when the exit
+// is reached without its name (verify off), 1.2-1.9 MB/s with it - but one
+// Windscribe exit in seven stayed slow whatever was sent, and Surfshark's
+// did not complete TLS from there at all. So the first exit of a city is not
+// to be trusted to carry anything up until it has. Each is set
 // on the server in turn and asked to carry a 256 KB upload end to end - the
 // phone's line, the server, the exit - and the first that does it at a usable
 // rate is kept. None good enough: the fastest of those tried is kept, so a

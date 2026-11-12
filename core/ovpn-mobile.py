@@ -560,8 +560,12 @@ def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False,
             # tunnel to it - the filtered line never sees this SNI - so the
             # certificate can be checked against the name it was pinned from,
             # and the password is only ever handed to the real exit. Where
-            # the server itself sits behind SNI filtering, --no-verify-exit
-            # puts the old unchecked form back.
+            # the server itself is in Iran this is also the fast form: the
+            # line between it and the exit does see the name, and measured
+            # 2026-11-12 a Windscribe exit reached without it carried about
+            # 10 KB/s of upload, with it 1.2-1.9 MB/s. --no-verify-exit puts
+            # the old unchecked form back, for a server whose connection
+            # through the exit fails entirely.
             L += [f'    sni: {yaml_string(name)}',
                   '    skip-cert-verify: false']
         else:

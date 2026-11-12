@@ -46,8 +46,11 @@ object Keys {
      * check - the server verifying the provider exit's certificate against
      * its pinned name - is on for every server unless somebody turned it off
      * for that one, after a confirmation (Settings → Connection). Kept per
-     * server, as the desktop keeps it, so turning it off for a server in Iran
-     * does not carry over to the next server pasted in. See [verifyExit].
+     * server, as the desktop keeps it, so turning it off for one server does
+     * not carry over to the next server pasted in. From a server in Iran off
+     * is the slow answer (measured 2026-11-12: about 10 KB/s of upload without
+     * the exit's name, full speed with it), so it is only for a server whose
+     * connection through the exit fails entirely. See [verifyExit].
      */
     const val TUNNEL_VERIFY_OFF = "tunnelVerifyOff"
 

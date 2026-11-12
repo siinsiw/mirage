@@ -231,6 +231,14 @@ SCOPES = ('all', 'location', 'company-location', 'company')
 # has not left that way since the tunnel went in. The two disagree in
 # practice - the same exit refused six uploads straight from this line in the
 # minute it carried them at 1.2-1.8 MB/s through the server.
+#
+# The server leg is only that fast with the exit check on. Measured
+# 2026-11-12 from a server in Iran: a Windscribe exit reached without SNI
+# carried 0-17 KB/s up, per connection; with its real name as SNI and the
+# certificate verified, 1.2-1.9 MB/s on six of seven exits; with an
+# unrelated decoy name, 4-17 KB/s. Surfshark's exits did not complete TLS
+# from that server at all. verify_exit below is what a server+exit sweep
+# hands the server, so a sweep times the exit the way the tunnel will use it.
 ROUTES = ('provider', 'server', 'server+exit')
 
 # Seconds a tunnel-route row costs: the exit is set on the server, then the

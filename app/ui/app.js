@@ -889,7 +889,11 @@ window.onConnected = (status) => {
   $('detOut').textContent = confirmed || '—';
   $('detVia').textContent = e.host || '—';
 
-  setHint(measured && claimed && measured !== claimed
+  // Server + exit came up, but no exit the server tried carried the test
+  // upload (main.py _dead_exits_warning) - said instead of the usual line,
+  // and on every push of the status, so it stays for this connection.
+  const warn = typeof status.exitWarning === 'string' ? status.exitWarning : '';
+  setHint(warn || (measured && claimed && measured !== claimed
     ? `Sold as ${nameOf(claimed)}, but its traffic really comes out in ${place}. What websites see is the second one.`
     : (e.unconfirmed
         ? 'Connected, but the independent check did not answer. If pages load, it is fine.'
@@ -897,7 +901,8 @@ window.onConnected = (status) => {
             ? 'Every program on this PC now goes through this connection, including the ones that ignore the proxy setting.'
             : (state.systemProxy
                 ? 'Everything on this PC now goes through this connection.'
-                : `Serving on 127.0.0.1:${state.port}. Windows was left alone, so point what you want at it.`))));
+                : `Serving on 127.0.0.1:${state.port}. Windows was left alone, so point what you want at it.`)))),
+  !!warn);
   render();
   // The push comes once a second; this is so a window opened onto a
   // connection that was already up does not sit with an empty meter for the
@@ -1044,18 +1049,37 @@ window.onFailedPlain = (err) => {
   // A failure without its own sentence says what it was, rather than
   // "try once more" over a reason nobody gets to read.
   const why = (err.detail || '').trim();
-  // Server + exit, from a server in Iran, with the exit's certificate being
-  // checked: the provider's name in the SNI may be what is being reset.
+  // Server + exit from a server in Iran. Through Surfshark exits the failure
+  // has a known cause - their addresses are blocked from Iran (2026-11-12:
+  // all 142 clusters, whatever the handshake said) - so that is said first,
+  // with the error itself after it. Only when the server actually took at
+  // least one exit and every exit it took was Surfshark's (exitProviders is
+  // filled only after the server accepted the exit): a refused API or a
+  // missing account is not this, and nothing is guessed from the account
+  // list. Attempts are not refused for it: blocks change. Anything else
+  // keeps its own message, and with checking off it says that checking is
+  // what keeps upload fast from Iran.
   const t = state.tunnel || {};
-  const sni = state.way === 'multi' && t.inIran === true && t.verifyExit !== false
-    && err.kind !== 'cancelled'
-    ? ' Your server looks like it is in Iran, where naming the provider while '
-      + 'checking an exit can get the connection blocked — see "Checking the '
-      + 'exits" under Settings → Connection → Your own tunnel.'
+  const multi = (err.mode || state.way) === 'multi' && t.inIran === true
+    && err.kind !== 'cancelled';
+  const tried = Array.isArray(err.exitProviders) ? err.exitProviders : [];
+  // Failures on this side of the line keep their own sentence: they are
+  // true whichever exit was asked for.
+  const here = ['port-taken', 'tun-missing', 'tun-refused', 'tun-failed',
+    'no-servers', 'no-credentials', 'no-windscribe-credentials'];
+  const viaSurfshark = multi && tried.length > 0
+    && tried.every((p) => p === 'surfshark') && !here.includes(err.kind);
+  const tail = multi && !viaSurfshark && t.verifyExit === false
+    ? ' Checking the exits is off for your server, and from Iran that holds '
+      + 'upload to about 10 KB/s - see "Checking the exits" under Settings → '
+      + 'Connection → Your own tunnel.'
     : '';
-  setHint((say[err.kind]
-    || (why ? `Could not connect: ${why.slice(0, 160)}` : 'Could not connect. Try once more.'))
-    + sni,
+  const own = say[err.kind]
+    || (why ? `Could not connect: ${why.slice(0, 160)}` : 'Could not connect. Try once more.');
+  setHint(viaSurfshark
+    ? `Could not connect through the exit. ${surfsharkFromIran()} Use a `
+      + `Windscribe account for server + exit. (${own})`
+    : own + tail,
   err.kind !== 'cancelled');
   render();
 };
@@ -2294,8 +2318,12 @@ function paintVerify(t) {
   const on = t.verifyExit !== false;
   $('tunnelVerify').setAttribute('aria-checked', String(on));
   const iran = t.inIran === true;
-  $('tunnelIranNote').hidden = !(iran && on);
-  $('tunnelIranRow').hidden = !(iran && on);
+  // From Iran the advice is to keep checking on (measured 2026-11-12: an
+  // exit reached without its real name is held to about 10 KB/s of upload,
+  // checked it runs at full speed). Shown whichever way the switch is, since
+  // it is the reason to turn it back on as much as to leave it.
+  $('tunnelIranNote').hidden = !iran;
+  paintSurfsharkNote(t);
   if (t.inIran == null && verifyAskedFor !== t.domain
       && typeof window.pywebview.api.serverInIran === 'function') {
     verifyAskedFor = t.domain;
@@ -2305,6 +2333,27 @@ function paintVerify(t) {
       paintVerify(state.tunnel);
     }, () => {});
   }
+}
+
+/* Surfshark from a server in Iran. On 2026-11-12 the TLS handshake failed on
+   all 142 Surfshark clusters from a server in Iran - with the name, without
+   it, with a decoy - while the same exits answered from outside Iran: their
+   addresses are blocked there, not the account. Said, never enforced: blocks
+   change, and connecting is still allowed. A function rather than a const so
+   that it can be used from anywhere above it, the failure hint included. */
+function surfsharkFromIran() {
+  return 'Surfshark\'s exits cannot currently be reached from servers in Iran '
+    + '- they are blocked at the network level, whatever your server sends.';
+}
+
+function paintSurfsharkNote(t) {
+  const chosen = state.providers || [];
+  const show = !!t && t.inIran === true && chosen.includes('surfshark');
+  $('tunnelSurfsharkNote').hidden = !show;
+  if (!show) return;
+  $('tunnelSurfsharkSaid').textContent = surfsharkFromIran() + (chosen.includes('windscribe')
+    ? ' For server + exit, pick a Windscribe location.'
+    : ' Add a Windscribe account and use it for server + exit.');
 }
 
 /* A yes-or-no question in the window's own words, the safe answer first.
@@ -2336,12 +2385,18 @@ async function setVerifyExit(want) {
   const sw = $('tunnelVerify');
   if (sw.dataset.busy === '1') return;
   if (!want) {
+    const iran = (state.tunnel || {}).inIran === true;
     const sure = await confirmAsk(
       'Stop checking the exits for this server?',
       'Your server will send your provider account\'s password to each exit '
       + 'without checking its certificate, so anything that answers in the '
-      + 'exit\'s place could take it. Only do this if server + exit fails '
-      + 'because your server\'s network blocks the provider\'s name.',
+      + 'exit\'s place could take it. '
+      + (iran
+        ? 'Your server looks like it is in Iran, and from there an exit reached '
+          + 'without its real name is held to about 10 KB/s of upload - so '
+          + 'uploads will likely drop to that. Only do this if connecting '
+          + 'through the exit fails entirely.'
+        : 'Only do this if connecting through the exit fails entirely.'),
       'Turn checking off');
     if (!sure) return;
   }
@@ -2364,7 +2419,6 @@ $('tunnelVerify').addEventListener('click', () => {
   const t = state.tunnel || {};
   setVerifyExit(t.verifyExit === false);
 });
-$('tunnelVerifyOff').addEventListener('click', () => setVerifyExit(false));
 
 /* Shadowsocks or the WebSocket, for a server whose key offered both. */
 function paintVia(t) {
@@ -7008,6 +7062,9 @@ function paintUse(info) {
   const chosen = (info && info.providers) || usable;
   state.providers = chosen;
   state.provState = per;
+  // The Surfshark-from-Iran note under "Checking the exits" follows which
+  // providers server + exit can pick from.
+  if (state.tunnel) paintSurfsharkNote(state.tunnel);
 
   for (const key of ['surfshark', 'windscribe']) {
     const cap = key[0].toUpperCase() + key.slice(1);
@@ -7102,6 +7159,7 @@ async function commitUse() {
   said($('useSaid'), `${r.serverCount} exits from ${names}.`, 'good');
   state.providers = r.providers;
   state.countries = r.countries || state.countries;
+  if (state.tunnel) paintSurfsharkNote(state.tunnel);
 
   // A pick naming a provider that has just been switched off would ask for
   // exits the engine has been told not to offer, and come back "no servers

@@ -56,7 +56,8 @@ func TestReadsTheNameOutOfAClientHello(t *testing.T) {
 	}
 }
 
-// exit.go sends a handshake with no name in it on purpose. Reading one has to
+// exit.go sends a handshake with no name in it to Surfshark exits on purpose
+// (see sniFor). Reading one has to
 // come back empty rather than come back wrong - a row labelled with whatever
 // happened to be at that offset would be worse than one labelled by address.
 func TestNamelessHandshakeReadsAsNothing(t *testing.T) {

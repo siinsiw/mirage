@@ -503,11 +503,16 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
  * somebody decides otherwise with the reason in front of them.
  *
  * The check makes sure the provider exit the server leaves by is the real
- * one before traffic goes through it. From a server inside Iran the check
- * itself is often what the filtering breaks, and then no exit passes; the
- * notice says so there, and offers the way out - behind a confirmation,
- * because what it gives up is the one thing standing between the traffic and
- * an exit that is not who it says it is.
+ * one before traffic goes through it, and the server names the exit when it
+ * connects. From a server inside Iran that name is what keeps upload fast:
+ * measured 2026-11-12, an exit reached without it (the check off) was held
+ * to about 10 KB/s of upload, and with it six of seven Windscribe exits ran
+ * at 1.2-1.9 MB/s. So the Iran notice says to keep it on; turning it off is
+ * still the switch, behind a confirmation that says what it costs - the one
+ * thing standing between the traffic and an exit that is not who it says it
+ * is, and from Iran, the upload speed. A second notice says that Surfshark's
+ * exits cannot be reached from a server in Iran at all (every cluster
+ * failed TLS there the same day) when a Surfshark account is active.
  *
  * Per server: the switch is this server's, and a server pasted in next starts
  * with the check on again. Whether the server is in Iran is the core's answer
@@ -519,15 +524,21 @@ private fun ExitCheck(core: RelayCore, tunnel: TunnelPlan) {
     if (tunnel.domain.isEmpty()) return
     val verify by core.tunnelVerify.collectAsStateWithLifecycle()
     val inIranAnswer by core.serverInIran.collectAsStateWithLifecycle()
+    val accounts by core.accounts.collectAsStateWithLifecycle()
     var askOff by remember { mutableStateOf(false) }
     val inIran = inIranAnswer == true
+    // Which providers server + exit can pick an exit from: the active
+    // account of each (Accounts.credentials is what the service reads).
+    val surfshark = accounts.any { it.provider == Accounts.SURFSHARK && it.active }
+    val windscribe = accounts.any { it.provider == Accounts.WINDSCRIBE && it.active }
     LaunchedEffect(tunnel.domain) { core.checkServerInIran() }
 
     Section("Server + exit",
         help = "Before server + exit sends anything through a provider exit, the server checks " +
-            "that the exit is the provider's real server. Leave it on unless the check keeps " +
-            "failing - it is what stops a forged exit from seeing your traffic. The setting is " +
-            "kept for each server on its own.") {
+            "that the exit is the provider's real server, and names it when it connects. Leave " +
+            "it on - it is what stops a forged exit from seeing your traffic, and from a server " +
+            "in Iran it is also what keeps upload fast. Turn it off only if connecting through " +
+            "the exit fails entirely. The setting is kept for each server on its own.") {
         Group {
             SwitchRow("Check the exit first",
                 if (verify) "On for ${tunnel.domain}. Every exit is checked before it is used."
@@ -541,17 +552,31 @@ private fun ExitCheck(core: RelayCore, tunnel: TunnelPlan) {
                     }
                 })
         }
-        if (inIran && verify) {
+        // From Iran the advice is to keep the check on. Measured 2026-11-12
+        // from a server in Iran: an exit reached without its real name is
+        // held to about 10 KB/s of upload, and checked - the name sent - it
+        // runs at full speed. Shown whichever way the switch is: it is the
+        // reason to turn it back on as much as to leave it. The switch above
+        // still turns it off, after asking.
+        if (inIran) {
             Block(Modifier.padding(top = Space.x3)) {
                 Text("Your server is in Iran", style = Type.strong)
-                Text("From inside Iran the filtering often breaks the check itself - a handshake " +
-                    "that names the provider is the kind the line cuts - and then no exit passes " +
-                    "it, and server + exit says it found none. If that keeps happening, the check " +
-                    "can be turned off for this server.",
+                Text("Keep the check on. From Iran, an exit reached without its real name is " +
+                    "held to about 10 KB/s of upload; with the check on, uploads run at full " +
+                    "speed. Turn it off only if connecting through the exit fails entirely.",
                     style = Type.body, modifier = Modifier.padding(top = Space.x1))
-                ButtonRow {
-                    Btn("Turn the check off", { askOff = true }, danger = true)
-                }
+            }
+        }
+        // Surfshark as the exit of a server in Iran: every cluster failed TLS
+        // from there (Accounts.SURFSHARK_FROM_IRAN). Said, not enforced.
+        if (inIran && surfshark) {
+            Block(Modifier.padding(top = Space.x3)) {
+                Text("Surfshark is blocked from Iran", style = Type.strong)
+                Text(Accounts.SURFSHARK_FROM_IRAN + if (windscribe) {
+                    " For server + exit, pick a Windscribe location."
+                } else {
+                    " Add a Windscribe account and use it for server + exit."
+                }, style = Type.body, modifier = Modifier.padding(top = Space.x1))
             }
         }
     }
@@ -561,8 +586,16 @@ private fun ExitCheck(core: RelayCore, tunnel: TunnelPlan) {
             title = "Turn off the exit check for ${tunnel.domain}?",
             text = "Server + exit will send your traffic through whichever exit it is pointed at, " +
                 "without first making sure it is the provider's real server. On a filtered line " +
-                "that exit could be a forgery that sees everything you send. Turn it off only if " +
-                "the check keeps failing, and turn it back on when you can.",
+                "that exit could be a forgery that sees everything you send. " +
+                (if (inIran) {
+                    "Your server is in Iran, and from there an exit reached without its real " +
+                        "name is held to about 10 KB/s of upload - so uploads will likely drop " +
+                        "to that. "
+                } else {
+                    ""
+                }) +
+                "Turn it off only if connecting through the exit fails entirely, and turn it " +
+                "back on when you can.",
             confirm = "Turn off",
             danger = true,
             onConfirm = {

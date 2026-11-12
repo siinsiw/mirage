@@ -13,7 +13,8 @@ import "encoding/binary"
 //
 // A ClientHello is different. It is the first thing any TLS client sends, it
 // is not encrypted, and it carries the name in the server_name extension -
-// which is what makes SNI worth stripping in exit.go and worth reading here.
+// which is what makes SNI worth choosing deliberately in exit.go (sniFor) and
+// worth reading here.
 // It works whatever the application did about DNS, including nothing.
 //
 // Read-only and best-effort. A message this does not understand is a row
