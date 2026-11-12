@@ -469,7 +469,7 @@ def yaml_string(value):
 
 
 def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False,
-               tunnel=None):
+               tunnel=None, verify_exit=True):
     """The same exits in Clash's vocabulary.
 
     Written by hand rather than dumped, because pyyaml is not in the standard
@@ -505,13 +505,15 @@ def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False,
         '# list where nothing connects and no client says why. Compare that',
         '# name with the first line of .ovpn-auth before blaming the phone.',
         '#',
-        '# skip-cert-verify is on, and it is not laziness. Clash sends whatever',
-        '# `sni` says, so naming the exit there puts *.prod.surfshark.com in the',
-        '# clear and the handshake dies on the way out; leaving it off means the',
-        '# certificate is checked against an IP it was never issued for. The',
-        '# address is still pinned either way. What is given up is proof of who',
-        '# answers at that address - on a client that can keep both, sing-box',
-        '# holds the name back and verifies against it anyway.',
+        '# Straight to an exit, skip-cert-verify is on, and it is not laziness.',
+        '# Clash sends whatever `sni` says, so naming the exit there puts',
+        '# *.prod.surfshark.com in the clear and the handshake dies on the way',
+        '# out; leaving it off means the certificate is checked against an IP it',
+        '# was never issued for. The address is still pinned either way. What is',
+        '# given up is proof of who answers at that address - on a client that',
+        '# can keep both, sing-box holds the name back and verifies against it',
+        '# anyway. Through your own server (dialer-proxy) the name travels inside',
+        '# the tunnel, so there each exit is checked against its own name.',
         '',
         'proxies:',
     ]
@@ -525,18 +527,18 @@ def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False,
             L += [
                 f'  - name: {yaml_string(TUNNEL_TAG if not edges else f"{TUNNEL_TAG}-{n}")}',
                 '    type: vless',
-                f'    server: {addr}',
+                f'    server: {yaml_string(addr)}',
                 '    port: 443',
                 f'    uuid: {yaml_string(uuid)}',
                 "    flow: ''",
                 '    tls: true',
-                f'    servername: {domain}',
+                f'    servername: {yaml_string(domain)}',
                 '    network: ws',
                 '    ws-opts:',
                 f'      path: {yaml_string(path)}',
             ]
             if edges:
-                L += ['      headers:', f'        Host: {domain}']
+                L += ['      headers:', f'        Host: {yaml_string(domain)}']
             L += [
                 '    udp: true',
                 '    # Your own server, through a CDN. dialer-proxy below sends',
@@ -547,13 +549,23 @@ def clash_yaml(exits, user, password, exit_port, interval, nodes_only=False,
         L += [
             f'  - name: {yaml_string(tag)}',
             '    type: http',
-            f'    server: {ip}',
-            f'    port: {exit_port}',
+            f'    server: {yaml_string(ip)}',
+            f'    port: {int(exit_port)}',
             f'    username: {yaml_string(user)}',
             f'    password: {yaml_string(password)}',
             '    tls: true',
-            '    skip-cert-verify: true',
         ]
+        if tunnel and verify_exit and name:
+            # Through your own server, the exit's name rides inside the
+            # tunnel to it - the filtered line never sees this SNI - so the
+            # certificate can be checked against the name it was pinned from,
+            # and the password is only ever handed to the real exit. Where
+            # the server itself sits behind SNI filtering, --no-verify-exit
+            # puts the old unchecked form back.
+            L += [f'    sni: {yaml_string(name)}',
+                  '    skip-cert-verify: false']
+        else:
+            L += ['    skip-cert-verify: true']
         if tunnel:
             L += [f'    dialer-proxy: {yaml_string(TUNNEL_TAG)}']
         L += [f'    # {name}']
@@ -668,7 +680,15 @@ def main():
                    help='write the domain and let the phone resolve it, the '
                         'way this did before the addresses started being '
                         'filtered')
+    p.add_argument('--no-verify-exit', action='store_true',
+                   help='with --tunnel, do not check each exit\'s certificate '
+                        'against its name. Only for a server of your own '
+                        'behind filtering that resets connections naming a '
+                        'VPN provider in the SNI')
     args = p.parse_args()
+
+    if args.tunnel and not px.valid_host(args.tunnel):
+        p.error('--tunnel has to be a domain name or an IPv4 address')
 
     if args.tunnel:
         if args.uuid:
@@ -736,7 +756,8 @@ def main():
         if fmt == 'clash':
             path = stem + (ext if ext else '.yaml')
             body = clash_yaml(exits, user, password, args.exit_port,
-                              args.interval, args.nodes_only, tunnel)
+                              args.interval, args.nodes_only, tunnel,
+                              verify_exit=not args.no_verify_exit)
         else:
             path = stem + (ext if ext else '.json')
             body = json.dumps(build(exits, user, password, args.exit_port,

@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -21,10 +22,53 @@ const ProxyPort = 443
 
 var headEnd = []byte("\r\n\r\n")
 
+// controlFunc is what net.Dialer.Control takes.
+type controlFunc func(network, address string, c syscall.RawConn) error
+
 // Set on Android so the connection to the exit is kept out of the tun this
-// process is serving. Nil everywhere else, which net.Dialer takes to mean an
-// ordinary dial. See protect.go for why it exists at all.
-var dialControl func(network, address string, c syscall.RawConn) error
+// process is serving. Nil everywhere else. See protect.go for why it exists
+// at all.
+//
+// Held atomically rather than as a plain variable: the platform sets it from
+// its own thread while dials are already running on others, and a func value
+// read and written at once is a data race - the same reason naming.go keeps
+// its lookups behind a lock.
+var dialProtect atomic.Pointer[controlFunc]
+
+// dialControl is what every dial that must stay out of the tun hands to
+// net.Dialer.Control. With no protector set it lets the socket be, which is
+// an ordinary dial.
+func dialControl(network, address string, c syscall.RawConn) error {
+	if f := dialProtect.Load(); f != nil {
+		return (*f)(network, address, c)
+	}
+	return nil
+}
+
+// checkTarget is whether target ("host:port") can be written into a CONNECT
+// line as it is. The line is text, and a host carrying a CR or LF would end
+// it early and let whoever chose the name write the rest of the request -
+// headers, a second request - to the exit or the user's own server, under
+// this app's credential. So: a host and a numeric port, nothing outside
+// printable ASCII, no spaces, and no longer than a name can be.
+func checkTarget(target string) error {
+	if len(target) == 0 || len(target) > 253+8 {
+		return errors.New("that destination is not one a CONNECT can carry")
+	}
+	for i := 0; i < len(target); i++ {
+		if c := target[i]; c <= 0x20 || c >= 0x7f {
+			return errors.New("that destination has characters a CONNECT cannot carry")
+		}
+	}
+	host, port, err := net.SplitHostPort(target)
+	if err != nil || host == "" || len(host) > 253 {
+		return errors.New("that destination is not a host and a port")
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 || strings.Trim(port, "0123456789") != "" {
+		return errors.New("that destination's port is not a port")
+	}
+	return nil
+}
 
 // Exit is one server, ready to be dialled.
 type Exit struct {
@@ -198,6 +242,9 @@ func (e *Exit) Open(target string, timeout time.Duration) (net.Conn, []byte, err
 // question answered in 0.53s. The slowness was the visible half. The other
 // half is that the bytes it drained belong to the tunnel.
 func (e *Exit) connect(conn *tls.Conn, target string) ([]byte, error) {
+	if err := checkTarget(target); err != nil {
+		return nil, err
+	}
 	req := "CONNECT " + target + " HTTP/1.1\r\n" +
 		"Host: " + target + "\r\n" +
 		"Proxy-Authorization: Basic " + e.auth + "\r\n\r\n"

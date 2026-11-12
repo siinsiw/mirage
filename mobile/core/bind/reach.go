@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/ERelay/ovpn-pin/mobile/core"
+	"github.com/siinsiw/ovpn-pin/mobile/core"
 )
 
 // The row-at-a-time reachability test, across the bridge.

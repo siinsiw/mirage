@@ -41,6 +41,8 @@ data class LanShareState(
     /** This phone's addresses on the networks it is on; the other device types one. */
     val addrs: List<String> = emptyList(),
     val clients: Int = 0,
+    /** The core's reason it is not sharing when it should be ("no Wi-Fi, hotspot or Ethernet address…"); empty otherwise. */
+    val error: String = "",
 )
 
 /** How the app looks and answers a touch, as Settings → Look and feel has it. */

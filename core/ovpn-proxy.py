@@ -788,7 +788,7 @@ def sweep_one(path, auth, sites, timeout, connect_only=False, bind=None,
         # measurements cannot overlap. do_sweep is what keeps them from it.
         try:
             tunnel_set_exit(saved, ip, auth[0], auth[1],
-                            name=base_of(name) or 'sweep')
+                            name=base_of(name) or 'sweep', host=host)
         except RuntimeError as e:
             row['verdict'] = str(e)[:60]
             return row
@@ -1276,7 +1276,12 @@ def straight_to(host, port):
     # exit for it must not mean reaching the services this machine keeps on
     # 127.0.0.1 - a database, a dev server, Relay's own window - that were
     # only ever meant for whoever is sitting at it.
-    if getattr(_CALLER, 'lan', False) and _reaches_this_machine(host):
+    # Link-local and this PC's own LAN addresses count as well (see "who may
+    # use it"): a service listening on the Wi-Fi address is this machine's
+    # just as much as one on 127.0.0.1.
+    if getattr(_CALLER, 'lan', False) and (
+            _reaches_this_machine(host)
+            or target_is_this_machine(host, resolve=True)):
         raise OSError('that is this machine, and you are not on it')
     sock = socket.create_connection((host, int(port)), timeout=15)
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -1782,12 +1787,13 @@ def recv_exactly(sock, n):
     return buf
 
 
-def socks_target(client):
+def socks_target(client, need_password=False):
     """The SOCKS5 greeting and request, as far as the address being asked for.
 
-    No authentication is offered or wanted: this listens on the loopback, and
-    a password between a program and a proxy on the same machine protects
-    nothing that the machine itself does not already.
+    No authentication is offered or wanted on the loopback: a password
+    between a program and a proxy on the same machine protects nothing that
+    the machine itself does not already. A client from the Wi-Fi
+    (`need_password`) is another matter - see "who may use it".
 
     A name stays a name. Whatever the client sends goes into the CONNECT
     untouched and the exit resolves it - which is what the socks5h form of
@@ -1798,8 +1804,25 @@ def socks_target(client):
     ver, nmethods = struct.unpack('!BB', recv_exactly(client, 2))
     if ver != 5:
         raise OSError(f'not SOCKS5 (version byte {ver:#04x})')
-    recv_exactly(client, nmethods)
-    client.sendall(b'\x05\x00')
+    methods = recv_exactly(client, nmethods)
+    if need_password:
+        # Shared on the Wi-Fi: username/password (RFC 1929) or nothing. A
+        # client that offers only "no authentication" is told no method is
+        # acceptable, which is how SOCKS5 says "this one needs a password".
+        if 2 not in methods:
+            client.sendall(b'\x05\xff')
+            raise PermissionError('a shared client offered no password')
+        client.sendall(b'\x05\x02')
+        ver, ulen = struct.unpack('!BB', recv_exactly(client, 2))
+        recv_exactly(client, ulen)
+        plen = recv_exactly(client, 1)[0]
+        given = recv_exactly(client, plen).decode('utf-8', 'replace')
+        if ver != 1 or not lan_password_ok(given):
+            client.sendall(b'\x01\x01')
+            raise PermissionError('a shared client gave the wrong password')
+        client.sendall(b'\x01\x00')
+    else:
+        client.sendall(b'\x05\x00')
 
     ver, cmd, _, atyp = struct.unpack('!BBBB', recv_exactly(client, 4))
     if ver != 5:
@@ -1885,8 +1908,9 @@ def serve_socks(client, exit_, quiet, note):
     TCP intact, which is one long-lived connection instead of a request per
     message - and the exit still only ever sees a CONNECT.
     """
+    shared = bool(getattr(_CALLER, 'lan', False))
     try:
-        host, port = socks_target(client)
+        host, port = socks_target(client, need_password=shared)
     except (OSError, ValueError, UnicodeError) as e:
         log('FAIL', f'socks5 handshake: {e}')
         if not quiet:
@@ -1895,6 +1919,11 @@ def serve_socks(client, exit_, quiet, note):
         return
 
     target = f'{host}:{port}'
+    if shared and target_is_this_machine(host):
+        log('SHARE', f'refused socks5 {target}: that is this machine')
+        socks_refuse(client, 2)
+        client.close()
+        return
     note.going_to(target)
 
     if SPLIT.straight(host, note.app):
@@ -1945,10 +1974,38 @@ def serve_http(client, exit_, quiet, first, note):
         return
     verb = head.split(b'\r\n', 1)[0].decode('latin-1', 'replace').split(' ')[0].upper()
 
+    shared = bool(getattr(_CALLER, 'lan', False))
+    if shared and not lan_password_ok(basic_password(head)):
+        # 407 with a challenge is what makes a phone's proxy screen ask for
+        # the password it has not been given - or say it was the wrong one.
+        log('SHARE', f'asked {verb} for the share password')
+        try:
+            client.sendall(b'HTTP/1.1 407 Proxy Authentication Required\r\n'
+                           b'Proxy-Authenticate: Basic realm="'
+                           + LAN_REALM.encode() + b'"\r\n'
+                           b'Connection: close\r\nContent-Length: 0\r\n\r\n')
+        except OSError:
+            pass
+        client.close()
+        return
+
     if verb == 'CONNECT':
-        target = head.split(b'\r\n', 1)[0].decode('latin-1', 'replace').split(' ')[1]
-        note.going_to(target)
+        try:
+            target = head.split(b'\r\n', 1)[0].decode('latin-1', 'replace').split(' ')[1]
+        except IndexError:
+            client.close()
+            return
         host, port = split_target(target, 443)
+        if shared and target_is_this_machine(host):
+            log('SHARE', f'refused CONNECT {target}: that is this machine')
+            try:
+                client.sendall(b'HTTP/1.1 403 Forbidden\r\n'
+                               b'Connection: close\r\nContent-Length: 0\r\n\r\n')
+            except OSError:
+                pass
+            client.close()
+            return
+        note.going_to(target)
         if SPLIT.straight(host, note.app):
             serve_straight(client, note, host, port, quiet, target,
                            b'HTTP/1.1 200 Connection established\r\n\r\n',
@@ -1997,6 +2054,15 @@ def serve_http(client, exit_, quiet, first, note):
         return
 
     host, port = split_target(head_host(head), 80)
+    if shared and target_is_this_machine(host):
+        log('SHARE', f'refused {verb} {host}: that is this machine')
+        try:
+            client.sendall(b'HTTP/1.1 403 Forbidden\r\n'
+                           b'Connection: close\r\nContent-Length: 0\r\n\r\n')
+        except OSError:
+            pass
+        client.close()
+        return
     if host and SPLIT.straight(host, note.app):
         note.going_to(host)
         serve_straight(client, note, host, port, quiet, f'{verb} {host}',
@@ -2996,32 +3062,282 @@ def pick_live(folder, auth, jobs, timeout, bind=None, limit=140):
 # is a thing other people find and use - on a hotel's or a university's Wi-Fi,
 # in particular, where "same network" means hundreds of strangers and the
 # bandwidth is somebody's Surfshark account. So the second line of defence,
-# behind the firewall rule the window adds, is here: a client whose address
-# is not loopback, private, link-local or carrier-grade NAT is closed on
-# before a byte is read. Those are the ranges a home or office LAN is made
-# of (and a phone's hotspot, and Tailscale, which lives in 100.64/10);
-# nothing on the public internet is in them.
+# behind the firewall rule the window adds, is here, in three parts.
+#
+#   Who. A client is let in only from inside the subnet of one of this
+#   machine's own network adapters, and only where that subnet is one of the
+#   private ranges - the Wi-Fi the phone and this PC actually share. Not
+#   "any private address": 10/8 is also what a corporate WAN or the far side
+#   of a VPN is made of. And no longer carrier-grade NAT (100.64/10) or
+#   link-local (169.254/16): the first is a provider's network or a mesh VPN
+#   full of other people's machines, the second is what an adapter gives
+#   itself when there is no network at all, and neither is a LAN somebody
+#   chose to share with.
+#
+#   Whether they know the password. Sharing cannot be turned on without one
+#   (the window asks for it, and main() refuses to listen beyond the loopback
+#   with none). HTTP clients send it as Proxy-Authorization: Basic, SOCKS5
+#   clients through username/password authentication (RFC 1929). The user
+#   name is not checked - phones' proxy screens disagree about whether it may
+#   be empty - only the password is.
+#
+#   Where to. A shared client is not at this keyboard, so it may not use the
+#   proxy to reach this machine: loopback, link-local, the unspecified address
+#   and this PC's own addresses are refused as targets, whether named
+#   literally or, on the path that goes around the exit, by what a name
+#   resolves to.
+#
+# The loopback is always allowed and never asked for a password: it is this
+# machine, and the window itself checks the connection through it.
 
-LAN_ALLOWED = tuple(ipaddress.ip_network(n) for n in (
-    '127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
-    '100.64.0.0/10', '169.254.0.0/16'))
+LAN_PRIVATE = tuple(ipaddress.ip_network(n) for n in (
+    '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
+LOOPBACK_NET = ipaddress.ip_network('127.0.0.0/8')
+
+# The password a shared proxy asks for, from the environment rather than the
+# command line: a command line is printed by `stop`, listed by the process
+# table and copied into logs, and an environment block is none of those.
+LAN_PASSWORD_ENV = 'OVPN_LAN_PASSWORD'
+LAN_PASSWORD = None
+LAN_REALM = 'Relay'
+
+# How long a reading of this machine's adapters is trusted. A laptop moves
+# between networks; a phone on the new one should not be refused for long.
+_SUBNETS = {'at': 0.0, 'nets': ()}
+SUBNETS_FRESH = 30.0
 
 
-def client_allowed(addr):
-    """Whether a connection from that address may use a shared proxy.
-
-    Anything that does not parse is refused, and an IPv4 address that arrived
-    wrapped in IPv6 (::ffff:192.168.1.5, which a dual-stack socket reports) is
-    unwrapped first - otherwise the check would turn away every phone on a
-    machine that happened to listen both ways.
-    """
+def _parse_ip(addr):
+    """An address as ipaddress has it, IPv4-in-IPv6 unwrapped, or None."""
     try:
         ip = ipaddress.ip_address(str(addr).split('%')[0])
     except ValueError:
-        return False
+        return None
     if getattr(ip, 'ipv4_mapped', None):
         ip = ip.ipv4_mapped
-    return any(ip in net for net in LAN_ALLOWED if ip.version == net.version)
+    return ip
+
+
+def _windows_subnets():
+    """(address, prefix) for every IPv4 unicast address Windows has, from
+    GetAdaptersAddresses - the one place the prefix length is kept."""
+    import ctypes
+    from ctypes import wintypes
+
+    class SOCKADDR(ctypes.Structure):
+        # Bytes, not c_char: a c_char array reads as a string that ends at
+        # the first NUL, and an address with a zero in it (10.0.0.5, or the
+        # port bytes in front of it) came back short.
+        _fields_ = [('family', ctypes.c_ushort), ('data', ctypes.c_ubyte * 14)]
+
+    class SOCKET_ADDRESS(ctypes.Structure):
+        _fields_ = [('lpSockaddr', ctypes.POINTER(SOCKADDR)),
+                    ('iSockaddrLength', ctypes.c_int)]
+
+    class UNICAST(ctypes.Structure):
+        pass
+    UNICAST._fields_ = [
+        ('Length', wintypes.ULONG), ('Flags', wintypes.DWORD),
+        ('Next', ctypes.POINTER(UNICAST)), ('Address', SOCKET_ADDRESS),
+        ('PrefixOrigin', ctypes.c_int), ('SuffixOrigin', ctypes.c_int),
+        ('DadState', ctypes.c_int), ('ValidLifetime', wintypes.ULONG),
+        ('PreferredLifetime', wintypes.ULONG),
+        ('LeaseLifetime', wintypes.ULONG),
+        ('OnLinkPrefixLength', ctypes.c_ubyte)]
+
+    class ADAPTER(ctypes.Structure):
+        pass
+    ADAPTER._fields_ = [
+        ('Length', wintypes.ULONG), ('IfIndex', wintypes.DWORD),
+        ('Next', ctypes.POINTER(ADAPTER)), ('AdapterName', ctypes.c_char_p),
+        ('FirstUnicastAddress', ctypes.POINTER(UNICAST))]
+
+    size = wintypes.ULONG(16 * 1024)
+    get = ctypes.windll.iphlpapi.GetAdaptersAddresses
+    for _ in range(3):
+        buf = ctypes.create_string_buffer(size.value)
+        # AF_INET, and skip the anycast/multicast/DNS lists nobody reads here.
+        got = get(2, 0x2 | 0x4 | 0x8, None, buf, ctypes.byref(size))
+        if got == 0:
+            break
+        if got != 111:                       # ERROR_BUFFER_OVERFLOW
+            return []
+    else:
+        return []
+    out = []
+    node = ctypes.cast(buf, ctypes.POINTER(ADAPTER))
+    while node:
+        uni = node.contents.FirstUnicastAddress
+        while uni:
+            sa = uni.contents.Address.lpSockaddr
+            if sa and sa.contents.family == 2:
+                raw = bytes(sa.contents.data)[2:6]
+                out.append((socket.inet_ntoa(raw),
+                            int(uni.contents.OnLinkPrefixLength)))
+            uni = uni.contents.Next
+        node = node.contents.Next
+    return out
+
+
+def _posix_subnets():
+    """The same, on Linux, by asking each interface for its netmask."""
+    import fcntl
+    out = []
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for _, name in socket.if_nameindex():
+            req = struct.pack('256s', name.encode()[:15])
+            try:
+                addr = fcntl.ioctl(probe.fileno(), 0x8915, req)[20:24]
+                mask = fcntl.ioctl(probe.fileno(), 0x891b, req)[20:24]
+            except OSError:
+                continue
+            prefix = bin(int.from_bytes(mask, 'big')).count('1')
+            out.append((socket.inet_ntoa(addr), prefix))
+    finally:
+        probe.close()
+    return out
+
+
+def own_addresses():
+    """This machine's IPv4 addresses, however they can be learnt."""
+    found = set()
+    try:
+        for a, _ in local_subnets(raw=True):
+            found.add(a)
+    except Exception:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None,
+                                       socket.AF_INET):
+            found.add(info[4][0])
+    except OSError:
+        pass
+    return found
+
+
+def local_subnets(raw=False, fresh=False):
+    """The private networks this machine's adapters sit on - the only places
+    a shared client may come from. `raw` gives every (address, prefix) seen,
+    before the private-range filter. Read again every SUBNETS_FRESH seconds."""
+    now = time.time()
+    if not raw and not fresh and now - _SUBNETS['at'] < SUBNETS_FRESH:
+        return _SUBNETS['nets']
+    try:
+        pairs = _windows_subnets() if os.name == 'nt' else _posix_subnets()
+    except Exception:
+        pairs = []
+    if raw:
+        return pairs
+    nets = []
+    for addr, prefix in pairs:
+        try:
+            net = ipaddress.ip_network(f'{addr}/{prefix}', strict=False)
+        except ValueError:
+            continue
+        # A /0 or /1 "subnet" is a misreading or a VPN's catch-all, never a
+        # Wi-Fi; nothing wider than a /8 is let through.
+        if net.prefixlen < 8:
+            continue
+        if any(net.subnet_of(p) for p in LAN_PRIVATE) and net not in nets:
+            nets.append(net)
+    _SUBNETS.update(at=now, nets=tuple(nets))
+    return _SUBNETS['nets']
+
+
+def client_allowed(addr, subnets=None):
+    """Whether a connection from that address may use a shared proxy.
+
+    The loopback always may. Anything else has to be inside one of the
+    private subnets this machine's own adapters are on (`subnets`, read from
+    the system when not given). Anything that does not parse is refused, and
+    an IPv4 address that arrived wrapped in IPv6 (::ffff:192.168.1.5, which a
+    dual-stack socket reports) is unwrapped first.
+    """
+    ip = _parse_ip(addr)
+    if ip is None or ip.version != 4:
+        return False
+    if ip in LOOPBACK_NET:
+        return True
+    nets = local_subnets() if subnets is None else subnets
+    if not any(ip in n for n in nets) and subnets is None:
+        # The adapters may have changed since they were last read - a laptop
+        # that has just joined a different Wi-Fi. Asked once more, now.
+        nets = local_subnets(fresh=True)
+    return any(ip in n for n in nets)
+
+
+def target_is_this_machine(host, resolve=False, own=None):
+    """Whether a shared client is asking to be taken to this PC itself:
+    loopback, link-local, unspecified or one of this machine's addresses.
+
+    By literal always, and - with `resolve`, for the path that goes around
+    the exit on this machine's own line - by what the name resolves to.
+    Through the exit a name is resolved over there, where it cannot reach
+    here, so only the literal and the obvious names are checked for it.
+    """
+    host = str(host or '').strip().strip('[]').rstrip('.').lower()
+    if not host:
+        return True
+    if host == 'localhost' or host.endswith('.localhost'):
+        return True
+    own = own_addresses() if own is None else set(own)
+
+    def bad(ip):
+        return (ip.is_loopback or ip.is_link_local or ip.is_unspecified
+                or ip.is_multicast or str(ip) in own)
+
+    ip = _parse_ip(host)
+    if ip is not None:
+        return bad(ip)
+    if not resolve:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    for info in infos:
+        ip = _parse_ip(info[4][0])
+        if ip is not None and bad(ip):
+            return True
+    return False
+
+
+def lan_password_valid(text):
+    """The rule a share password has to meet - the window's rule too
+    (engine.lan_password_ok), and the phone's (Go and Android): 8 to 128
+    characters of printable ASCII, 0x20-0x7E. ASCII so that a password set
+    on one device can be typed into any other's proxy screen."""
+    return (isinstance(text, str) and 8 <= len(text) <= 128
+            and all(0x20 <= ord(c) <= 0x7e for c in text))
+
+
+def lan_password_ok(given):
+    """Constant-time, and never true when no password is set."""
+    import hmac
+    want = LAN_PASSWORD
+    if not want or given is None:
+        return False
+    return hmac.compare_digest(str(given).encode('utf-8'),
+                               want.encode('utf-8'))
+
+
+def basic_password(head):
+    """The password half of a Proxy-Authorization: Basic header, or None."""
+    for line in head.split(b'\r\n')[1:]:
+        name, _, value = line.partition(b':')
+        if name.strip().lower() != b'proxy-authorization':
+            continue
+        kind, _, token = value.strip().partition(b' ')
+        if kind.lower() != b'basic':
+            return None
+        try:
+            pair = base64.b64decode(token.strip(), validate=True).decode(
+                'utf-8', 'replace')
+        except (ValueError, TypeError):
+            return None
+        return pair.partition(':')[2]
+    return None
 
 
 def is_loopback_host(host):
@@ -3096,6 +3412,18 @@ def clear_clients(port):
 
 
 def serve(listen_host, listen_port, exit_, quiet):
+    global LAN_PASSWORD
+    # Before anything binds. A proxy open to the network with no password
+    # would be the open proxy "who may use it" exists to prevent, so it does
+    # not start at all - whatever asked for it, the window or a terminal.
+    if not is_loopback_host(listen_host):
+        LAN_PASSWORD = os.environ.get(LAN_PASSWORD_ENV) or None
+        if not lan_password_valid(LAN_PASSWORD):
+            LAN_PASSWORD = None
+            die(f'will not listen on {listen_host} without a password',
+                f'Sharing beyond this machine needs a password of 8 to 128 '
+                f'printable ASCII characters in ${LAN_PASSWORD_ENV}. Devices then '
+                'give it as the proxy password.')
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # Not on Windows. There SO_REUSEADDR does not mean "reuse the port I just
     # stopped listening on" - it means "bind it even though someone else is
@@ -3162,7 +3490,9 @@ def serve(listen_host, listen_port, exit_, quiet):
     # port 80 - and the only way to tell it not to is to offer it SOCKS5.
     print(f'  {C["head"]}In Telegram, choose SOCKS5 rather than HTTP{C["off"]}')
     print(f'      {C["bold"]}{listen_host}{C["off"]}   port '
-          f'{C["bold"]}{listen_port}{C["off"]}   no username, no password')
+          f'{C["bold"]}{listen_port}{C["off"]}   '
+          + ('any username, the share password' if LAN_PASSWORD
+             else 'no username, no password'))
     print(f'      {C["dim"]}Same port. On HTTP it sends a request per message;'
           f'{C["off"]}')
     print(f'      {C["dim"]}on SOCKS5 it keeps one connection and is quicker.'
@@ -3199,7 +3529,8 @@ def serve(listen_host, listen_port, exit_, quiet):
     shared = not is_loopback_host(listen_host)
     if shared:
         log('SHARE', f'open to the local network on {listen_host}:{listen_port}'
-                     ' - private, link-local and CGNAT clients only')
+                     ' - clients on this PC\'s own private subnets only, '
+                     'with the share password')
     try:
         while True:
             try:
@@ -3219,8 +3550,8 @@ def serve(listen_host, listen_port, exit_, quiet):
                     # scanner retrying forever should not fill the log.
                     if who[0] not in _REFUSED_SAID and len(_REFUSED_SAID) < 64:
                         _REFUSED_SAID.add(who[0])
-                        log('SHARE', f'refused {who[0]}: not a local-network '
-                                     'address')
+                        log('SHARE', f'refused {who[0]}: not on a private '
+                                     'subnet this PC is on')
                     try:
                         client.close()
                     except OSError:
@@ -3574,6 +3905,57 @@ def _yaml_quoted(text):
     return "'" + str(text).replace("'", "''") + "'"
 
 
+def _yaml_str(text):
+    """A YAML double-quoted scalar. JSON's string syntax is a subset of
+    YAML's double-quoted one, so json.dumps is a complete escaper - quotes,
+    backslashes, control characters and all - where hand-rolled quoting is
+    one forgotten character away from a password that rewrites the file."""
+    return json.dumps(str(text), ensure_ascii=True)
+
+
+# What a tunnel's server and passwords may be. One rule, shared by every
+# place that takes them in - the key, the settings sheet, the command line -
+# and agreed with the installer and the phone, so that a value one of them
+# accepts is never one another writes into a shell line or a config file it
+# breaks. Validation is the first wall, not the only one: everything is still
+# quoted where it is written.
+_HOST_LABEL = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')
+SECRET_FORBIDDEN = set('\'"`$\\{}#')
+
+
+def valid_host(host):
+    """A hostname made of letters, digits and hyphens, or an IPv4 address."""
+    host = str(host or '')
+    if is_address(host) and host.strip() == host:
+        return True
+    if not host or len(host) > 253 or host.endswith('.'):
+        return False
+    labels = host.split('.')
+    # All-numeric names that are not addresses (999.1.1.1) are refused: they
+    # are a typo of an address far more often than a real name.
+    if all(label.isdigit() for label in labels):
+        return False
+    return all(_HOST_LABEL.match(label) for label in labels)
+
+
+def valid_secret(text):
+    """1-128 printable ASCII characters, none of ' " ` $ \\ { } # or space."""
+    text = str(text if text is not None else '')
+    return (0 < len(text) <= 128
+            and all(0x21 <= ord(c) <= 0x7e and c not in SECRET_FORBIDDEN
+                    for c in text))
+
+
+SECRET_RULE = ("1 to 128 characters: letters, digits and punctuation, but no "
+               "spaces and none of ' \" ` $ \\ { } #")
+
+
+def shell_quote(text):
+    """One POSIX shell word, single-quoted: ' becomes '\\'' and nothing else
+    inside means anything to the shell."""
+    return "'" + str(text).replace("'", "'\\''") + "'"
+
+
 def tunnel_config_text(domain, password, edges=None, ca_file=None, ss=None,
                        port=443):
     """The gost client's configuration, as gost wants it.
@@ -3614,11 +3996,11 @@ def tunnel_config_text(domain, password, edges=None, ca_file=None, ss=None,
             # speaks first - SMTP, SSH banners, FTP - is not left hanging.
             nodes = (
                 f'          - name: ss\n'
-                f'            addr: {domain}:{int(to)}\n'
+                f'            addr: {_yaml_str(f"{domain}:{int(to)}")}\n'
                 f'            connector:\n'
                 f'              type: ss\n'
-                f'              auth: {{username: {ss["method"]}, '
-                f'password: {_yaml_quoted(ss["password"])}}}\n'
+                f'              auth: {{username: {_yaml_str(ss["method"])}, '
+                f'password: {_yaml_str(ss["password"])}}}\n'
                 f'              metadata: {{nodelay: true}}\n'
                 f'            dialer:\n'
                 f'              type: tcp\n')
@@ -3636,23 +4018,34 @@ def tunnel_config_text(domain, password, edges=None, ca_file=None, ss=None,
         for n, addr in enumerate(edges or [domain], 1):
             nodes += (
                 f'          - name: {f"edge-{n}" if edges else "server"}\n'
-                f'            addr: {addr}:{int(port)}\n'
+                f'            addr: {_yaml_str(f"{addr}:{int(port)}")}\n'
                 f'            connector:\n'
                 f'              type: http\n'
-                f'              auth: {{username: relay, password: {password}}}\n'
+                f'              auth: {{username: relay, '
+                f'password: {_yaml_str(password)}}}\n'
                 f'            dialer:\n'
                 f'              type: {dialer}\n')
-            if edges:
-                nodes += f'              tls: {{serverName: {domain}}}\n'
-            elif ca_file:
+            if ca_file and not edges:
                 # A server by address has its own certificate, kept the first
                 # time it was seen: that one is trusted, and nothing else.
                 ca = ca_file.replace('\\', '/')
-                nodes += (f'              tls: {{secure: true, serverName: {domain}, '
-                          f"caFile: '{ca}'}}\n")
+                nodes += (f'              tls: {{secure: true, '
+                          f'serverName: {_yaml_str(domain)}, '
+                          f'caFile: {_yaml_str(ca)}}}\n')
+            else:
+                # A server by name - dialled at a Cloudflare edge or at
+                # whatever DNS says - is checked against that name with the
+                # system's CAs: the installer gets it a Let's Encrypt
+                # certificate, and Cloudflare's edge shows one of its own for
+                # the same name. gost's default is not to check at all, which
+                # is how this was for a while: a password sent to whoever
+                # answered on 443.
+                nodes += (f'              tls: {{secure: true, '
+                          f'serverName: {_yaml_str(domain)}}}\n')
             nodes += (
                 f'              metadata: {{path: {TUNNEL_PATHS[mode]}, '
-                + (f'host: {domain}, dial.timeout: 4s, ' if edges else '')
+                + (f'host: {_yaml_str(domain)}, dial.timeout: 4s, '
+                   if edges else '')
                 + 'mux.keepaliveInterval: 10s}\n')
         chains.append(
             f'  - name: ch-{mode}\n'
@@ -3751,6 +4144,16 @@ def tunnel_settings():
             'it in /etc/gost/tunnel.pw and /etc/gost/api.pw.\n\n'
             'No server yet?  tunnel/install-server.sh <domain> - run it there,\n'
             'once, against a domain pointed at it through Cloudflare.')
+    # Checked here because these go into gost's YAML and into the API's
+    # Authorization header. Quoted there as well; this is so that a value
+    # nothing would accept is refused with a reason rather than half-written.
+    if not valid_host(saved['domain']):
+        die(f'"domain" in {TUNNEL_SETTINGS} is not a hostname or an IPv4 '
+            'address', 'Letters, digits, hyphens and dots only.')
+    for key in ('password', 'apiPassword'):
+        if saved.get(key) and not valid_secret(saved[key]):
+            die(f'"{key}" in {TUNNEL_SETTINGS} has characters it cannot have',
+                f'It has to be {SECRET_RULE}.')
     return saved
 
 
@@ -3922,7 +4325,45 @@ def tunnel_way_in(saved, force=False, quiet=False):
     return 'repaired'
 
 
-def tunnel_set_exit(saved, ip, user, password, name='current'):
+def exit_tls(host, verify=True):
+    """The `tls` block the server's gost dials a provider exit with.
+
+    Verified by default: the exit is handed the provider account's password
+    the moment the TLS is up, and an unchecked certificate hands it to
+    whoever answers at that address. Checked against the exit's own name -
+    the one its config was pinned from - with the server's system CAs.
+
+    The cost is that the name then travels in the SNI of the server's
+    connection to the exit. That is invisible from here, but where the server
+    itself sits behind filtering that reads SNI (a server in Iran), a
+    provider's name in it can be what gets the connection reset. So it can be
+    turned off per server (`verifyExit: false` in tunnel.json, or the switch
+    in the window), which brings back the old unverified form.
+
+    Fails closed: with checking on and no name to check against, this
+    raises rather than quietly sending the password unchecked. A pinned
+    config always carries its name; one that does not is not used.
+    """
+    if not verify:
+        return {'secure': False}
+    host = str(host or '').strip()
+    if not host or is_address(host):
+        raise RuntimeError('this exit has no name to check its certificate '
+                           'against, so it was not sent to your server - '
+                           'pin its config again, or turn checking off for '
+                           'this server')
+    return {'secure': True, 'serverName': host}
+
+
+def exit_node(ip, user, password, name, host=None, verify=True):
+    """One provider exit, as a node in one of the server's chains."""
+    return {'name': name, 'addr': f'{ip}:443',
+            'connector': {'type': 'http',
+                          'auth': {'username': user, 'password': password}},
+            'dialer': {'type': 'tls', 'tls': exit_tls(host, verify)}}
+
+
+def tunnel_set_exit(saved, ip, user, password, name='current', host=None):
     """Point the server's exit chain at one address, live.
 
     One request, and it takes effect on the next connection through the
@@ -3931,19 +4372,18 @@ def tunnel_set_exit(saved, ip, user, password, name='current'):
     three callers want it now: the country verb, the window, and the sweep
     that measures each exit from the far side of the tunnel.
 
+    `host` is the exit's own name, which its certificate is checked against
+    unless this server's settings say not to (see exit_tls).
+
     Soft, because the sweep asks this once per config and a server that
     refuses one of them is a row in the table rather than the end of the run.
     """
+    verify = saved.get('verifyExit', True) is not False
     tunnel_api(saved, 'config/chains/exit-chain', method='PUT', soft=True,
                payload={
                    'name': 'exit-chain',
-                   'hops': [{'name': 'exit', 'nodes': [{
-                       'name': name, 'addr': f'{ip}:443',
-                       'connector': {'type': 'http',
-                                     'auth': {'username': user,
-                                              'password': password}},
-                       'dialer': {'type': 'tls', 'tls': {'secure': False}},
-                   }]}],
+                   'hops': [{'name': 'exit', 'nodes': [
+                       exit_node(ip, user, password, name, host, verify)]}],
                })
     return True
 
@@ -4077,7 +4517,7 @@ def do_tunnel(argv):
         want = argv[1].lower()
         ip, name = pick_country(want)
         user, password = read_auth(os.path.join(ROOT, '.ovpn-auth'))
-        tunnel_set_exit(saved, ip, user, password, name=want)
+        tunnel_set_exit(saved, ip, user, password, name=want, host=name)
         head('Tunnel')
         field('country', f'{want} - {name}')
         field('exit', ip)

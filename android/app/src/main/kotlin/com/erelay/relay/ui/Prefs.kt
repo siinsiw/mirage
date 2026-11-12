@@ -402,7 +402,7 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
                 Spacer(Modifier.height(Space.x3))
                 Segment(listOf("ss", "ws"), tunnel.transport,
                     { if (it == "ss") "Shadowsocks" else "WebSocket" },
-                    { t -> said = core.setTunnelTransport(t) }, enabled = !busy)
+                    { t -> scope.launch { said = core.setTunnelTransport(t) } }, enabled = !busy)
                 if (tunnel.transport == "ss") {
                     Text("Straight to ${tunnel.domain}:${tunnel.ssPort}, and :${tunnel.ssPort + 1} " +
                         "for server + exit.", style = Type.mono, modifier = Modifier.padding(top = Space.x2))
@@ -425,10 +425,19 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
                 if (tunnel.hasApiPassword) "Saved" else "Made for you", secret = true)
             ButtonRow {
                 Btn("Save", {
-                    core.saveTunnel(domain, password, api)
-                    password = ""
-                    api = ""
-                    said = Said(true, "Saved.")
+                    val typed = Triple(domain, password, api)
+                    // Checked and stored on the core's thread. The fields
+                    // are emptied only once it is saved: a refusal leaves
+                    // what was typed there to be corrected, with the reason
+                    // under it.
+                    scope.launch {
+                        val r = core.saveTunnel(typed.first, typed.second, typed.third)
+                        if (r.ok) {
+                            password = ""
+                            api = ""
+                        }
+                        said = r
+                    }
                 }, strong = true)
                 Btn(if (busy) "Testing…" else "Test", {
                     busy = true
@@ -456,6 +465,8 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
         }
     }
 
+    ExitCheck(core, tunnel)
+
     Section("Setting up the server",
         help = "Paste these into an SSH session on the server, as root. Install sets up " +
             "everything in one go, with this app's passwords - run it again any time to " +
@@ -464,11 +475,16 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
         Group {
             SettingRow("Copy the install command", desc = "Run on the server as root",
                 icon = Glyph.copy, onClick = {
-                    val cmd = core.installCommand(domain)
-                    said = when {
-                        domain.isBlank() -> Said(false, "Type the server's IP or domain first.")
-                        cmd == null -> Said(false, "The installer is missing from this build.")
-                        else -> { core.copy(cmd); Said(true, "Copied. Paste it on the server, then press Test.") }
+                    val host = domain
+                    scope.launch {
+                        // The command, or why there is none (a host or a
+                        // saved password the server-settings rule refuses).
+                        val cmd = core.installCommand(host)
+                        said = if (!cmd.ok) cmd else {
+                            // It carries both passwords: no clipboard preview.
+                            core.copy(cmd.text, sensitive = true)
+                            Said(true, "Copied. Paste it on the server, then press Test.")
+                        }
                     }
                 })
             Sep()
@@ -479,6 +495,82 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
             SettingRow("Copy uninstall", desc = "Leaves the rest of the server alone", icon = Glyph.copy,
                 onClick = { core.copy(core.uninstallCommand()); said = Said(true, "Copied the uninstall command.") })
         }
+    }
+}
+
+/**
+ * Server + exit's check of the exit it is pointed at: on, and kept on unless
+ * somebody decides otherwise with the reason in front of them.
+ *
+ * The check makes sure the provider exit the server leaves by is the real
+ * one before traffic goes through it. From a server inside Iran the check
+ * itself is often what the filtering breaks, and then no exit passes; the
+ * notice says so there, and offers the way out - behind a confirmation,
+ * because what it gives up is the one thing standing between the traffic and
+ * an exit that is not who it says it is.
+ *
+ * Per server: the switch is this server's, and a server pasted in next starts
+ * with the check on again. Whether the server is in Iran is the core's answer
+ * (ServerInIran, by its addresses), asked once per server; when it cannot
+ * tell, there is no notice, and the switch is still here.
+ */
+@Composable
+private fun ExitCheck(core: RelayCore, tunnel: TunnelPlan) {
+    if (tunnel.domain.isEmpty()) return
+    val verify by core.tunnelVerify.collectAsStateWithLifecycle()
+    val inIranAnswer by core.serverInIran.collectAsStateWithLifecycle()
+    var askOff by remember { mutableStateOf(false) }
+    val inIran = inIranAnswer == true
+    LaunchedEffect(tunnel.domain) { core.checkServerInIran() }
+
+    Section("Server + exit",
+        help = "Before server + exit sends anything through a provider exit, the server checks " +
+            "that the exit is the provider's real server. Leave it on unless the check keeps " +
+            "failing - it is what stops a forged exit from seeing your traffic. The setting is " +
+            "kept for each server on its own.") {
+        Group {
+            SwitchRow("Check the exit first",
+                if (verify) "On for ${tunnel.domain}. Every exit is checked before it is used."
+                else "Off for ${tunnel.domain}. Exits are used without being checked.",
+                verify, { on ->
+                    // Off only after the question below has been answered.
+                    if (on) {
+                        core.setTunnelVerify(true)
+                    } else {
+                        askOff = true
+                    }
+                })
+        }
+        if (inIran && verify) {
+            Block(Modifier.padding(top = Space.x3)) {
+                Text("Your server is in Iran", style = Type.strong)
+                Text("From inside Iran the filtering often breaks the check itself - a handshake " +
+                    "that names the provider is the kind the line cuts - and then no exit passes " +
+                    "it, and server + exit says it found none. If that keeps happening, the check " +
+                    "can be turned off for this server.",
+                    style = Type.body, modifier = Modifier.padding(top = Space.x1))
+                ButtonRow {
+                    Btn("Turn the check off", { askOff = true }, danger = true)
+                }
+            }
+        }
+    }
+
+    if (askOff) {
+        Prompt(
+            title = "Turn off the exit check for ${tunnel.domain}?",
+            text = "Server + exit will send your traffic through whichever exit it is pointed at, " +
+                "without first making sure it is the provider's real server. On a filtered line " +
+                "that exit could be a forgery that sees everything you send. Turn it off only if " +
+                "the check keeps failing, and turn it back on when you can.",
+            confirm = "Turn off",
+            danger = true,
+            onConfirm = {
+                core.setTunnelVerify(false)
+                askOff = false
+            },
+            onDismiss = { askOff = false },
+        )
     }
 }
 
@@ -499,6 +591,12 @@ private fun LanShare(core: RelayCore) {
     val lan by core.lanState.collectAsStateWithLifecycle()
     val up = conn.mode == Mode.ON
     var said by remember { mutableStateOf<Said?>(null) }
+    // The password prompt the switch opens when there is no password yet.
+    var asking by remember { mutableStateOf(false) }
+    val minimum = com.erelay.relay.Keys.LAN_SHARE_MIN_PASSWORD
+    val maximum = com.erelay.relay.Keys.LAN_SHARE_MAX_PASSWORD
+    // The core's rule, said before it is asked: null when the password will do.
+    fun problem(p: String): String? = com.erelay.relay.Keys.lanPasswordProblem(p.trim())
 
     // Asked every couple of seconds while this screen is the one showing.
     LaunchedEffect(Unit) {
@@ -510,18 +608,70 @@ private fun LanShare(core: RelayCore) {
 
     Section("Share this connection",
         note = "Phones and laptops on the same Wi-Fi or hotspot can use Relay's connection through " +
-            "this phone. Only devices on the same network can reach it, and only while Relay is connected.") {
+            "this phone. Only devices on the same network can reach it, only while Relay is connected, " +
+            "and only with the password.") {
         Group {
             SwitchRow("Share on Wi-Fi",
                 when {
                     !on -> "Off"
                     !up -> "Starts when Relay connects."
                     lan.on -> "Sharing now"
+                    // The core's own reason, e.g. no Wi-Fi or hotspot address.
+                    lan.error.isNotEmpty() -> lan.error.replaceFirstChar { it.uppercase() }
                     else -> "Starting…"
                 },
-                on, { v -> scope.launch { said = core.setLanShare(v).takeIf { !it.ok } } })
+                on, { v ->
+                    said = null
+                    // Never on without a password: anything on a café's Wi-Fi
+                    // could otherwise borrow the tunnel. Asked for here, the
+                    // first time, rather than refused with a sentence.
+                    if (v && problem(saved) != null) {
+                        asking = true
+                    } else {
+                        scope.launch { said = core.setLanShare(v).takeIf { !it.ok } }
+                    }
+                })
         }
         said?.let { SaidLine(it.text, bad = !it.ok) }
+    }
+
+    if (asking) {
+        var typed by remember { mutableStateOf("") }
+        var wrong by remember { mutableStateOf("") }
+        var saving by remember { mutableStateOf(false) }
+        Prompt(
+            title = "A password for the share",
+            text = "Other devices sign in to the proxy with the user name relay and this password. " +
+                "Without one, anything on the same Wi-Fi could use your connection.",
+            confirm = if (saving) "Turning on…" else "Turn on",
+            confirmEnabled = !saving && problem(typed) == null,
+            onConfirm = {
+                saving = true
+                scope.launch {
+                    // The password first: one the core would refuse keeps
+                    // the prompt open with the reason under the field.
+                    val set = core.setLanSharePassword(typed)
+                    if (!set.ok) {
+                        saving = false
+                        wrong = set.text
+                        return@launch
+                    }
+                    typed = ""
+                    saving = false
+                    asking = false
+                    // Then the share. A start that fails - no Wi-Fi or
+                    // hotspot address, a port in use - is said in the core's
+                    // words under the switch; the setting stays on.
+                    said = core.setLanShare(true).takeIf { !it.ok }
+                }
+            },
+            onDismiss = { asking = false },
+        ) {
+            FieldLabel("Password", hint = "$minimum to $maximum characters")
+            Field(typed, { typed = it; wrong = "" }, "Password", secret = true)
+            // Said as it is typed, once there is something to say it about.
+            SaidLine(wrong.ifEmpty { if (typed.isEmpty()) "" else problem(typed).orEmpty() }, bad = true)
+        }
     }
 
     if (on) {
@@ -558,9 +708,10 @@ private fun LanShare(core: RelayCore) {
                 Field(portText, { portText = it.filter(Char::isDigit).take(5) }, "8877",
                     mono = true, keyboard = KeyboardType.Number)
                 Spacer(Modifier.height(Space.x3))
-                FieldLabel("Password", hint = "optional")
-                Field(pass, { pass = it }, "None", secret = true)
-                Text("When set, the other device has to sign in to the proxy: user name relay, and this password. On an iPhone, turn Authentication on under Configure Proxy.",
+                FieldLabel("Password", hint = "$minimum to $maximum characters")
+                Field(pass, { pass = it }, "Password", secret = true)
+                if (pass.isNotEmpty()) SaidLine(problem(pass).orEmpty(), bad = true)
+                Text("The other device has to sign in to the proxy: user name relay, and this password. On an iPhone, turn Authentication on under Configure Proxy.",
                     style = Type.caption, modifier = Modifier.padding(top = Space.x2))
                 ButtonRow {
                     Btn("Save", {
@@ -569,7 +720,8 @@ private fun LanShare(core: RelayCore) {
                             val a = core.setLanSharePort(p)
                             said = if (!a.ok) a else core.setLanSharePassword(pass).takeIf { !it.ok } ?: Said(true, "Saved.")
                         }
-                    }, strong = true, enabled = portText != port.toString() || pass.trim() != saved)
+                    }, strong = true, enabled = (portText != port.toString() || pass.trim() != saved) &&
+                        problem(pass) == null)
                 }
             }
         }

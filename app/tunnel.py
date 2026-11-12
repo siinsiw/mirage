@@ -100,10 +100,19 @@ def parse_key(text):
            'password': text_field('pw'), 'api_password': text_field('apw'),
            'ss': None, 'export': None}
     host = out['host']
-    if not (is_address(host) or
-            all(part and len(part) < 64 and part.replace('-', '').isalnum()
-                for part in host.split('.'))):
+    # The shared rule (core/ovpn-proxy.py valid_host / valid_secret), which
+    # the installer and the phone apply too. These values end up in a gost
+    # config file, in an Authorization header and in a root shell line on
+    # the server, so a key that carries anything else is refused here rather
+    # than trusted to have been quoted everywhere it lands.
+    if not px.valid_host(host):
         raise ValueError('the server in that key is not an address or a name')
+    if not px.valid_secret(out['password']):
+        raise ValueError(f'the tunnel password in that key is not usable - it '
+                         f'has to be {px.SECRET_RULE}')
+    if not px.valid_secret(out['api_password']):
+        raise ValueError(f'the API password in that key is not usable - it '
+                         f'has to be {px.SECRET_RULE}')
     if out['pin'] and (len(out['pin']) != 64 or
                        any(c not in '0123456789abcdef' for c in out['pin'])):
         raise ValueError('the certificate pin in that key is malformed')
@@ -118,8 +127,10 @@ def parse_key(text):
     ss = body.get('ss')
     if ss is not None:
         ok = (isinstance(ss, dict) and ss.get('method') in SS_METHODS
-              and isinstance(ss.get('password'), str) and ss['password']
-              and all(isinstance(ss.get(p), int) and 0 < ss[p] < 65536
+              and isinstance(ss.get('password'), str)
+              and px.valid_secret(ss['password'])
+              and all(isinstance(ss.get(p), int) and not isinstance(ss[p], bool)
+                      and 0 < ss[p] < 65536
                       for p in ('port', 'exitPort')))
         if not ok:
             raise ValueError("the key's Shadowsocks settings are malformed")
@@ -144,7 +155,10 @@ class Tunnel:
     """The gost client process, and the server's API behind it."""
 
     def __init__(self, exe, workdir, domain, password, api_password,
-                 ss=None, expected_pin='', port=443):
+                 ss=None, expected_pin='', port=443, verify_exit=True):
+        # Whether the server checks a provider exit's certificate (see
+        # px.exit_tls). A setting of this server's, not of the app.
+        self.verify_exit = verify_exit is not False
         self.exe = exe
         self.dir = workdir
         self.domain = domain
@@ -374,9 +388,12 @@ class Tunnel:
         the connection and then 503s everything - so the only honest test is
         to carry something through it and see what comes back.
         """
+        # Over HTTPS: the answer is what the window shows as "where it comes
+        # out", and plain HTTP would let anything between the exit and the
+        # lookup write that answer.
         opener = urllib.request.build_opener(urllib.request.ProxyHandler(
-            {'http': f'http://127.0.0.1:{PORTS[mode]}'}))
-        req = urllib.request.Request('http://api.ipify.org',
+            {'https': f'http://127.0.0.1:{PORTS[mode]}'}))
+        req = urllib.request.Request('https://api.ipify.org',
                                      headers={'User-Agent': 'Relay'})
         return opener.open(req, timeout=timeout).read().decode().strip()
 
@@ -463,14 +480,14 @@ class Tunnel:
         except (KeyError, IndexError):
             return ''
 
-    def set_slot(self, k, ip, user, password, name='current'):
+    def set_slot(self, k, ip, user, password, name='current', host=None):
         """Point one exported location - loc-<k>, which links handed to
         other devices are routed to - at a provider exit. The same node
         set_exit writes, under another chain's name."""
         if not 1 <= int(k) <= 32:
             raise RuntimeError(f'slot {k} is not one the server has')
         try:
-            self._put_exit(f'loc-{int(k)}', ip, user, password, name)
+            self._put_exit(f'loc-{int(k)}', ip, user, password, name, host)
         except RuntimeError as e:
             if '404' in str(e):
                 raise RuntimeError('the server has no exported locations - run '
@@ -493,19 +510,18 @@ class Tunnel:
         self._api('config?format=yaml&path=/etc/gost/config.yaml',
                   method='POST')
 
-    def _put_exit(self, chain, ip, user, password, name):
+    def _put_exit(self, chain, ip, user, password, name, host=None):
+        # The server checks the exit's certificate against `host`, its own
+        # name, unless this server's switch says not to - see px.exit_tls,
+        # which is shared with the command line.
         self._api(f'config/chains/{chain}', method='PUT', payload={
             'name': chain,
-            'hops': [{'name': 'exit', 'nodes': [{
-                'name': name,
-                'addr': f'{ip}:443',
-                'connector': {'type': 'http',
-                              'auth': {'username': user, 'password': password}},
-                'dialer': {'type': 'tls', 'tls': {'secure': False}},
-            }]}],
+            'hops': [{'name': 'exit', 'nodes': [
+                px.exit_node(ip, user, password, name, host,
+                             self.verify_exit)]}],
         })
 
-    def set_exit(self, ip, user, password, name='current'):
+    def set_exit(self, ip, user, password, name='current', host=None):
         """Point multi-IP mode at a different node, live.
 
         This is the whole of what changing country costs: one request. The
@@ -517,5 +533,5 @@ class Tunnel:
         installed - the caller is the one that has to decide whether a choice
         is worth persisting.
         """
-        self._put_exit('exit-chain', ip, user, password, name)
+        self._put_exit('exit-chain', ip, user, password, name, host)
         return True

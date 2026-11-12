@@ -818,7 +818,11 @@ async function choose(code) {
      connect to the new one, so that picking somewhere else while a tunnel is
      up does the obvious thing instead of nothing. */
   if (state.mode === 'busy') return;
-  if (state.mode === 'on') {
+  // With the kill switch on, the move is the backend's to make in one step:
+  // it keeps Windows pointed at Relay while the old exit goes and the new
+  // one is found, where a Disconnect first would put the bare line back for
+  // the seconds in between.
+  if (state.mode === 'on' && state.killSwitch === false) {
     setStatus('Switching', 'busy', 'Leaving the old one', '');
     try {
       await window.pywebview.api.disconnect();
@@ -849,6 +853,7 @@ window.onProgress = (p) => {
 };
 
 window.onConnected = (status) => {
+  clearBlocked();
   state.mode = 'on';
   // The status carries the port it is really on, and after a move that is
   // the newer of the two answers - this one comes from the engine, while
@@ -914,7 +919,69 @@ function paintClock() {
 }
 setInterval(paintClock, 1000);
 
+/* The kill switch at work. The connection is gone, and Windows is still
+   pointed at Relay on purpose so nothing leaves on the bare line. Said in
+   red, with the two ways out: Connect (the big button, which reconnects)
+   and Disconnect, which puts Windows back. */
+function showBlocked(why) {
+  state.mode = 'fail';
+  state.blocked = true;
+  setIp($('exitIp'), '—', false);
+  $('exitPlace').textContent = 'not connected';
+  $('exitFlag').style.backgroundImage = '';
+  setStatus('Blocked', 'fail', 'Internet is blocked', '');
+  setHint(`${why} Nothing reaches the internet outside Relay until you `
+    + 'reconnect, or disconnect to use your normal connection.', true);
+  $('blocked').hidden = false;
+  render();
+}
+
+function clearBlocked() {
+  state.blocked = false;
+  $('blocked').hidden = true;
+}
+
+window.onBlocked = () => {
+  showBlocked('The connection dropped.');
+};
+
+/* The same drop with the kill switch off: Windows has already been put
+   back, so this is only the news. */
+window.onDropped = () => {
+  clearBlocked();
+  state.mode = 'off';
+  setIp($('exitIp'), '—', false);
+  $('exitPlace').textContent = 'not connected';
+  $('exitFlag').style.backgroundImage = '';
+  setStatus('Disconnected', 'off', 'The connection dropped', '');
+  setHint('The connection dropped. Windows is back on your normal connection.', true);
+  render();
+};
+
+$('unblock').addEventListener('click', async () => {
+  const b = $('unblock');
+  b.disabled = true;
+  let r;
+  try { r = await window.pywebview.api.disconnect(); } catch (err) { r = null; }
+  b.disabled = false;
+  if (r && r.ok) window.onDisconnected(r.session);
+  else setHint((r && r.error) || 'Could not put Windows back.', true);
+});
+
 window.onFailed = (err) => {
+  if (err && err.blocked) {
+    // A switch that found nothing to switch to, with the kill switch
+    // holding: the reason first, then that the line is held.
+    window.onFailedPlain(err);
+    const why = $('hint').textContent;
+    showBlocked(why ? `${why}` : 'Could not connect.');
+    return;
+  }
+  window.onFailedPlain(err);
+};
+
+window.onFailedPlain = (err) => {
+  clearBlocked();
   state.mode = 'fail';
   setIp($('exitIp'), '—', false);
   $('exitPlace').textContent = 'not connected';
@@ -977,13 +1044,24 @@ window.onFailed = (err) => {
   // A failure without its own sentence says what it was, rather than
   // "try once more" over a reason nobody gets to read.
   const why = (err.detail || '').trim();
-  setHint(say[err.kind]
-    || (why ? `Could not connect: ${why.slice(0, 160)}` : 'Could not connect. Try once more.'),
+  // Server + exit, from a server in Iran, with the exit's certificate being
+  // checked: the provider's name in the SNI may be what is being reset.
+  const t = state.tunnel || {};
+  const sni = state.way === 'multi' && t.inIran === true && t.verifyExit !== false
+    && err.kind !== 'cancelled'
+    ? ' Your server looks like it is in Iran, where naming the provider while '
+      + 'checking an exit can get the connection blocked — see "Checking the '
+      + 'exits" under Settings → Connection → Your own tunnel.'
+    : '';
+  setHint((say[err.kind]
+    || (why ? `Could not connect: ${why.slice(0, 160)}` : 'Could not connect. Try once more.'))
+    + sni,
   err.kind !== 'cancelled');
   render();
 };
 
 window.onDisconnected = (info) => {
+  clearBlocked();
   state.mode = 'off';
   setIp($('exitIp'), '—', false);
   $('exitPlace').textContent = 'not connected';
@@ -2018,14 +2096,64 @@ const lanPane = (() => {
     timer = null;
   }
 
-  async function set(want) {
+  /* The password, asked for in a dialog of its own. Resolves to the text,
+     or null when the person backs out. Refuses under eight characters there
+     and then, so the round trip to Windows' permission prompt is never spent
+     on a password the backend would turn down. */
+  function askPassword(title) {
+    const d = $('askLanPw');
+    const input = $('askLanPwIn');
+    d.querySelector('.ask__title').textContent = title;
+    input.value = '';
+    said($('askLanPwSaid'), '', '');
+    return new Promise((resolve) => {
+      const done = (value) => {
+        $('askLanPwYes').removeEventListener('click', yes);
+        $('askLanPwNo').removeEventListener('click', no);
+        d.removeEventListener('cancel', no);
+        input.removeEventListener('keydown', key);
+        if (d.open) d.close();
+        resolve(value);
+      };
+      const yes = () => {
+        const v = input.value;
+        // The rule the worker and the phone apps use: 8-128 characters of
+        // printable ASCII, so it can be typed into any other device.
+        if (v.length < 8 || v.length > 128 || !/^[\x20-\x7e]*$/.test(v)) {
+          said($('askLanPwSaid'),
+               '8 to 128 characters: English letters, digits, spaces and punctuation only.', 'bad');
+          input.focus();
+          return;
+        }
+        done(v);
+      };
+      const no = (e) => { if (e) e.preventDefault(); done(null); };
+      const key = (e) => { if (e.key === 'Enter') { e.preventDefault(); yes(); } };
+      $('askLanPwYes').addEventListener('click', yes);
+      $('askLanPwNo').addEventListener('click', no);
+      d.addEventListener('cancel', no);
+      input.addEventListener('keydown', key);
+      if (!d.open) d.showModal();
+      input.focus();
+    });
+  }
+
+  async function set(want, password) {
     if (busy) return;
+    // Sharing cannot be turned on without a password: asked for first, the
+    // first time, and whenever the backend says the one it has will not do.
+    if (want && password === undefined && !state.lanSharePasswordSet) {
+      password = await askPassword('A password for Share on Wi-Fi');
+      if (password === null) { paint(); return; }
+    }
     busy = true;
     note = { text: want ? 'Waiting for Windows to ask permission…' : 'Turning off…', kind: 'work' };
     paint();
     let r;
     try {
-      r = await api().setLanShare(want);
+      r = password === undefined
+        ? await api().setLanShare(want)
+        : await api().setLanShare(want, password);
     } catch (err) {
       r = { ok: false, error: String(err) };
     }
@@ -2033,14 +2161,46 @@ const lanPane = (() => {
     if (r && r.ok) {
       on = !!r.lanShare;
       state.lanShare = on;
+      if (password) state.lanSharePasswordSet = true;
       applied = r.applied || null;
       note = r.warning ? { text: r.warning, kind: 'bad' } : null;
+      hidePassword();
+    } else if (r && r.needPassword && password === undefined) {
+      state.lanSharePasswordSet = false;
+      note = null;
+      paint();
+      return set(want);
     } else {
       note = { text: (r && r.error) || 'Could not change it.', kind: 'bad' };
     }
     if (on) { snap = null; schedule(); }
     paint();
     if (on) poll();
+  }
+
+  /* Shown on request only - it is to be typed into a phone, not to sit on
+     screen for whoever walks past. */
+  let showing = false;
+  function hidePassword() {
+    showing = false;
+    $('lanPw').textContent = '••••••••';
+    $('lanPwShow').textContent = 'Show';
+    $('lanPwShow').setAttribute('aria-pressed', 'false');
+  }
+  async function togglePassword() {
+    if (showing) { hidePassword(); return; }
+    let r;
+    try { r = await api().lanSharePassword(); } catch (err) { r = null; }
+    if (!r || !r.ok) return;
+    showing = true;
+    $('lanPw').textContent = r.password;
+    $('lanPwShow').textContent = 'Hide';
+    $('lanPwShow').setAttribute('aria-pressed', 'true');
+  }
+  async function changePassword() {
+    const pw = await askPassword('A new password for Share on Wi-Fi');
+    if (pw === null) return;
+    await set(true, pw);
   }
 
   async function fix() {
@@ -2058,6 +2218,8 @@ const lanPane = (() => {
 
   $('lanSwitch').addEventListener('click', () => set(!on));
   $('lanFix').addEventListener('click', fix);
+  $('lanPwShow').addEventListener('click', togglePassword);
+  $('lanPwChange').addEventListener('click', changePassword);
   $('lanCopyAddr').addEventListener('click', (e) => {
     const a = (snap && snap.addrs && snap.addrs[0]) || '';
     copyText(e.currentTarget, a);
@@ -2071,6 +2233,10 @@ const lanPane = (() => {
       const has = 'lanShare' in info && supported();
       $('prefLan').hidden = !has;
       if (!has) return;
+      if ('lanSharePasswordSet' in info) state.lanSharePasswordSet = !!info.lanSharePasswordSet;
+      // Turned off at start-up because the saved password no longer fits
+      // the rule: said here until a new one is chosen.
+      if (info.lanShareNotice && !note) note = { text: info.lanShareNotice, kind: 'bad' };
       if (!busy) on = !!info.lanShare;
       state.lanShare = on;
       paint();
@@ -2114,7 +2280,91 @@ function paintTunnel(plan) {
   // An address is not behind Cloudflare, and Shadowsocks goes straight to
   // the address either way: in both there is no other way in to find.
   $('tunnelScan').hidden = !!t.isAddress || t.transport === 'ss';
+  paintVerify(t);
 }
+
+/* Whether the server checks the provider exits it is handed. The Iran
+   question is a DoH lookup for a server by name, so it is asked after the
+   pane is drawn, once per server, and painted when it lands. */
+let verifyAskedFor = null;
+function paintVerify(t) {
+  const known = 'verifyExit' in t && !!t.domain;
+  $('tunnelVerifyStep').hidden = !known;
+  if (!known) return;
+  const on = t.verifyExit !== false;
+  $('tunnelVerify').setAttribute('aria-checked', String(on));
+  const iran = t.inIran === true;
+  $('tunnelIranNote').hidden = !(iran && on);
+  $('tunnelIranRow').hidden = !(iran && on);
+  if (t.inIran == null && verifyAskedFor !== t.domain
+      && typeof window.pywebview.api.serverInIran === 'function') {
+    verifyAskedFor = t.domain;
+    window.pywebview.api.serverInIran().then((r) => {
+      if (!r || !state.tunnel || state.tunnel.domain !== t.domain) return;
+      state.tunnel = { ...state.tunnel, inIran: r.inIran, verifyExit: r.verifyExit };
+      paintVerify(state.tunnel);
+    }, () => {});
+  }
+}
+
+/* A yes-or-no question in the window's own words, the safe answer first.
+   Resolves true only for an explicit yes. */
+function confirmAsk(title, say, yes) {
+  const d = $('askConfirm');
+  $('askConfirmTitle').textContent = title;
+  $('askConfirmSay').textContent = say;
+  $('askConfirmYes').textContent = yes || 'Turn it off';
+  return new Promise((resolve) => {
+    const done = (v) => {
+      $('askConfirmYes').removeEventListener('click', y);
+      $('askConfirmNo').removeEventListener('click', n);
+      d.removeEventListener('cancel', n);
+      if (d.open) d.close();
+      resolve(v);
+    };
+    const y = () => done(true);
+    const n = (e) => { if (e) e.preventDefault(); done(false); };
+    $('askConfirmYes').addEventListener('click', y);
+    $('askConfirmNo').addEventListener('click', n);
+    d.addEventListener('cancel', n);
+    if (!d.open) d.showModal();
+    $('askConfirmNo').focus();
+  });
+}
+
+async function setVerifyExit(want) {
+  const sw = $('tunnelVerify');
+  if (sw.dataset.busy === '1') return;
+  if (!want) {
+    const sure = await confirmAsk(
+      'Stop checking the exits for this server?',
+      'Your server will send your provider account\'s password to each exit '
+      + 'without checking its certificate, so anything that answers in the '
+      + 'exit\'s place could take it. Only do this if server + exit fails '
+      + 'because your server\'s network blocks the provider\'s name.',
+      'Turn checking off');
+    if (!sure) return;
+  }
+  busy(sw, true);
+  let r;
+  try { r = await window.pywebview.api.setTunnelVerifyExit(want, !want); } catch (err) { r = null; }
+  busy(sw, false);
+  if (r && r.ok) {
+    paintTunnel(r);
+    said($('tunnelVerifyNote'), want
+      ? 'Checked from the next exit your server is given.'
+      : 'Not checked from the next exit your server is given.', want ? 'good' : '');
+  } else {
+    said($('tunnelVerifyNote'), 'Could not change it.', 'bad');
+    paintVerify(state.tunnel || {});
+  }
+}
+
+$('tunnelVerify').addEventListener('click', () => {
+  const t = state.tunnel || {};
+  setVerifyExit(t.verifyExit === false);
+});
+$('tunnelVerifyOff').addEventListener('click', () => setVerifyExit(false));
 
 /* Shadowsocks or the WebSocket, for a server whose key offered both. */
 function paintVia(t) {
@@ -2204,6 +2454,12 @@ async function saveTunnel() {
   const plan = await window.pywebview.api.saveTunnel(
     $('tunnelDomain').value.trim(), $('tunnelPass').value, $('tunnelApi').value);
   busy(btn, false);
+  // Refused - a server or password that cannot go into a config file or a
+  // shell line safely. What was typed stays, so it can be corrected.
+  if (plan && plan.ok === false) {
+    said($('tunnelSaid'), plan.error || 'That could not be saved.', 'bad');
+    return;
+  }
   // Out of the DOM as soon as they are on disk, for the same reason the
   // sign-in fields are.
   $('tunnelPass').value = '';
@@ -2289,6 +2545,13 @@ function peek(fieldId, buttonId) {
 
 function paintPrefs(info) {
   $('sysProxy').setAttribute('aria-checked', String(state.systemProxy));
+  // Both default to on, and a backend that does not describe them hides
+  // their rows rather than showing a switch that does nothing.
+  $('prefKill').hidden = !('killSwitch' in info);
+  if ('killSwitch' in info) state.killSwitch = info.killSwitch !== false;
+  $('killSwitch').setAttribute('aria-checked', String(state.killSwitch !== false));
+  if ('ownerLookup' in info) state.ownerLookup = info.ownerLookup !== false;
+  $('ownerLookup').setAttribute('aria-checked', String(state.ownerLookup !== false));
   if (info.routeWith) state.routeWith = info.routeWith;
   if ('tunReady' in info) state.tunReady = info.tunReady !== false;
   state.elevated = !!info.elevated;
@@ -3218,6 +3481,9 @@ async function bootSteps() {
   const s = info.status || {};
   if (s.state === 'on') {
     window.onConnected(s);
+  } else if (s.blocked) {
+    // The page loaded again while the kill switch was holding the line.
+    showBlocked('The connection dropped.');
   } else {
     state.mode = 'off';
     setStatus('Disconnected', 'off', '', '');
@@ -3912,6 +4178,40 @@ $('sysProxy').addEventListener('click', async () => {
     setHint(r.error || 'Windows would not take that.', true);
   }
   paintRouteWith();
+});
+
+/* The kill switch. Saved at once; turned off while it is holding the line,
+   the backend lets go and Windows is back to normal - said, because the
+   front of the app changes underneath the sheet. */
+$('killSwitch').addEventListener('click', async () => {
+  const sw = $('killSwitch');
+  if (sw.dataset.busy === '1') return;
+  const want = state.killSwitch === false;
+  sw.setAttribute('aria-checked', String(want));
+  busy(sw, true);
+  let r;
+  try { r = await window.pywebview.api.setKillSwitch(want); } catch (err) { r = null; }
+  busy(sw, false);
+  if (r && r.ok) {
+    state.killSwitch = !!r.killSwitch;
+    if (r.released) window.onDisconnected({});
+  }
+  sw.setAttribute('aria-checked', String(state.killSwitch !== false));
+});
+
+/* Whether exit addresses may be sent to the IP-owner lookup at all. */
+$('ownerLookup').addEventListener('click', async () => {
+  const sw = $('ownerLookup');
+  if (sw.dataset.busy === '1') return;
+  const want = state.ownerLookup === false;
+  sw.setAttribute('aria-checked', String(want));
+  busy(sw, true);
+  let r;
+  try { r = await window.pywebview.api.setOwnerLookup(want); } catch (err) { r = null; }
+  busy(sw, false);
+  if (r && r.ok) state.ownerLookup = !!r.ownerLookup;
+  sw.setAttribute('aria-checked', String(state.ownerLookup !== false));
+  $('lookUpOwners').disabled = state.ownerLookup === false;
 });
 
 /* How Windows is routed, under the switch that says whether it is. Out of

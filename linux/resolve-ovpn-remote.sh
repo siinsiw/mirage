@@ -813,6 +813,14 @@ for f in "${FILES[@]}"; do
             fi
         fi
 
+        # Anything in the file that would have openvpn run a program or write
+        # a file goes, and the header says what went (see drop_script_lines).
+        drop_script_lines "${COPY[@]}"
+        COPY=("${KEPT_LINES[@]}")
+        if [ ${#DROPPED_DIRECTIVES[@]} -gt 0 ]; then
+            header+=("#   removed, as they run programs or write files: ${DROPPED_DIRECTIVES[*]}")
+        fi
+
         if [ "$IN_PLACE" -eq 1 ]; then
             target=$f
         else

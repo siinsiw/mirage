@@ -19,6 +19,11 @@ import java.io.File
  * itself, and how somebody looks at what is there when something is wrong.
  * The cost is that uninstalling takes it all with it.
  *
+ * Configs only, never a credential. A file on shared storage is readable by
+ * anybody with a cable and, on older Android, by any app allowed to read
+ * storage; the provider passwords used to sit here as `auth` and are now in
+ * [Secrets] (see [legacyAuth] and [authInbox]).
+ *
  * The names match app/paths.py, with the folders a phone cannot use left out.
  */
 object AppFiles {
@@ -38,11 +43,31 @@ object AppFiles {
     fun dropped(ctx: Context) = File(root(ctx), "dropped")
     fun state(ctx: Context) = File(root(ctx), ".state")
 
-    /** Surfshark's service credential, where setup-phone.sh pushes it. */
-    fun auth(ctx: Context) = File(root(ctx), "auth")
+    /**
+     * Where the provider credentials used to be: two lines of username and
+     * password in plain text, on shared storage, where anything with storage
+     * access on an older phone - and anybody with a cable - could read them.
+     * Nothing writes these any more. [Accounts.adopt] reads one that is still
+     * there into [Secrets] and deletes it.
+     */
+    fun legacyAuth(ctx: Context, provider: String): File? =
+        ctx.getExternalFilesDir(null)?.let {
+            File(it, if (provider == Accounts.WINDSCRIBE) "auth-windscribe" else "auth")
+        }
 
-    /** Windscribe's proxy credential, which is a different account. */
-    fun windscribeAuth(ctx: Context) = File(root(ctx), "auth-windscribe")
+    /**
+     * A credential handed to the app from outside, and where it waits.
+     *
+     * Internal storage, in the folder Android leaves out of backups: private
+     * to the app, which shared storage is not. setup-phone.sh and install.sh
+     * put `.ovpn-auth` here through `run-as` on a debug build, and the app
+     * moves it into [Secrets] and deletes it the next time it looks
+     * ([Accounts.adopt]). Only a phone with no working secret store keeps it
+     * here for good - then this file is the credential, as the shared one
+     * used to be, just somewhere nothing else can read it.
+     */
+    fun authInbox(ctx: Context, provider: String): File =
+        File(ctx.noBackupFilesDir, if (provider == Accounts.WINDSCRIBE) "auth-windscribe" else "auth")
 
     /**
      * Tell the core where everything is, and make the folders.

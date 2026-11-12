@@ -4921,6 +4921,10 @@ body {
 
 .hint.is-bad { color: var(--fail); }
 
+/* The kill switch holding the line: one way out besides reconnecting. */
+.blocked { margin-top: 8px; display: flex; justify-content: flex-start; }
+.blocked[hidden] { display: none; }
+
 /* --------------------------------------------------------------- the flag disc */
 
 .flag {

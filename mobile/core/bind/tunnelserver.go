@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ERelay/ovpn-pin/mobile/core"
+	"github.com/siinsiw/ovpn-pin/mobile/core"
 )
 
 // The user's own server, as the phone sees it.
@@ -161,13 +161,46 @@ func withPin(seenAs, pin string) string {
 // SetServerExit points the server's multi-IP mode at one provider exit,
 // with that exit's own provider credential - what server + exit does before
 // it connects, so the location picked is the one traffic leaves by.
-func SetServerExit(cfg *ServerConfig, apiPassword, exitIP, user, password, name string, timeoutMs int) error {
+//
+//	exitIP    the exit's pinned address (Result.Addr)
+//	exitName  the name its certificate serves - the exit's pinned Name
+//	          (Result.Name); required when verify is true
+//	name      the node's label in the server's config (Result.File), or ""
+//	verify    the server checks the exit's certificate against exitName.
+//	          The per-server setting, on by default; off only when the person
+//	          turned it off (see ServerInIran)
+//
+// A server by address whose pin is not known yet is refused with
+// core.ErrNoPin's message before anything is sent: test the server first.
+func SetServerExit(cfg *ServerConfig, apiPassword, exitIP, exitName, user, password, name string, verify bool, timeoutMs int) error {
 	if cfg == nil || cfg.Domain == "" {
 		return errors.New("no server configured")
 	}
-	return core.SetExit(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, exitIP, user, password, name,
-		time.Duration(timeoutMs)*time.Millisecond)
+	return core.SetExit(cfg.Domain, cfg.Port, apiPassword, cfg.Pin, core.ExitHop{
+		IP: exitIP, Hostname: exitName, User: user, Password: password, Node: name, Verify: verify,
+	}, time.Duration(timeoutMs)*time.Millisecond)
 }
+
+// ServerInIran is whether the user's server is at an Iranian address, by the
+// Iran split-tunnelling preset's ranges: host as an IPv4 address, or a name
+// resolved over DoH (Cloudflare, pinned) - true when any of its addresses is
+// in the list. The settings screen asks it to decide whether to offer turning
+// the exit's certificate check (verify, above) off - with a confirmation:
+// from inside Iran, a handshake that names the provider is the kind the line
+// kills, and without the name nothing can be checked.
+//
+// An error is "could not tell" (a name that does not resolve, no network) -
+// not a no.
+func ServerInIran(host string, timeoutMs int) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+	return core.ServerInIran(ctx, host)
+}
+
+// NoPinError is core.ErrNoPin's message, so the window can tell that error
+// from the others by comparing strings - the only way gomobile lets an error
+// be told apart on the other side.
+func NoPinError() string { return core.ErrNoPin.Error() }
 
 // SeenAsLiveJSON is where the running tunnel comes out, asked through
 // whatever is carrying it. What the window asks for the user's own server:

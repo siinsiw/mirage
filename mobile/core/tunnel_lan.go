@@ -27,7 +27,11 @@ func (b tunnelLAN) Open(target string, timeout time.Duration) (net.Conn, []byte,
 // answer that produced the address). The owning app cannot be asked - the
 // connection belongs to no app here - so in "only these apps" mode a shared
 // device is not one of them, and goes straight.
-func (b tunnelLAN) Straight(host string) bool {
+//
+// For an address, the SNI the proxy read from the client's ClientHello
+// decides ahead of the name remembered for that address, for the reason
+// ListedByName gives; the remembered name only when there was no SNI.
+func (b tunnelLAN) Straight(host, sni string) bool {
 	s := b.t.Split()
 	if s == nil {
 		return false
@@ -35,8 +39,12 @@ func (b tunnelLAN) Straight(host string) bool {
 	listed := false
 	if ip, err := netip.ParseAddr(host); err == nil {
 		listed = s.AddrListed(ip)
-		if !listed && b.t.names != nil {
-			listed = s.NameListed(b.t.names.Name(ip.Unmap()))
+		if !listed {
+			remembered := ""
+			if b.t.names != nil {
+				remembered = b.t.names.Name(ip.Unmap())
+			}
+			listed = s.ListedByName(sni, remembered)
 		}
 	} else {
 		listed = s.NameListed(host)
@@ -44,8 +52,17 @@ func (b tunnelLAN) Straight(host string) bool {
 	return s.Direct(listed)
 }
 
+func (b tunnelLAN) NameMatters() bool {
+	s := b.t.Split()
+	return s != nil && s.NeedsName()
+}
+
+// DialStraight is dialStraight with lanDialGuard in place of the plain
+// protector: the phone's own line reaches the phone's own services, and a
+// shared device has no business there.
 func (b tunnelLAN) DialStraight(ctx context.Context, target string, timeout time.Duration) (net.Conn, error) {
-	return dialStraight(ctx, target, timeout)
+	d := net.Dialer{Timeout: timeout, Control: lanDialGuard}
+	return d.DialContext(ctx, "tcp4", target)
 }
 
 func (b tunnelLAN) Hosts() *Hosts { return b.t.hosts }

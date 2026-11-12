@@ -39,11 +39,19 @@ android {
 
     // Android identifies an app by the key that signed it, so a release has
     // to be signed by the same key every time. Same variables as the Flutter
-    // build; without them it falls back to the debug key and says so.
+    // build; without them a local release build falls back to the debug key
+    // - which is fine on a desk and never fine for a release
+    // anybody downloads. CI's release path sets RELAY_REQUIRE_SIGNING, and
+    // then a missing or unreadable key stops the build instead.
     val keystore = System.getenv("RELAY_KEYSTORE")
     val keystorePassword = System.getenv("RELAY_KEYSTORE_PASSWORD")
     val signed = !keystore.isNullOrEmpty() && !keystorePassword.isNullOrEmpty() &&
         file(keystore).exists()
+    if (System.getenv("RELAY_REQUIRE_SIGNING") == "true" && !signed) {
+        throw GradleException(
+            "RELAY_REQUIRE_SIGNING is set but there is no usable release key: set RELAY_KEYSTORE " +
+                "to an existing keystore and RELAY_KEYSTORE_PASSWORD to its password.")
+    }
 
     signingConfigs {
         if (signed) {

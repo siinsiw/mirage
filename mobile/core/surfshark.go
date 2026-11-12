@@ -164,7 +164,9 @@ func WriteSurfsharkConfigs(ctx context.Context, dest string, timeout time.Durati
 		}
 		text := fmt.Sprintf(surfsharkStub, s.Hostname)
 		if template != "" {
-			text = swapRemote(template, s.Hostname)
+			// A copy of a file from the folder, so held to the same rule a
+			// pinned one is: nothing in it may run a program.
+			text = stripScripts(swapRemote(template, s.Hostname))
 		}
 		if writeErr := os.WriteFile(path, []byte(text), 0o644); writeErr != nil {
 			continue

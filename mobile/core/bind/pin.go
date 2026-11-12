@@ -1,6 +1,6 @@
 package relay
 
-import "github.com/ERelay/ovpn-pin/mobile/core"
+import "github.com/siinsiw/ovpn-pin/mobile/core"
 
 // Pinning, across the bridge.
 //

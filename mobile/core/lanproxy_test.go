@@ -20,10 +20,16 @@ type fakeLAN struct {
 	serve    func(target string, c net.Conn)
 	straight bool
 	targets  chan string
+
+	// names is NameMatters; asked records the (host, sni) Straight was
+	// asked about.
+	names bool
+	asked chan [2]string
 }
 
 func newFakeLAN(serve func(string, net.Conn)) *fakeLAN {
-	return &fakeLAN{hosts: newHosts(), serve: serve, targets: make(chan string, 8)}
+	return &fakeLAN{hosts: newHosts(), serve: serve, targets: make(chan string, 8),
+		asked: make(chan [2]string, 8)}
 }
 
 func (f *fakeLAN) Open(target string, _ time.Duration) (net.Conn, []byte, error) {
@@ -32,7 +38,14 @@ func (f *fakeLAN) Open(target string, _ time.Duration) (net.Conn, []byte, error)
 	go f.serve(target, b)
 	return a, nil, nil
 }
-func (f *fakeLAN) Straight(string) bool { return f.straight }
+func (f *fakeLAN) Straight(host, sni string) bool {
+	select {
+	case f.asked <- [2]string{host, sni}:
+	default:
+	}
+	return f.straight
+}
+func (f *fakeLAN) NameMatters() bool { return f.names }
 func (f *fakeLAN) DialStraight(_ context.Context, target string, _ time.Duration) (net.Conn, error) {
 	f.targets <- "straight:" + target
 	a, b := net.Pipe()
@@ -63,6 +76,29 @@ func startLAN(t *testing.T, f *fakeLAN, password string, allow func(net.IP) bool
 
 func anyone(net.IP) bool { return true }
 
+// testLANPassword is long enough for CheckLANPassword.
+const testLANPassword = "s3cret-pass"
+
+// lanAuth is the Proxy-Authorization line for it.
+func lanAuth() string {
+	return "Proxy-Authorization: Basic " +
+		base64.StdEncoding.EncodeToString([]byte(LANProxyUser+":"+testLANPassword)) + "\r\n"
+}
+
+// socksLogin does SOCKS5's greeting and RFC 1929 sign-in with it.
+func socksLogin(t *testing.T, c net.Conn) {
+	t.Helper()
+	c.Write([]byte{5, 1, 2})
+	r := make([]byte, 2)
+	if _, err := io.ReadFull(c, r); err != nil || r[0] != 5 || r[1] != 2 {
+		t.Fatalf("method: %v %v", r, err)
+	}
+	c.Write(append([]byte{1, 1, 'u', byte(len(testLANPassword))}, testLANPassword...))
+	if _, err := io.ReadFull(c, r); err != nil || r[1] != 0 {
+		t.Fatalf("sign-in: %v %v", r, err)
+	}
+}
+
 func dialLAN(t *testing.T, addr string) net.Conn {
 	t.Helper()
 	c, err := net.DialTimeout("tcp", addr, 3*time.Second)
@@ -76,11 +112,11 @@ func dialLAN(t *testing.T, addr string) net.Conn {
 
 func TestLANHTTPConnect(t *testing.T) {
 	f := newFakeLAN(echo)
-	addr := startLAN(t, f, "", anyone)
+	addr := startLAN(t, f, testLANPassword, anyone)
 	c := dialLAN(t, addr)
 	br := bufio.NewReader(c)
 
-	io.WriteString(c, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+	io.WriteString(c, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n"+lanAuth()+"\r\n")
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("CONNECT: %v %v", resp, err)
@@ -118,11 +154,11 @@ func TestLANHTTPPlainRewrittenToOriginForm(t *testing.T) {
 			" x=" + req.Header.Get("X-Keep")
 		io.WriteString(c, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
 	})
-	addr := startLAN(t, f, "", anyone)
+	addr := startLAN(t, f, testLANPassword, anyone)
 	c := dialLAN(t, addr)
 
 	io.WriteString(c, "GET http://example.com/a/b?q=1 HTTP/1.1\r\nHost: example.com\r\n"+
-		"Proxy-Connection: keep-alive\r\nProxy-Authorization: Basic eDp5\r\nX-Keep: 1\r\n\r\n")
+		"Proxy-Connection: keep-alive\r\n"+lanAuth()+"X-Keep: 1\r\n\r\n")
 	body, _ := io.ReadAll(c)
 	if !strings.Contains(string(body), "200 OK") || !strings.HasSuffix(string(body), "ok") {
 		t.Fatalf("response: %q", body)
@@ -137,14 +173,10 @@ func TestLANHTTPPlainRewrittenToOriginForm(t *testing.T) {
 
 func TestLANSOCKS5Connect(t *testing.T) {
 	f := newFakeLAN(echo)
-	addr := startLAN(t, f, "", anyone)
+	addr := startLAN(t, f, testLANPassword, anyone)
 	c := dialLAN(t, addr)
 
-	c.Write([]byte{5, 1, 0})
-	r := make([]byte, 2)
-	if _, err := io.ReadFull(c, r); err != nil || r[0] != 5 || r[1] != 0 {
-		t.Fatalf("method: %v %v", r, err)
-	}
+	socksLogin(t, c)
 	name := "example.org"
 	req := append([]byte{5, 1, 0, 3, byte(len(name))}, name...)
 	req = append(req, 0x01, 0xbb) // 443
@@ -166,9 +198,9 @@ func TestLANSOCKS5Connect(t *testing.T) {
 func TestLANRefusesNonPrivateSource(t *testing.T) {
 	f := newFakeLAN(echo)
 	// The real filter, with the loopback test client it will not accept.
-	addr := startLAN(t, f, "", PrivateSource)
+	addr := startLAN(t, f, testLANPassword, PrivateSource)
 	c := dialLAN(t, addr)
-	io.WriteString(c, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+	io.WriteString(c, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n"+lanAuth()+"\r\n")
 	if n, _ := io.ReadAll(c); len(n) != 0 {
 		t.Fatalf("a refused source got an answer: %q", n)
 	}
@@ -180,8 +212,10 @@ func TestLANRefusesNonPrivateSource(t *testing.T) {
 
 	for ip, want := range map[string]bool{
 		"10.1.2.3": true, "172.16.0.1": true, "172.31.255.1": true, "172.32.0.1": false,
-		"192.168.1.5": true, "100.64.0.1": true, "100.127.1.1": true, "100.128.0.1": false,
-		"169.254.9.9": true, "8.8.8.8": false, "127.0.0.1": false, "::1": false,
+		// Carrier-grade NAT and link-local are no longer neighbours: the
+		// first is the carrier's other customers, the second nobody's.
+		"192.168.1.5": true, "100.64.0.1": false, "100.127.1.1": false, "100.128.0.1": false,
+		"169.254.9.9": false, "8.8.8.8": false, "127.0.0.1": false, "::1": false,
 	} {
 		if PrivateSource(net.ParseIP(ip)) != want {
 			t.Errorf("PrivateSource(%s) != %v", ip, want)
@@ -191,7 +225,7 @@ func TestLANRefusesNonPrivateSource(t *testing.T) {
 
 func TestLANPasswordRequired(t *testing.T) {
 	f := newFakeLAN(echo)
-	addr := startLAN(t, f, "s3cret", anyone)
+	addr := startLAN(t, f, testLANPassword, anyone)
 
 	// HTTP without it.
 	c := dialLAN(t, addr)
@@ -209,8 +243,7 @@ func TestLANPasswordRequired(t *testing.T) {
 	}
 	// Right one.
 	c = dialLAN(t, addr)
-	good := base64.StdEncoding.EncodeToString([]byte("relay:s3cret"))
-	io.WriteString(c, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Basic "+good+"\r\n\r\n")
+	io.WriteString(c, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n"+lanAuth()+"\r\n")
 	if resp, err = http.ReadResponse(bufio.NewReader(c), nil); err != nil || resp.StatusCode != 200 {
 		t.Fatalf("right password: %v %v", resp, err)
 	}
@@ -227,7 +260,7 @@ func TestLANPasswordRequired(t *testing.T) {
 	for _, tc := range []struct {
 		pw   string
 		want byte
-	}{{"nope", 1}, {"s3cret", 0}} {
+	}{{"nope", 1}, {testLANPassword, 0}} {
 		c = dialLAN(t, addr)
 		c.Write([]byte{5, 1, 2})
 		io.ReadFull(c, r)
@@ -249,13 +282,18 @@ func TestLANPasswordRequired(t *testing.T) {
 func TestLANStraightAndClose(t *testing.T) {
 	f := newFakeLAN(echo)
 	f.straight = true
-	p := NewLANProxy(f, "")
+	p := NewLANProxy(f, testLANPassword)
 	p.allow = anyone
 	ln, _ := net.Listen("tcp4", "127.0.0.1:0")
-	p.Serve(ln)
+	if err := p.Serve(ln); err != nil {
+		t.Fatal(err)
+	}
+	if !p.Running() {
+		t.Fatal("not running after Serve")
+	}
 
 	c := dialLAN(t, ln.Addr().String())
-	io.WriteString(c, "CONNECT a.test:443 HTTP/1.1\r\nHost: a.test:443\r\n\r\n")
+	io.WriteString(c, "CONNECT a.test:443 HTTP/1.1\r\nHost: a.test:443\r\n"+lanAuth()+"\r\n")
 	if resp, err := http.ReadResponse(bufio.NewReader(c), nil); err != nil || resp.StatusCode != 200 {
 		t.Fatalf("%v %v", resp, err)
 	}
@@ -277,5 +315,8 @@ func TestLANStraightAndClose(t *testing.T) {
 	}
 	if _, err := net.DialTimeout("tcp", ln.Addr().String(), time.Second); err == nil {
 		t.Fatal("still listening after Close")
+	}
+	if p.Running() {
+		t.Fatal("Running after Close")
 	}
 }

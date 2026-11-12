@@ -20,14 +20,24 @@ PROXY_PORTS=(10808 10809 7890 7891 2080 2081 1080 1081 8889 8080 20171 12334)
 # Everything a public hostname has no business resolving to. Rejecting the
 # whole of RFC1918 and friends rather than a list of known-forged addresses
 # means this keeps working when the censor picks a different one tomorrow.
+# Everything Python's ipaddress calls not is_global is here too - carrier-grade
+# NAT, the benchmarking range, the documentation ranges, 240/4 - so the shell
+# and the app refuse the same answers.
 RESERVED=(
     '0.0.0.0 8'
     '10.0.0.0 8'
+    '100.64.0.0 10'
     '127.0.0.0 8'
     '169.254.0.0 16'
     '172.16.0.0 12'
+    '192.0.0.0 24'
+    '192.0.2.0 24'
     '192.168.0.0 16'
+    '198.18.0.0 15'
+    '198.51.100.0 24'
+    '203.0.113.0 24'
     '224.0.0.0 4'
+    '240.0.0.0 4'
 )
 
 
@@ -187,6 +197,74 @@ read_config_lines() {
     mapfile -t LINES < <(sed 's/\r$//' -- "$1")
 }
 
+# The directives that make openvpn run a program - or load one, or change how
+# willing it is to. A downloaded config is somebody else's text and openvpn
+# runs as root, so a pinned copy never carries them: one `up /tmp/x` line
+# would be a root shell for whoever wrote the file. ovpn-connect.sh also
+# passes --script-security 1 after --config, but that only covers the
+# script hooks: it does not stop `plugin`, which loads a library into
+# openvpn itself, nor `config`, which reads another file. So the pinned copy
+# is cleaned here, and ovpn-connect.sh cleans again whatever it is about to
+# launch (sanitised_config), in case the file was edited since.
+#
+# The second group writes files, reads others, or moves openvpn elsewhere -
+# a `status /etc/x` or `writepid` line is root writing wherever the config's
+# author said, and `config` pulls in a file nobody looked at. ovpn-connect.sh
+# names its own log and pid file on the command line; nothing else is needed.
+SCRIPT_DIRECTIVES=' up down route-up route-pre-down ipchange tls-verify
+    auth-user-pass-verify client-connect client-disconnect learn-address plugin
+    script-security setenv setenv-safe up-restart down-pre tls-crypt-v2-verify
+    config cd chroot log log-append status writepid tmp-dir management
+    replay-persist iproute daemon askpass '
+SCRIPT_DIRECTIVES=" $(tr -s '[:space:]' ' ' <<<"$SCRIPT_DIRECTIVES") "
+
+# Lines in, KEPT_LINES out, with DROPPED_DIRECTIVES naming what went (once
+# each, in the order met). The first word is read the way openvpn reads it,
+# near enough to never miss one: backslashes and quotes taken out (`u\p` and
+# `"up"` are both `up` to openvpn), the `--` it also accepts in a file
+# dropped, and compared without case.
+#
+# Inline blocks are passed through untouched - a line of base64 is not a
+# directive, however it happens to read - but only the blocks openvpn has,
+# opened exactly as openvpn opens them: the tag alone on its line, spelled
+# as it spells it. Anything else that merely looks like a tag is read as a
+# line like any other, so an `<a b>` cannot hide the rest of the file. The
+# block ends where openvpn ends it, at the first line that starts with the
+# closing tag. <connection> holds options of its own, so it is looked inside.
+INLINE_TAGS=' ca cert key tls-auth tls-crypt tls-crypt-v2 extra-certs secret
+    pkcs12 crl-verify http-proxy-user-pass auth-user-pass dh '
+INLINE_TAGS=" $(tr -s '[:space:]' ' ' <<<"$INLINE_TAGS") "
+drop_script_lines() {
+    local line tok inblock='' close open_re='^[[:space:]]*[<]([a-z0-9-]+)[>][[:space:]]*$'
+    KEPT_LINES=(); DROPPED_DIRECTIVES=()
+    for line in "$@"; do
+        if [ -n "$inblock" ]; then
+            KEPT_LINES+=("$line")
+            close="^[[:space:]]*[<]/${inblock}[>]"
+            [[ $line =~ $close ]] && inblock=''
+            continue
+        fi
+        if [[ $line =~ $open_re ]] && [[ $INLINE_TAGS == *" ${BASH_REMATCH[1]} "* ]]; then
+            inblock=${BASH_REMATCH[1]}
+            KEPT_LINES+=("$line")
+            continue
+        fi
+        tok=''
+        [[ $line =~ ^[[:space:]]*([^[:space:]]+) ]] && tok=${BASH_REMATCH[1],,}
+        # A byte-order mark is skipped by openvpn on the first line, so here.
+        tok=${tok#$'\xef\xbb\xbf'}
+        tok=${tok//\\/}; tok=${tok//\"/}; tok=${tok//\'/}; tok=${tok#--}
+        if [ -n "$tok" ] && [[ $SCRIPT_DIRECTIVES == *" $tok "* ]]; then
+            case " ${DROPPED_DIRECTIVES[*]:-} " in
+                *" $tok "*) ;;
+                *) DROPPED_DIRECTIVES+=("$tok") ;;
+            esac
+            continue
+        fi
+        KEPT_LINES+=("$line")
+    done
+}
+
 remote_port() {
     local tail=$1 line
     if [[ $tail =~ ^[[:space:]]*([0-9]+) ]]; then printf '%s' "${BASH_REMATCH[1]}"; return; fi
@@ -231,10 +309,21 @@ probe_devtcp() {
 # 0 reachable, 1 not, 2 no way to tell. Goes out over whatever the default
 # route is and through no proxy at all, which is the whole point of it: it
 # answers "can this machine dial that address itself".
+#
+# The address and port come out of a config file, so they are checked for
+# shape first and then handed to the inner bash as arguments, never pasted
+# into its script - a `remote` of `1.2.3.4;rm -rf ~` stays a bad address.
 tcp_reachable() {
     local ip=$1 port=$2 t=${3:-$TIMEOUT}
+    # An IPv4 or IPv6 literal, or (for a file not pinned yet) a hostname - and
+    # never anything starting with a dash, which nc would read as an option.
+    is_ip_literal "$ip" || [[ $ip =~ ^[0-9A-Fa-f:]+$ && $ip == *:* ]] \
+        || [[ $ip =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || return 1
+    [[ $port =~ ^[0-9]{1,5}$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
+    [[ $t =~ ^[0-9]+$ ]] || t=$TIMEOUT
     if [ "$HAVE_DEVTCP" -eq 1 ]; then
-        timeout "$t" bash -c "exec 3<>/dev/tcp/$ip/$port" 2>/dev/null && return 0
+        # shellcheck disable=SC2016  # expanded by the inner bash, on purpose
+        timeout "$t" bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$ip" "$port" 2>/dev/null && return 0
         return 1
     fi
     if command -v nc >/dev/null 2>&1; then
@@ -258,7 +347,9 @@ load_env_file() {
 
     local mode
     mode=$(stat -c '%a' "$file" 2>/dev/null || printf '')
-    if [ -n "$mode" ] && [ "${mode: -2}" != "00" ]; then
+    # Others, not the group: root:you 640 is how the systemd service is let
+    # read it (see install_service), and your own group is you.
+    if [ -n "$mode" ] && [ "${mode: -1}" != "0" ]; then
         warn "$file is readable by others - chmod 600 it"
     fi
 
@@ -288,6 +379,31 @@ load_env_file() {
                 DOTENV[$key]=$val ;;
         esac
     done < "$file"
+}
+
+# For a script running as root: a private copy of $1, made only if the file
+# actually opened is a regular file owned by root that neither its group nor
+# anyone else can write. Prints the copy's path; fails, printing nothing,
+# otherwise. The checks are made on the open descriptor and the copy is read
+# from that same descriptor, so swapping the file between the look and the
+# read - its folder is usually yours, and a rename needs nothing more - gets
+# the swapped-in file checked, not waved through.
+root_owned_copy() {
+    local f=$1 fd meta uid mode type copy
+    exec {fd}<"$f" 2>/dev/null || return 1
+    meta=$(stat -L -c '%u %a %F' "/proc/$BASHPID/fd/$fd" 2>/dev/null) \
+        || { exec {fd}<&-; return 1; }
+    read -r uid mode type <<<"$meta"
+    case $type in 'regular file'|'regular empty file') ;; *) type='' ;; esac
+    if [ "$uid" != 0 ] || [ -z "$type" ] || [[ ! $mode =~ ^[0-7]+$ ]] \
+            || (( (8#$mode & 8#022) != 0 )); then
+        exec {fd}<&-
+        return 1
+    fi
+    copy=$(tmp_dir)/env.$BASHPID
+    ( umask 077; cat <&"$fd" > "$copy" ) || { exec {fd}<&-; return 1; }
+    exec {fd}<&-
+    printf '%s' "$copy"
 }
 
 # Precedence, loosest first: built-in default, then .env, then a variable
@@ -453,12 +569,20 @@ diagnose_address() {
 # flagged together, and four addresses that turn out to be one operator in one
 # city are not four alternatives.
 #
-# ip-api.com answers a hundred addresses in one request and names the operator
-# outright - "M247", not a registry handle. Its free tier is HTTP only, so the
-# query crosses the line in clear: a list of VPN addresses, to a third party.
-# Nothing in it your DNS and SNI did not already say, but you should be the one
-# deciding that, which is what --no-owner is for. If the plain request does not
-# come back at all, ipwho.is is asked over HTTPS instead, one address at a time.
+# ipwho.is is asked, over HTTPS, one address at a time. This used to be
+# ip-api.com's batch endpoint, a hundred at once, but its free tier is HTTP
+# only, so the list of VPN addresses crossed the line in clear for anybody on
+# the way to read or rewrite. No free service answers a batch over HTTPS
+# without an account (ipapi.is and ipwhois.io both want a key for bulk), so it
+# is one request per address, each answer cached for good in owners.tsv, and
+# ipwho.is's free allowance - 1,000 a day per address asking - is plenty for
+# that. A 429 ends the run's asking rather than hammering on. The addresses
+# still go to a third party; --no-owner (NO_OWNER=1) keeps them at home, and
+# then only what owners.tsv already knows is used.
+#
+# Whatever comes back is a stranger's text going into a table, a terminal and
+# file names, so control characters and anything quote-like are stripped from
+# it before it is kept (clean_text).
 #
 #   owners.tsv   ip  asn  owner  country  city  checked
 #
@@ -523,38 +647,54 @@ json_field() {
     sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" <<<"$body" | head -n1
 }
 
-owner_batch() {
-    local proxy=$1; shift
-    local payload args
-    payload=$(printf '"%s",' "$@"); payload="[${payload%,}]"
-    args=(-sS --max-time "$TIMEOUT" -A 'ovpn-pin' -X POST
-          -H 'Content-Type: application/json' --data-binary "$payload")
-    if [ -n "$proxy" ]; then args+=(--proxy "$proxy"); else args+=(--noproxy '*'); fi
-    curl "${args[@]}" \
-        'http://ip-api.com/batch?fields=status,query,country,city,isp,org,as,asname' \
-        2>/dev/null
+# A name from the lookup service, made safe to keep: control characters (tabs
+# and newlines would break owners.tsv), C1 controls, quotes of every kind -
+# ' " ` and the curly U+2018-U+201F - and backslashes are dropped, runs of
+# spaces folded, and the length capped. What is left is still the name.
+clean_text() {
+    local t max=${2:-80}
+    # shellcheck disable=SC1003  # the tr set ends in a backslash, on purpose
+    t=$(LC_ALL=C sed $'s/\xe2\x80[\x98-\x9f]//g; s/\xc2[\x80-\x9f]//g' <<<"$1" \
+        | LC_ALL=C tr -d '\000-\037\177"`\\'"'" | tr -s ' ')
+    t=${t# }; t=${t% }
+    printf '%s' "${t:0:$max}"
 }
 
+# One address, over HTTPS. Prints asn, name, country and city tab-separated.
+# 0 named, 1 asked and nobody would name it, 2 could not ask, 3 told to stop
+# for today (a 429).
 owner_https_one() {
-    local ip=$1 proxy=$2 args body name asn
-    args=(-sS --max-time "$TIMEOUT" -A 'ovpn-pin')
+    local ip=$1 proxy=$2 args out code body name asn
+    # Only an address goes in the URL - nothing that could add a path or a
+    # query of its own.
+    is_ip_literal "$ip" || [[ $ip =~ ^[0-9A-Fa-f:]+$ && $ip == *:* ]] || return 1
+    args=(-sS --max-time "$TIMEOUT" -A 'ovpn-pin' --proto '=https' -w '\n%{http_code}')
     if [ -n "$proxy" ]; then args+=(--proxy "$proxy"); else args+=(--noproxy '*'); fi
-    body=$(curl "${args[@]}" "https://ipwho.is/$ip" 2>/dev/null) || return 1
+    out=$(curl "${args[@]}" \
+        "https://ipwho.is/$ip?fields=success,message,ip,country,city,connection" 2>/dev/null) \
+        || return 2
+    code=${out##*$'\n'}; body=${out%$'\n'*}
+    [ "$code" = 429 ] && return 3
+    [ "$code" = 200 ] || return 2
+    [ "${#body}" -le 20000 ] || return 1
+    grep -qE '"success"[[:space:]]*:[[:space:]]*true' <<<"$body" || return 1
 
     # isp is the tidier of the two here - "M247 Europe SRL" against org's
     # "M247 LTD Frankfurt Infrastructure".
-    name=$(json_field "$body" isp); [ -n "$name" ] || name=$(json_field "$body" org)
+    name=$(clean_text "$(json_field "$body" isp)")
+    [ -n "$name" ] || name=$(clean_text "$(json_field "$body" org)")
     [ -n "$name" ] || return 1
-    asn=$(grep -oE '"asn"[[:space:]]*:[[:space:]]*[0-9]+' <<<"$body" | head -n1 | grep -oE '[0-9]+$')
-    printf '%s\t%s\t%s\t%s' \
-        "${asn:+AS$asn}" "$name" "$(json_field "$body" country)" "$(json_field "$body" city)"
+    asn=$(grep -oE '"asn"[[:space:]]*:[[:space:]]*[0-9]{1,10}' <<<"$body" | head -n1 | grep -oE '[0-9]+$')
+    printf '%s\t%s\t%s\t%s' "${asn:+AS$asn}" "$name" \
+        "$(clean_text "$(json_field "$body" country)" 60)" \
+        "$(clean_text "$(json_field "$body" city)" 60)"
 }
 
 # Fill the cache for whichever of these addresses it does not already know.
 # Anything already answered - including the ones nobody would name, unless
 # that was over a week ago - costs nothing.
 lookup_owners() {
-    local proxy=${OWNER_PROXY:-} want=() ip obj asn name cc city chunk=() n=0 batches i=0 learned=0 body row
+    local proxy=${OWNER_PROXY:-} want=() ip asn name cc city i=0 learned=0 row
     load_owners
 
     local cutoff
@@ -569,73 +709,70 @@ lookup_owners() {
     done
     [ ${#want[@]} -gt 0 ] || return 0
 
-    batches=$(( (${#want[@]} + 99) / 100 ))
-    # Say what is happening while it happens: a hundred go in one request and
-    # there is a deliberate wait between requests, so a few hundred new
-    # addresses is half a minute in which nothing would otherwise be printed,
-    # which reads as broken rather than busy. Not for one or two, which is what
-    # a sweep asks about after each config.
-    local chatty=0
+    # Told not to ask: the table is all there is.
+    [ "${NO_OWNER:-0}" -eq 1 ] && return 0
+
+    # Say what is happening while it happens: one request per address, a
+    # moment apart, so a few hundred new ones take a few minutes in which
+    # nothing would otherwise be printed, which reads as broken rather than
+    # busy. Not for one or two, which is what a sweep asks about after each
+    # config.
+    local chatty=0 rc unreached=0 tried_proxy=0
+    [ -n "$proxy" ] && tried_proxy=1
     [ ${#want[@]} -gt 10 ] && chatty=1
-    [ "$chatty" -eq 1 ] && info "asking about ${#want[@]} new address(es), $batches request(s)"
+    [ "$chatty" -eq 1 ] && info "asking about ${#want[@]} new address(es), one request each over HTTPS"
 
-    while [ $i -lt ${#want[@]} ]; do
-        chunk=("${want[@]:i:100}")
-        [ "$chatty" -eq 1 ] && info "  request $(( i / 100 + 1 )) of $batches - ${#chunk[@]} addresses"
+    for ip in "${want[@]}"; do
+        i=$((i + 1))
+        [ "$chatty" -eq 1 ] && [ $(( i % 50 )) -eq 1 ] && info "  $i of ${#want[@]}"
 
-        body=$(owner_batch "$proxy" "${chunk[@]}")
-        # Plain HTTP is the first thing a filtering middlebox eats. Try it
-        # through a local proxy once before falling back to one at a time.
-        if [ -z "$body" ] && [ -z "$proxy" ]; then
-            proxy=$(find_proxy) && body=$(owner_batch "$proxy" "${chunk[@]}")
+        rc=0; row=$(owner_https_one "$ip" "$proxy") || rc=$?
+        # A filtering middlebox can eat the request outright. Try once
+        # through a local proxy before calling the service unreachable.
+        if [ "$rc" -eq 2 ] && [ "$tried_proxy" -eq 0 ]; then
+            tried_proxy=1
+            if proxy=$(find_proxy); then
+                rc=0; row=$(owner_https_one "$ip" "$proxy") || rc=$?
+            else
+                proxy=''
+            fi
         fi
 
-        if [ -n "$body" ]; then
-            while IFS= read -r obj; do
-                ip=$(json_field "$obj" query)
-                [ -n "$ip" ] || continue
-                name=$(json_field "$obj" asname)
-                [ -n "$name" ] || name=$(json_field "$obj" isp)
-                [ -n "$name" ] || name=$(json_field "$obj" org)
-                [ -n "$name" ] || continue
-                asn=$(json_field "$obj" as | grep -oE '^AS[0-9]+')
-                cc=$(json_field "$obj" country)
-                city=$(json_field "$obj" city)
+        case $rc in
+            0)  IFS=$'\t' read -r asn name cc city <<<"$row"
                 OWNER_NAME[$ip]=$name; OWNER_ASN[$ip]=$asn
                 OWNER_CC[$ip]=$cc;     OWNER_CITY[$ip]=$city
                 OWNER_WHEN[$ip]=$(today)
-                learned=$((learned + 1))
-            done < <(grep -o '{[^{}]*}' <<<"$body")
-        else
-            for ip in "${chunk[@]}"; do
-                if row=$(owner_https_one "$ip" "$proxy"); then
-                    IFS=$'\t' read -r asn name cc city <<<"$row"
-                    OWNER_NAME[$ip]=$name; OWNER_ASN[$ip]=$asn
-                    OWNER_CC[$ip]=$cc;     OWNER_CITY[$ip]=$city
+                learned=$((learned + 1)); unreached=0 ;;
+            3)  # The free allowance is used up for today. The rest are left
+                # unrecorded, so a later run asks about them afresh.
+                warn 'the owner lookup service says that is enough for today - the rest are left for another run'
+                break ;;
+            *)  # Asked and nobody would name it is written down as missing,
+                # so the next week of runs does not ask again. Not reachable
+                # at all says nothing about the address, so it is left
+                # unrecorded and asked about next time.
+                if [ "$rc" -eq 1 ]; then
+                    OWNER_NAME[$ip]='-'; OWNER_ASN[$ip]=''
+                    OWNER_CC[$ip]='';    OWNER_CITY[$ip]=''
                     OWNER_WHEN[$ip]=$(today)
-                    learned=$((learned + 1))
-                fi
-            done
-        fi
-
-        # Whatever is still missing after both services had their turn is
-        # written down as missing.
-        for ip in "${chunk[@]}"; do
-            if [ -z "${OWNER_NAME[$ip]:-}" ]; then
-                OWNER_NAME[$ip]='-'; OWNER_ASN[$ip]=''
-                OWNER_CC[$ip]='';    OWNER_CITY[$ip]=''
-                OWNER_WHEN[$ip]=$(today)
-            fi
-        done
+                    unreached=0
+                else
+                    # Three in a row that could not be asked at all: the
+                    # service is out of reach from here, and a timeout each
+                    # for the rest would be minutes of nothing.
+                    unreached=$((unreached + 1))
+                    if [ "$unreached" -ge 3 ]; then
+                        OWNERS_DIRTY=1
+                        warn 'the owner lookup service is not answering - the rest are left for another run'
+                        break
+                    fi
+                fi ;;
+        esac
         OWNERS_DIRTY=1
 
-        i=$((i + 100))
-        # 15 batch requests a minute on the free tier, and being throttled
-        # returns nothing rather than waiting.
-        if [ $i -lt ${#want[@]} ]; then
-            [ "$chatty" -eq 1 ] && info '  waiting 5s - the free tier allows 15 requests a minute'
-            sleep 5
-        fi
+        # A free service, asked politely: a few requests a second at most.
+        sleep 0.25
     done
 
     [ "$chatty" -eq 1 ] && info "$learned of ${#want[@]} came back with a name"
