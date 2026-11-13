@@ -3804,8 +3804,9 @@ class Tray:
         Item, Menu = pystray.MenuItem, pystray.Menu
         api = self.api
         # Before the menu exists, so the first right-click is already in the
-        # theme rather than in the system's idea of one.
-        menu_theme(api._settings.get('theme', 'midnight'))
+        # theme rather than in the system's idea of one. The page has only the
+        # black theme now, whatever an older settings file still says.
+        menu_theme('midnight')
 
         # pystray calls an action with as many of (icon, item) as it takes,
         # counting them from the function's code - so every action here takes

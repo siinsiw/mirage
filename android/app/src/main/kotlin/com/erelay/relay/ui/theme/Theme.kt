@@ -65,7 +65,21 @@ enum class Palette(
     val good: Color,
     val light: Boolean = false,
 ) {
-    /** The default: Night, a neutral near-black. */
+    /**
+     * The default: Midnight, a deep navy. Cards are a lighter slate of the same
+     * blue, glass over the map is that slate at half strength, and "Connected"
+     * is a clean signal green.
+     */
+    MIDNIGHT("midnight", "Midnight",
+        bg = Color(0xFF0A1220), surface = Color(0xFF151F31), surface2 = Color(0xFF1F2A40),
+        stroke = Color(0x17FFFFFF), strokeStrong = Color(0x29FFFFFF),
+        text = Color(0xFFF3F6FB), text2 = Color(0xFFA6B1C4), text3 = Color(0xFF8792A8),
+        off = Color(0xFF8792A8), work = Color(0xFFFFC857), ok = Color(0xFF3CE25C), fail = Color(0xFFFF6B7A),
+        hairline = Color(0x12FFFFFF), pulse = Color(0xFF3CE25C), halo = Color(0x733CE25C),
+        glass = Color(0x99192436), glassSolid = Color(0xFF172133), glassTop = Color(0x38FFFFFF),
+        good = Color(0xFF6BE38B)),
+
+    /** Night, a neutral near-black. */
     GRAPHITE("graphite", "Graphite",
         bg = Color(0xFF0A0A0C), surface = Color(0xFF101013), surface2 = Color(0xFF17171B),
         stroke = Color(0x1AFFFFFF), strokeStrong = Color(0x2EFFFFFF),
@@ -85,22 +99,24 @@ enum class Palette(
         glass = Color(0x9EFFFFFF), glassSolid = Color(0xFFFFFFFF), glassTop = Color(0xFFFFFFFF),
         good = Color(0xFF2A8A4A), light = true),
 
-    /** Void: the page is the outermost background, the cards sit on it. */
+    /**
+     * The one theme there is now (Mirage, 2026-11-13): Midnight's design on a
+     * black page, token for token the Windows app's (app/ui/midnight.css).
+     */
     BLACK("black", "Black",
-        bg = Color(0xFF060607), surface = Color(0xFF101013), surface2 = Color(0xFF17171B),
-        stroke = Color(0x1AFFFFFF), strokeStrong = Color(0x2EFFFFFF),
-        text = Color(0xFFF4F4F6), text2 = Color(0xFFA3A3AB), text3 = Color(0xFF8A8A94),
-        off = Color(0xFF8A8A94), work = Color(0xFFFFC857), ok = Color(0xFF1ED760), fail = Color(0xFFFF6B7A),
-        hairline = Color(0x12FFFFFF), pulse = Color(0xFF1ED760), halo = Color(0x731ED760),
-        glass = Color(0x0BFFFFFF), glassSolid = Color(0xFF151518), glassTop = Color(0x2EFFFFFF),
-        good = Color(0xFF6BE38B));
+        bg = Color(0xFF070304), surface = Color(0xFF181213), surface2 = Color(0xFF231A1B),
+        stroke = Color(0x14FFFFFF), strokeStrong = Color(0x24FFFFFF),
+        text = Color(0xFFFFFFFF), text2 = Color(0xFFADA4A4), text3 = Color(0xFF857B7B),
+        // Mirage keeps to black, red and white: connected is white, working a pale red.
+        off = Color(0xFF857B7B), work = Color(0xFFF0A8B0), ok = Color(0xFFF4F1EF), fail = Color(0xFFFF6B7A),
+        hairline = Color(0x12FFFFFF), pulse = Color(0xFFF4F1EF), halo = Color(0x59F4F1EF),
+        glass = Color(0x9E180E10), glassSolid = Color(0xFF181213), glassTop = Color(0x33FFFFFF),
+        good = Color(0xFFF4F1EF));
 
     companion object {
-        fun of(key: String?) = when (key?.lowercase()) {
-            "white", "light" -> WHITE
-            "black" -> BLACK
-            else -> GRAPHITE
-        }
+        /** Black, whatever an older settings file says: the other themes are gone from the app. */
+        @Suppress("UNUSED_PARAMETER")
+        fun of(key: String?) = BLACK
     }
 }
 
@@ -112,7 +128,7 @@ enum class Palette(
  * [state] is its colour, the one accent the app has.
  */
 object Tone {
-    var palette by mutableStateOf(Palette.GRAPHITE)
+    var palette by mutableStateOf(Palette.BLACK)
 
     /** What the tunnel is doing, for everything that colours itself by it. */
     var mode by mutableStateOf(Mode.OFF)
@@ -186,6 +202,30 @@ object Data {
     }
 }
 
+/**
+ * The one piece of colour chrome is allowed: a cobalt-to-violet run for the
+ * primary action of a view - the main button, the slide thumb, the selected
+ * segment, the top-bar pill. Never a background, never text, never two on a
+ * screen. Deepened on the white page.
+ */
+object Accent {
+    // Mirage's dark red where Midnight had cobalt to violet (2026-11-13).
+    val a get() = Color(0xFF8E1622)
+    val b get() = Color(0xFFC21C2E)
+    /** The colour halfway along: a single-colour stand-in (a focus ring, a thin stroke). */
+    val mid get() = lerp(a, b, 0.5f)
+    /** The soft light the accent throws under itself on a dark page. */
+    val glow get() = if (Tone.light) Color.Transparent else Color(0x66C21C2E)
+    /** Left to right, as the reference's pill and thumb run. */
+    fun brush(): androidx.compose.ui.graphics.Brush =
+        androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(a, b))
+    /** Corner to corner, for a round thing (the slide thumb, the power core). */
+    fun diagonal(size: androidx.compose.ui.geometry.Size): androidx.compose.ui.graphics.Brush =
+        androidx.compose.ui.graphics.Brush.linearGradient(listOf(a, b),
+            start = androidx.compose.ui.geometry.Offset.Zero,
+            end = androidx.compose.ui.geometry.Offset(size.width, size.height))
+}
+
 /** The line colour of the hologram globe for one state. */
 data class StateTone(val line: Color)
 
@@ -198,7 +238,7 @@ data class StateTone(val line: Color)
  */
 fun toneOf(mode: Mode): StateTone = StateTone(
     when (mode) {
-        Mode.OFF -> if (Tone.light) Color(0xFF0A8C94) else Color(0xFF19D3CB)
+        Mode.OFF -> Color(0xFFC21C2E)
         else -> Tone.stateOf(mode)
     })
 
@@ -294,6 +334,37 @@ fun TextStyle.script(text: CharSequence): TextStyle {
         lineHeight = if (size.isSp) (size.value * 1.9f).sp else lineHeight, letterSpacing = 0.sp)
 }
 
+/**
+ * Cinzel 500 (OFL, github.com/google/fonts; licence in assets/OFL-Cinzel.txt):
+ * the MIRAGE word only, set wide. The same drawing the Windows app ships.
+ */
+val Cinzel = FontFamily(Font(R.font.cinzel_500, FontWeight.W500))
+
+/**
+ * Mirage's own colours, for the first-run screens (preview/DECISIONS.md):
+ * black and one dark red, nothing else. [ink] is the warm white of its type.
+ */
+object Mirage {
+    val red = Color(0xFFA3141F)
+    val redHi = Color(0xFFC21C2E)
+    val redLo = Color(0xFF6E0D16)
+    val page = Color(0xFF060607)
+    val ink = Color(0xFFEDE6E3)
+    /** Body copy on the black: a warm grey. */
+    val say = Color(0xFFA8A2A0)
+    /** A note under a label. */
+    val note = Color(0xFF9C9592)
+    /** A field's caption. */
+    val cap = Color(0xFFB5ACA9)
+    /** The light that runs round an edge, and its bright tip. */
+    val light = Color(0xFFC2253A)
+    val tip = Color(0xFFFFD7DC)
+    /** A bad field's line under it. */
+    val bad = Color(0xFFF07A86)
+    /** The top bar's mark and buttons: bright enough to read on the dark. */
+    val bright = Color(0xFFE0303F)
+}
+
 /** Geist Mono: anything that is a value rather than a sentence. */
 val Mono = FontFamily(
     Font(R.font.geist_mono, FontWeight.Normal),
@@ -367,7 +438,7 @@ fun RelayTheme(content: @Composable () -> Unit) {
         surfaceTint = Color.Transparent, surfaceBright = p.surface2, surfaceDim = p.bg,
         surfaceContainerLowest = p.bg, surfaceContainerLow = p.surface, surfaceContainer = p.surface,
         surfaceContainerHigh = p.surface2, surfaceContainerHighest = p.surface2,
-        primary = p.pulse, onPrimary = Tone.ink, primaryContainer = p.surface2, onPrimaryContainer = p.text,
+        primary = Accent.mid, onPrimary = Color.White, primaryContainer = p.surface2, onPrimaryContainer = p.text,
         secondary = p.text2, onSecondary = p.bg, secondaryContainer = p.surface2, onSecondaryContainer = p.text,
         tertiary = p.text2, onTertiary = p.bg, tertiaryContainer = p.surface2, onTertiaryContainer = p.text,
         outline = p.strokeStrong, outlineVariant = p.stroke,

@@ -6,13 +6,12 @@
             its flag; every other country is only its border, in faint neon
      busy   rings of signal ripple out of it while the servers are asked, and
             the camera eases back
-     on     the camera pulls out until the planet is in view, the signal runs
-            an arc over it to the country the traffic really leaves from, and
-            the camera comes down onto that one, which fills with its flag
-            from where the signal landed; points run the arc at the speed of
-            the traffic
-     fail   the signal stops halfway along its arc, flickers red, and the
-            camera goes home
+     on     the camera pulls out until the planet is in view, turns, and
+            comes down onto the country the traffic really leaves from, which
+            fills with its flag from its middle (no line is drawn between the
+            two countries - the zoom out and in is the journey)
+     fail   the camera turns part of the way, the planet reddens for a
+            moment, and the camera goes home
 
    Only one country is ever filled; the neighbours stay outlines. Three
    tilted neon orbits ride round the planet and show only once the camera is
@@ -29,7 +28,9 @@
   const FOV = 36;
   const MAX_DPR = 1.75;
   const IDLE_MS = 1000 / 30 - 4;                  /* nothing travelling: 30 fps */
-  const NEON = { peri: 0x8AA6FF, aqua: 0x62E6F2, orchid: 0xCF9BFF, pulse: 0x1ED760 };
+  /* Mirage's dark reds where the Midnight neon was, and the connection in
+     Mirage's white rather than green (2026-11-13: black, red and white only). */
+  const NEON = { peri: 0xC21C2E, aqua: 0x8E1622, orchid: 0xE0606E, pulse: 0xF4F1EF };
   const INK = { peri: 0x4C63B8, aqua: 0x1E8C98, orchid: 0x8A54C4, pulse: 0x139A48 };   /* the same, for a light page */
 
   const dirOf = (lon, lat) => {
@@ -45,6 +46,8 @@
     let outlineO = null, outlineD = null, arc = null;
     let started = false, ticking = false, isCalm = () => false, drawnAt = 0, moving = 0;
     let light = false;
+    let landStyle = 'flag';                         /* 'flag' or 'dots' - see GLOBE_FRAG */
+    const landDefines = () => (landStyle === 'flag' ? { FLAG_LAND: '' } : {});
     let state = 'off', homeCode = null, liveCode = null, pickedCode = null;
     let originCode = null, destCode = null, busyTl = null, journey = null;
     const view = { dir: null, dist: 5, shift: 0 };
@@ -131,35 +134,211 @@
     const GLOBE_VERT = `varying vec3 vN; varying vec3 vV; varying vec3 vO;
       void main(){ vO = normalize(position); vec4 mv = modelViewMatrix * vec4(position, 1.);
         vV = normalize(-mv.xyz); vN = normalize(normalMatrix * normal); gl_Position = projectionMatrix * mv; }`;
-    const GLOBE_FRAG = `uniform sampler2D uMaskO, uMaskD, uFlagO, uFlagD; uniform vec4 uBoxO, uBoxD;
-      uniform float uFillO, uFillD, uSpanO, uSpanD, uRed, uLight, uHasO, uHasD; uniform vec3 uLandO, uLandD;
+    /* Two ways to draw the land, picked by FLAG_LAND (see style()):
+
+       flag (the default, and the lighter one) - the land is one soft dark
+       ground over a black sea with a faint graticule; the country in focus
+       is its flag, the picture itself laid into its outline, spreading from
+       where the signal landed behind a thin line of light. Each pixel reads
+       the land once, each country's outline once and each flag once, with
+       mip levels from the screen-space rate of the coordinates (taken across
+       the antimeridian without a seam), so nothing shimmers far out.
+
+       dots (Midnight, as on Android) - the land is a grid of round white dots;
+       the dots of the country in focus take the flag's colour at their own
+       place in its box. The grid's pitch (uCell, degrees) follows the camera's
+       height; between two pitches the grids cross-fade (uCellMix), so while
+       the camera moves every pixel works the grid out twice.
+
+       Canvas textures arrive flipped: north is v = 1 (the world mask is laid
+       in the same way). */
+    const GLOBE_FRAG = `uniform sampler2D uMaskO, uMaskD, uFlagO, uFlagD, uWorld; uniform vec4 uBoxO, uBoxD;
+      uniform float uFillO, uFillD, uSpanO, uSpanD, uRed, uLight, uHasO, uHasD, uCell, uCellMix, uFlagW;
+      uniform vec3 uLandO, uLandD;
       varying vec3 vN; varying vec3 vV; varying vec3 vO;
-      float lit(sampler2D m, vec4 box, vec2 ll, out vec2 uv) {
+    #ifdef FLAG_LAND
+      /* where in a country's box this pixel is, how fast that changes across
+         the screen, and how much of the country is under it. Outside the box
+         (most of the planet) nothing is read; the gradients are explicit, so
+         reading only on some pixels is allowed. */
+      float boxed(sampler2D m, vec4 box, float has, vec2 ll, vec2 gx, vec2 gy, out vec2 uv, out vec2 dx, out vec2 dy) {
+        vec2 size = max(box.zw - box.xy, vec2(.01));
+        uv = (ll - box.xy) / size;
+        dx = vec2(gx.x, gy.x) / size; dy = vec2(gx.y, gy.y) / size;
+        if (has < .5 || uv.x < 0. || uv.x > 1. || uv.y < 0. || uv.y > 1.) return 0.;
+        return textureGrad(m, uv, dx, dy).r;
+      }
+      vec3 flatLand(vec2 ll, float shade, vec3 sea) {
+        /* the rate of longitude, from whichever of two seams is farther away */
+        float lon2 = mod(ll.x + 360., 360.);
+        vec2 a = vec2(dFdx(ll.x), dFdy(ll.x)), b = vec2(dFdx(lon2), dFdy(lon2));
+        vec2 gx = dot(a, a) < dot(b, b) ? a : b;
+        vec2 gy = vec2(dFdx(ll.y), dFdy(ll.y));
+        vec2 w = vec2(abs(gx.x) + abs(gx.y), abs(gy.x) + abs(gy.y));
+        vec2 g = abs(fract(ll / 15. + .5) - .5) * 15.;
+        vec2 ln = 1. - smoothstep(vec2(0.), w * 1.4, g);
+        float grid = max(ln.x * (1. - smoothstep(70., 80., abs(ll.y))), ln.y) * .045 * (1. - uLight);
+        float l = textureGrad(uWorld, vec2((ll.x + 180.) / 360., (ll.y + 90.) / 180.),
+                              vec2(gx.x / 360., gy.x / 180.), vec2(gx.y / 360., gy.y / 180.)).r;
+        vec2 uvO, uvD, dxO, dyO, dxD, dyD;
+        float mO = boxed(uMaskO, uBoxO, uHasO, ll, gx, gy, uvO, dxO, dyO);
+        float mD = boxed(uMaskD, uBoxD, uHasD, ll, gx, gy, uvD, dxD, dyD);
+        l = max(l, max(mO, mD));
+        vec3 ground = mix(vec3(.10, .068, .07), vec3(.80, .82, .86), uLight) * (.62 + .38 * shade)
+                      + max(mO, mD) * .035;
+        vec3 c = mix(sea + grid * vec3(1., .45, .45), ground, l);
+        if (mO + mD < .001) return c;
+        float aO = acos(clamp(dot(vO, uLandO), -1., 1.)), aD = acos(clamp(dot(vO, uLandD), -1., 1.));
+        float rO = uFillO * uSpanO, rD = uFillD * uSpanD;
+        float fO = mO * (1. - smoothstep(rO - .02, rO, aO));
+        float fD = mD * (1. - smoothstep(rD - .02, rD, aD));
+        /* a thin line of light where the flag is still spreading */
+        float eO = mO * (1. - smoothstep(0., .012, abs(aO - rO))) * step(.001, uFillO) * step(uFillO, .999);
+        float eD = mD * (1. - smoothstep(0., .012, abs(aD - rD))) * step(.001, uFillD) * step(uFillD, .999);
+        vec3 flagO = vec3(0.), flagD = vec3(0.);
+        if (fO + eO > .001) flagO = textureGrad(uFlagO, clamp(uvO, 0., 1.), dxO, dyO).rgb;
+        if (fD + eD > .001) flagD = textureGrad(uFlagD, clamp(uvD, 0., 1.), dxD, dyD).rgb;
+        float f = max(fO, fD);
+        vec3 tint = fD >= fO ? flagD : flagO;
+        /* the flag lies on the planet: lit from the same side, with a soft sheen */
+        vec3 L = normalize(vec3(-.4, .6, .7));
+        float sheen = pow(max(dot(reflect(-L, vN), vV), 0.), 18.) * .14;
+        c = mix(c, tint * (.74 + .26 * shade) + sheen, f);
+        c += (flagO * .6 + .3) * eO * .55 + (flagD * .6 + .3) * eD * .55;
+        return c;
+      }
+    #endif
+      float inside(sampler2D m, vec4 box, vec2 ll, out vec2 uv) {
         uv = (ll - box.xy) / (box.zw - box.xy);
         if (uv.x < 0. || uv.x > 1. || uv.y < 0. || uv.y > 1.) return 0.;
-        return texture2D(m, uv).r;            /* canvas textures arrive flipped: north is v = 1 */
+        return textureLod(m, uv, 0.).r;
+      }
+      vec3 flagAt(sampler2D t, vec2 uv, vec4 box, float cell) {
+        float texels = cell / max(box.z - box.x, .01) * uFlagW;
+        return textureLod(t, clamp(uv, 0., 1.), max(log2(texels), 0.)).rgb;
+      }
+      vec3 dirAt(vec2 ll) { vec2 r = radians(ll); return vec3(cos(r.y) * sin(r.x), sin(r.y), cos(r.y) * cos(r.x)); }
+      vec4 dots(vec2 ll, float cell, float px, float shade) {
+        float row = floor((ll.y + 90.) / cell);
+        float latC = -90. + (row + .5) * cell;
+        float across = max(1., floor(360. * cos(radians(latC)) / cell));
+        float stepL = 360. / across;
+        float lonC = -180. + (floor((ll.x + 180.) / stepL) + .5) * stepL;
+        vec2 c = vec2(lonC, latC);
+        float r = length(vec2((ll.x - lonC) * cos(radians(ll.y)), ll.y - latC)) / cell;
+        float aa = max(px / cell, .02);
+        vec2 uvO, uvD;
+        float mO = inside(uMaskO, uBoxO, c, uvO) * uHasO, mD = inside(uMaskD, uBoxD, c, uvD) * uHasD;
+        float land = max(step(.5, textureLod(uWorld, vec2((lonC + 180.) / 360., (latC + 90.) / 180.), 0.).r),
+                         max(step(.5, mO), step(.5, mD)));
+        vec3 p = dirAt(c);
+        float aO = acos(clamp(dot(p, uLandO), -1., 1.)), aD = acos(clamp(dot(p, uLandD), -1., 1.));
+        float fO = step(.5, mO) * (1. - smoothstep(uFillO * uSpanO - .02, uFillO * uSpanO, aO));
+        float fD = step(.5, mD) * (1. - smoothstep(uFillD * uSpanD - .02, uFillD * uSpanD, aD));
+        float f = max(fO, fD);
+        vec3 white = mix(vec3(.86, .86, .86), vec3(.30, .34, .42), uLight) * (.55 + .45 * shade);
+        vec3 tint = fD >= fO ? flagAt(uFlagD, uvD, uBoxD, cell) : flagAt(uFlagO, uvO, uBoxO, cell);
+        vec3 col = mix(white, tint * (.92 + .16 * shade), f);
+        float front = step(.5, mD) * uHasD * (1. - smoothstep(0., .05, abs(aD - uFillD * uSpanD)))
+                      * step(.001, uFillD) * step(uFillD, .999);
+        float radius = mix(.30, .37, f) + .08 * front;
+        float a = (1. - smoothstep(radius - aa, radius + aa, r)) * land;
+        float sea = (1. - land) * (1. - smoothstep(.07 - aa, .07 + aa, r)) * mix(.10, .16, uLight);
+        return vec4(land > .5 ? col : white, max(a * mix(.78, 1., f), sea));
       }
       void main(){
         float lat = degrees(asin(clamp(vO.y, -1., 1.))), lon = degrees(atan(vO.x, vO.z));
-        vec2 ll = vec2(lon, lat), uvO, uvD;
+        vec2 ll = vec2(lon, lat);
         float shade = .55 + .45 * max(dot(vN, normalize(vec3(-.4, .6, .7))), 0.);
-        vec3 base = mix(vec3(.045, .048, .058), vec3(.90, .91, .93), uLight) * mix(shade, 1., uLight * .6);
-        vec2 g = abs(fract(ll / 15. + .5) - .5) / fwidth(ll / 15.);
-        base += mix(vec3(.55, .62, .85) * .05, vec3(-.06), uLight) * (1. - min(min(g.x, g.y), 1.));
-        float mO = lit(uMaskO, uBoxO, ll, uvO) * uHasO, mD = lit(uMaskD, uBoxD, ll, uvD) * uHasD;
-        float dO = acos(clamp(dot(vO, uLandO), -1., 1.)), dD = acos(clamp(dot(vO, uLandD), -1., 1.));
-        float fO = mO * (1. - smoothstep(uFillO * uSpanO - .004, uFillO * uSpanO, dO));
-        float fD = mD * (1. - smoothstep(uFillD * uSpanD - .004, uFillD * uSpanD, dD));
-        vec3 c = base;
-        /* the flag in its own colours, only a breath of the light across it */
-        c = mix(c, texture2D(uFlagO, uvO).rgb * (.9 + .14 * shade), fO);
-        c = mix(c, texture2D(uFlagD, uvD).rgb * (.9 + .14 * shade), fD);
-        c += vec3(.12, .85, .38) * mD * (1. - smoothstep(0., .006, abs(dD - uFillD * uSpanD))) * step(.001, uFillD) * step(uFillD, .999);
+        vec3 c = mix(vec3(.048, .026, .028), vec3(.90, .92, .95), uLight) * mix(shade, 1., uLight * .6);
+    #ifdef FLAG_LAND
+        c = flatLand(ll, shade, c);
+    #else
+        float px = max(fwidth(ll.y), 1e-4);
+        vec4 d = mix(dots(ll, uCell, px, shade), dots(ll, uCell * 2., px, shade), uCellMix);
+        c = mix(c, d.rgb, d.a);
+    #endif
         float l = dot(c, vec3(.3, .59, .11)); c = mix(c, vec3(l * 1.2, l * .3, l * .35), uRed);
-        float rim = pow(1. - max(dot(vN, vV), 0.), 4.);
-        c += mix(vec3(.54, .65, 1.) * .55, vec3(-.25, -.2, -.05), uLight) * rim;
+        float rim = pow(1. - max(dot(vN, vV), 0.), 3.2);
+        c += mix(vec3(.62, .16, .19) * .55, vec3(-.25, -.2, -.05), uLight) * rim;
         gl_FragColor = vec4(c, 1.);
       }`;
+
+    /* Every country's land on one equirectangular canvas, white on black:
+       what the land is drawn from. Rings are unwrapped across the antimeridian
+       and drawn a world to either side, so what runs off one edge comes back
+       in. On the card it is one byte a texel (a quarter of the canvas's RGBA)
+       with mip levels, so the coasts hold still with the planet far out. */
+    function worldMask() {
+      const w = Math.min(4096, renderer.capabilities.maxTextureSize || 4096), h = w / 2;
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+      const g = cv.getContext('2d');
+      g.fillStyle = '#000'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#fff';
+      for (const r of W.rings) {
+        if (r.length < 6) continue;
+        const p = new Path2D();
+        let shift = 0, prev = r[0];
+        for (let k = 0; k < r.length; k += 2) {
+          let lon = r[k] + shift;
+          if (k) {
+            if (lon - prev > 180) { shift -= 360; lon -= 360; } else if (lon - prev < -180) { shift += 360; lon += 360; }
+          }
+          prev = lon;
+          const x = (lon + 180) / 360 * w, y = (90 - r[k + 1]) / 180 * h;
+          if (k) p.lineTo(x, y); else p.moveTo(x, y);
+        }
+        p.closePath();
+        for (const dx of [0, w, -w]) { g.save(); g.translate(dx, 0); g.fill(p); g.restore(); }
+      }
+      /* rows go in bottom first, as a canvas texture would arrive: north is v = 1 */
+      const px = g.getImageData(0, 0, w, h).data, data = new Uint8Array(w * h);
+      for (let y = 0; y < h; y += 1) {
+        const from = (h - 1 - y) * w * 4, to = y * w;
+        for (let x = 0; x < w; x += 1) data[to + x] = px[from + x * 4];
+      }
+      cv.width = cv.height = 1;
+      const t = new T.DataTexture(data, w, h, T.RedFormat, T.UnsignedByteType);
+      t.generateMipmaps = true; t.minFilter = T.LinearMipmapLinearFilter; t.magFilter = T.LinearFilter;
+      t.wrapS = T.RepeatWrapping; t.unpackAlignment = 1; t.colorSpace = T.NoColorSpace; t.needsUpdate = true;
+      return t;
+    }
+
+    /* The faint network the reference draws over its planet: the middles of
+       the larger countries, each tied to its two nearest within ~30 degrees. */
+    function network(tone) {
+      const codes = Object.keys(W.box).filter((c) => {
+        const b = W.box[c]; return (b[2] - b[0]) * (b[3] - b[1]) > 40 && W.mid[c];
+      }).sort();
+      const pts = codes.map((c) => dirOf(...W.mid[c]));
+      const pos = [], seen = new Set();
+      pts.forEach((a, i) => {
+        const near = pts.map((b, j) => [j, a.angleTo(b)]).filter(([j]) => j !== i)
+          .sort((x, y) => x[1] - y[1]).slice(0, 2);
+        for (const [j, ang] of near) {
+          const key = Math.min(i, j) + ':' + Math.max(i, j);
+          if (ang > 0.52 || seen.has(key)) continue;
+          seen.add(key);
+          let prevP = a;
+          for (let k = 1; k <= 10; k++) {
+            const q = a.clone().lerp(pts[j], k / 10).normalize();
+            pos.push(prevP.x * 1.012, prevP.y * 1.012, prevP.z * 1.012, q.x * 1.012, q.y * 1.012, q.z * 1.012);
+            prevP = q;
+          }
+        }
+      });
+      const geo = new T.BufferGeometry();
+      geo.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+      const lines = new T.LineSegments(geo, lineMat(light ? 0x4C63B8 : 0xB23440, 0.2));
+      const nodes = pts.map((p, i) => {
+        const s = sprite(light ? 0x4C63B8 : 0xF2B8BE, 0.03);
+        s.position.copy(p).multiplyScalar(1.012); s.userData.ph = i * 1.7;
+        return s;
+      });
+      const grp = new T.Group(); grp.add(lines, ...nodes);
+      return { grp, lines, nodes };
+    }
+    let web = null;
 
     function ringsGeometry(indices, r) {
       const pos = [];
@@ -195,19 +374,23 @@
       GLOW = glowTexture();
       const blank = new T.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); blank.needsUpdate = true;
       globeMat = new T.ShaderMaterial({
-        vertexShader: GLOBE_VERT, fragmentShader: GLOBE_FRAG,
+        vertexShader: GLOBE_VERT, fragmentShader: GLOBE_FRAG, defines: landDefines(),
         uniforms: {
           uMaskO: { value: blank }, uMaskD: { value: blank }, uFlagO: { value: blank }, uFlagD: { value: blank },
           uBoxO: { value: new T.Vector4(0, 0, 1, 1) }, uBoxD: { value: new T.Vector4(0, 0, 1, 1) },
           uFillO: { value: 0 }, uFillD: { value: 0 }, uSpanO: { value: 0.2 }, uSpanD: { value: 0.2 },
           uLandO: { value: new T.Vector3(0, 0, 1) }, uLandD: { value: new T.Vector3(0, 0, 1) },
           uRed: { value: 0 }, uLight: { value: light ? 1 : 0 }, uHasO: { value: 0 }, uHasD: { value: 0 },
+          uWorld: { value: worldMask() }, uCell: { value: 0.8 }, uCellMix: { value: 0 }, uFlagW: { value: 2048 },
         },
       });
       scene.add(new T.Mesh(new T.SphereGeometry(1, 160, 120), globeMat));
+      /* the borders only part the land now; the dots draw it */
       borders = new T.LineSegments(ringsGeometry(W.rings.map((_, i) => i), 1.0012),
-                                   lineMat(light ? 0x6B7486 : NEON.peri, light ? 0.55 : 0.42));
+                                   lineMat(light ? 0x6B7486 : NEON.peri, light ? 0.2 : 0.22));
       scene.add(borders);
+      web = network(tone);
+      scene.add(web.grp);
 
       orbits = [];
       for (const d of [{ r: 1.32, tilt: [1.1, 0, 0.3], color: tone.peri, speed: 0.25, n: 3 },
@@ -259,14 +442,19 @@
       camera.lookAt(view.dir.clone().addScaledVector(north, view.shift * reach));
     }
 
+    /* Drawn into Mirage's orb (a canvas inside the home's middle, class
+       atlas--orb) it is sized to its own box and centred; drawn behind the
+       whole window it fills it and frames the country in the middle band. */
+    const inOrb = () => canvas.classList.contains('atlas--orb');
     function layout() {
-      const w = window.innerWidth, h = window.innerHeight;
+      const box = inOrb() ? canvas.getBoundingClientRect() : null;
+      const w = box ? Math.round(box.width) : window.innerWidth, h = box ? Math.round(box.height) : window.innerHeight;
       if (!w || !h) return false;
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_DPR));
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      view.shift = bandShift();
+      view.shift = inOrb() ? 0 : bandShift();
       return true;
     }
 
@@ -301,6 +489,28 @@
           s.position.copy(arc.curve.getPointAt(u));
           s.material.opacity = S.traffic * Math.sin(u * Math.PI);
         });
+      }
+      // The dots' pitch: ~4.4 CSS px on screen at the view's middle, as a
+      // power-of-two step of 0.08 degrees and how far towards the next.
+      if (landStyle === 'dots') {
+        const u = globeMat.uniforms;
+        const ratio = renderer.getPixelRatio(), hPx = Math.max(1, canvas.height || window.innerHeight * ratio);
+        const seenDeg = 2 * Math.max(0.02, view.dist - 1) * Math.tan(FOV / 2 * D2R) / D2R;
+        const cell = Math.min(3.2, Math.max(0.08, 4.4 * ratio * seenDeg / hPx));
+        const level = Math.log2(cell / 0.08), whole = Math.floor(level), f = level - whole;
+        u.uCell.value = 0.08 * Math.pow(2, whole);
+        u.uCellMix.value = f * f * (3 - 2 * f);
+      }
+      // The network fades as the camera comes down onto a country; its nodes glint.
+      if (web) {
+        const wa = T.MathUtils.smoothstep(view.dist, 1.35, 2.6);
+        web.grp.visible = wa > 0.01;
+        web.lines.material.opacity = 0.2 * wa;
+        const size = 0.0065 * view.dist;
+        for (const s of web.nodes) {
+          s.scale.setScalar(size * 4);
+          s.material.opacity = 0.75 * wa * (0.55 + 0.45 * Math.sin(s.userData.ph + S.t * 1.1));
+        }
       }
       placeCamera();
       renderer.render(scene, camera);
@@ -361,23 +571,6 @@
 
     /* --------------------------------------------------------------- journeys */
 
-    function makeArc(a, b) {
-      const ang = a.angleTo(b), h = 0.08 + 0.32 * ang / Math.PI;
-      const axis = new T.Vector3().crossVectors(a, b).normalize();
-      const pts = [];
-      for (let i = 0; i <= 160; i += 1) {
-        const t = i / 160;
-        pts.push(a.clone().applyAxisAngle(axis, ang * t).multiplyScalar(1.003 + h * Math.sin(Math.PI * t)));
-      }
-      const curve = new T.CatmullRomCurve3(pts);
-      const geo = new T.TubeGeometry(curve, 200, 0.0024, 4, false);
-      const mesh = new T.Mesh(geo, additive(light ? INK.pulse : NEON.pulse, 0.95));
-      geo.setDrawRange(0, 0);
-      const comet = sprite(light ? INK.pulse : 0xffffff, 0.12); comet.visible = false;
-      const traffic = Array.from({ length: 7 }, () => { const s = sprite(light ? INK.pulse : NEON.pulse, 0.05); s.material.opacity = 0; return s; });
-      scene.add(mesh, comet, ...traffic);
-      return { curve, geo, mesh, full: geo.index.count, comet, traffic };
-    }
     function dropArc() {
       if (!arc) return;
       [arc.mesh, arc.comet, ...arc.traffic].forEach(drop);
@@ -460,36 +653,24 @@
       outlineD = outline(code, light ? INK.pulse : NEON.pulse);
       outlineD.material.opacity = 0;
       dropArc();
-      /* from a country to itself there is no journey to show: fly, then fill */
+      /* No line is drawn between the two countries any more (2026-11-13):
+         the camera alone tells the journey - out until the planet is in
+         view, round, and down onto the exit. A failure turns part of the way,
+         reddens the planet for a moment and goes home. */
       const same = from.angleTo(to) < 0.03;
-      arc = same ? null : makeArc(from, to);
       if (same && fail) { goHome(false); return; }
-      const draw = { u: 0 };
       const tl = gsap.timeline({ defaults: { ease: 'power2.inOut' } });
       tl.to(view, { dist: 5, duration: dur(1.3), ease: 'power3.inOut' }, 0);
-      if (arc) {
-        const a = arc;
-        tl.set(a.comet, { visible: true }, 0.7)
-          .to(draw, { u: fail ? 0.5 : 1, duration: dur(fail ? 1.2 : 1.9), ease: fail ? 'power1.in' : 'power1.inOut',
-                      onUpdate() {
-                        a.geo.setDrawRange(0, Math.floor(a.full * draw.u / 6) * 6);
-                        a.comet.position.copy(a.curve.getPointAt(Math.min(draw.u, 1)));
-                      } }, 0.7);
-      }
       const start = view.dir.clone(), p = { t: 0 };
       tl.to(p, { t: fail ? 0.45 : 1, duration: dur(fail ? 1.4 : 2.1),
                  onUpdate() { view.dir.copy(start).lerp(to, p.t).normalize(); } }, 0.55);
       if (fail) {
-        tl.to(arc.mesh.material.color, { r: 1, g: 0.42, b: 0.48, duration: dur(0.2) })
-          .to(arc.mesh.material, { opacity: 0.15, duration: 0.07, yoyo: true, repeat: 5 }, '<')
-          .to(arc.comet.material, { opacity: 0, duration: dur(0.6) }, '<')
-          .to(u.uRed, { value: 0.7, duration: dur(0.3), yoyo: true, repeat: 1 }, '<')
-          .add(() => goHome(false), '+=1.2');
+        tl.to(u.uRed, { value: 0.7, duration: dur(0.3), yoyo: true, repeat: 1 }, 1.6)
+          .add(() => goHome(false), '+=1.0');
         journey = run(tl);
         return;
       }
       tl.to(view, { dist: heightFor(code), duration: dur(1.5), ease: 'power3.inOut' }, 2.3)
-        .add(() => { if (arc) arc.comet.visible = false; }, 2.6)
         .to(outlineD.material, { opacity: 1, duration: dur(0.4) }, 2.4)
         .to(u.uFillD, { value: 1, duration: dur(1.3), ease: 'power2.out' }, 2.6)
         .to(u.uFillO, { value: 0, duration: dur(0.9) }, 2.6)
@@ -563,13 +744,50 @@
         outlineO = outline(code, light ? INK.peri : NEON.peri);
         outlineO.material.opacity = 0.35;
         dropArc();
-        arc = makeArc(middle(code), middle(destCode));
-        arc.geo.setDrawRange(0, arc.full);
         kick();
       }
     }
 
     function hit() { return true; }
+
+    /* Switch how the land is drawn ('flag' or 'dots'); answers the one in use. */
+    function style(name) {
+      if (name === 'flag' || name === 'dots') landStyle = name;
+      if (globeMat) {
+        globeMat.defines = landDefines();
+        globeMat.needsUpdate = true;
+        drawnAt = 0; kick();
+      }
+      return landStyle;
+    }
+
+    /* For the review desk: the time of one frame, as the median of n runs of
+       ten frames drawn back to back and waited out on the card (a one pixel
+       read makes the GPU finish). `ratio` draws at that many pixels per CSS
+       pixel for the test. */
+    function bench(n, ratio, hide) {
+      if (!renderer) return null;
+      const gl = renderer.getContext(), one = new Uint8Array(4), times = [];
+      const parts = { globe: scene.children.find((o) => o.material === globeMat), borders, web: web && web.grp,
+                      orbits: orbits.map((o) => o.ring) };
+      const hidden = [].concat(...(hide || []).map((k) => [].concat(parts[k] || [])));
+      hidden.forEach((o) => { o.userData.wasVisible = o.visible; o.visible = false; });
+      if (ratio) { renderer.setPixelRatio(ratio); renderer.setSize(window.innerWidth, window.innerHeight, false); }
+      placeCamera();
+      renderer.render(scene, camera); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, one);
+      for (let i = 0; i < (n || 12); i += 1) {
+        const t0 = performance.now();
+        for (let k = 0; k < 10; k += 1) renderer.render(scene, camera);
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, one);
+        times.push((performance.now() - t0) / 10);
+      }
+      const px = canvas.width + 'x' + canvas.height;
+      hidden.forEach((o) => { o.visible = o.userData.wasVisible; });
+      if (ratio) layout();
+      times.sort((a, b) => a - b);
+      return { style: landStyle, median: +times[times.length >> 1].toFixed(2), best: +times[0].toFixed(2),
+               px, dist: +view.dist.toFixed(2) };
+    }
 
     function themeNow() { return document.documentElement.dataset.theme === 'white'; }
 
@@ -592,7 +810,11 @@
       let rz = 0;
       const relayout = () => { cancelAnimationFrame(rz); rz = requestAnimationFrame(() => { layout(); kick(); }); };
       window.addEventListener('resize', relayout);
-      if (window.ResizeObserver) new ResizeObserver(relayout).observe(document.getElementById('hero') || document.body);
+      if (window.ResizeObserver) {
+        const ro = new ResizeObserver(relayout);
+        ro.observe(document.getElementById('hero') || document.body);
+        if (inOrb()) ro.observe(canvas);
+      }
       document.addEventListener('visibilitychange', kick);
       new MutationObserver(kick).observe(document.body, { attributes: true, attributeFilter: ['data-covered'] });
       new MutationObserver(follow).observe(document.documentElement, { attributes: true, attributeFilter: ['data-conn'] });
@@ -624,6 +846,6 @@
       return true;
     }
 
-    return { init, sync, home, hit };
+    return { init, sync, home, hit, style, bench };
   })();
 })();

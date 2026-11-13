@@ -37,6 +37,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -55,6 +57,27 @@ import com.erelay.relay.ui.theme.Data
 import com.erelay.relay.ui.theme.Shape
 import com.erelay.relay.ui.theme.Tone
 import com.erelay.relay.ui.theme.Type
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import com.erelay.relay.ui.theme.Mirage
+import com.erelay.relay.ui.theme.Sans
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -63,9 +86,18 @@ private enum class Who(val key: String, val label: String) {
 }
 
 /**
- * Adding an account. Surfshark is a service username and password, checked
- * by the exits themselves, so it is two writes. Windscribe is a login behind
- * a puzzle: this fetches the puzzle and [Captcha] finishes it.
+ * Adding an account (preview/DECISIONS.md, adding an account): a Mirage page
+ * of its own, the provider's mark inside a ring of degrees at the top, the
+ * fields on black stone, and the bead button. Surfshark is a service
+ * username and password, checked by the exits themselves, so it is two
+ * writes. Windscribe is a login behind a puzzle: this fetches the puzzle and
+ * [Captcha] finishes it. The name, and Windscribe's two-step code, wait
+ * behind two small links until they are wanted.
+ *
+ * An empty field is said under that field; a refused sign-in is said under
+ * the fields in the core's own words, and shakes the form once. Signed in,
+ * the button turns red with a check and a red ring closes round the mark,
+ * and then the setup takes over.
  *
  * One account per provider: a provider that already has one is shown as
  * added and cannot be picked, so the way to change it is to remove it first.
@@ -90,8 +122,14 @@ fun AddAccount(
     var label by remember { mutableStateOf("") }
     var said by remember { mutableStateOf<Said?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var signedIn by remember { mutableStateOf(false) }
     var puzzle by remember { mutableStateOf<Pair<String, Captcha>?>(null) }
+    var userBad by remember { mutableStateOf<String?>(null) }
+    var passBad by remember { mutableStateOf<String?>(null) }
+    var twoOpen by remember { mutableStateOf(false) }
+    var nameOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val anchor = remember { ChartAnchor() }
 
     LaunchedEffect(open, provider) {
         if (open) who = if (provider == Who.WINDSCRIBE.key) Who.WINDSCRIBE else Who.SURFSHARK
@@ -99,80 +137,146 @@ fun AddAccount(
     LaunchedEffect(open) {
         if (!open) {
             user = ""; password = ""; twoFa = ""; label = ""; said = null; busy = false; puzzle = null
+            signedIn = false; userBad = null; passBad = null; twoOpen = false; nameOpen = false
         }
     }
 
-    // Its own page per provider: opened from that provider's card, for that
-    // provider, with nothing to switch.
-    Sheet(open, "Add a ${who.label} account", onClose) {
-        Spacer(Modifier.height(Space.x4))
-        ProviderHero(who)
-        if (who.key in taken) {
-            Spacer(Modifier.height(Space.x4))
-            Block {
-                Text("${who.label} already has its account.", style = Type.strong)
-                Text("Each provider takes one account. Remove it in Accounts to add a different one.",
-                    style = Type.caption, modifier = Modifier.padding(top = Space.x1))
+    /* Signed in: the button and the ring say so for a moment, then the setup. */
+    suspend fun succeed(line: String) {
+        busy = false
+        signedIn = true
+        delay(950)
+        onDone(line, who.key)
+    }
+
+    fun submit() {
+        val emptyUser = user.isBlank()
+        val emptyPass = password.isEmpty()
+        userBad = if (emptyUser) (if (who == Who.SURFSHARK) "Enter the service username." else "Enter the username.") else null
+        passBad = if (emptyPass) "Enter the password." else null
+        if (emptyUser || emptyPass) return
+        busy = true
+        said = null
+        scope.launch {
+            if (who == Who.SURFSHARK) {
+                val r = addSurfshark(label, user, password)
+                if (r.ok) succeed("Surfshark account saved. Now get its servers.") else { busy = false; said = r }
+            } else {
+                val (r, got) = beginWindscribe(label, user, password)
+                if (!r.ok || got == null) {
+                    busy = false
+                    said = r
+                } else {
+                    puzzle = got
+                }
             }
-            return@Sheet
         }
+    }
 
-        Spacer(Modifier.height(Space.x5))
-        FieldLabel(if (who == Who.SURFSHARK) "Service username" else "Username or email")
-        Field(user, { user = it }, if (who == Who.SURFSHARK) "From the manual-setup page" else "Your Windscribe login")
-        Spacer(Modifier.height(Space.x3))
-        FieldLabel("Password")
-        Field(password, { password = it }, "Password", secret = true)
-        if (who == Who.WINDSCRIBE) {
-            Spacer(Modifier.height(Space.x3))
-            FieldLabel("Two-factor code", hint = "optional")
-            Field(twoFa, { twoFa = it }, "Only if it is on", keyboard = androidx.compose.ui.text.input.KeyboardType.Number)
+    MiSheet(open, onClose, anchor, paused = puzzle != null) {
+        val reduced = rememberReducedMotion()
+        val seal = rememberTurn(6f, !reduced && puzzle == null && !signedIn)
+        val closed by animateFloatAsState(if (signedIn) 1f else 0f, tween(if (reduced) 0 else 700), label = "seal")
+        // A refused sign-in shakes the form once, side to side.
+        val shake = remember { Animatable(0f) }
+        LaunchedEffect(said) {
+            if (said?.ok == false && !reduced) {
+                for (x in listOf(10f, -8f, 6f, -4f, 2f, 0f)) shake.animateTo(x, tween(55))
+            }
         }
-        Spacer(Modifier.height(Space.x3))
-        FieldLabel("Name", hint = "optional")
-        Field(label, { label = it }, "The username, if you leave this")
+        Column(
+            Modifier
+                .fillMaxSize()
+                .wrapContentWidth()
+                .widthIn(max = 420.dp)
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
+                MiClose(onClose, Modifier.offset(x = 12.dp))
+            }
+            Seal(who, seal, closed, Modifier.size(84.dp).then(anchor.mark()))
+            Spacer(Modifier.height(12.dp))
+            Text("Connect ${who.label}", style = TextStyle(fontFamily = Sans, fontWeight = FontWeight.W500,
+                fontSize = 20.sp, lineHeight = 26.sp, color = Color(0xFFF4F1EF), textAlign = TextAlign.Center))
+            Spacer(Modifier.height(6.dp))
+            MiSay(if (who == Who.SURFSHARK) "Use the service login from Surfshark's manual-setup page, not your email."
+                else "Your Windscribe username and password. A short puzzle comes next, asked once.",
+                Modifier.widthIn(max = 290.dp), size = 13f)
 
-        Spacer(Modifier.height(Space.x4))
-        // Where it goes, said before it is typed rather than after.
-        Row(Modifier.fillMaxWidth().padding(horizontal = Space.x1), verticalAlignment = Alignment.Top) {
-            Icon(Glyph.key, null, Modifier.size(16.dp), tint = Tone.text3)
-            Spacer(Modifier.width(Space.x3))
-            Text("Kept on this phone, encrypted with a key the Android keystore holds. " +
-                "Sent only to ${who.label}.", style = Type.caption, modifier = Modifier.weight(1f))
-        }
+            if (who.key in taken) {
+                Spacer(Modifier.height(24.dp))
+                MiSay("${who.label} already has its account. Each provider takes one; remove it in Accounts to add a different one.",
+                    size = 13f)
+                Spacer(Modifier.height(20.dp))
+                MiTextButton("Close", onClose)
+                return@Column
+            }
 
-        Spacer(Modifier.height(Space.x4))
-        Btn(
-            when {
-                busy -> "Working…"
-                who == Who.SURFSHARK -> "Save account"
-                else -> "Continue to the puzzle"
-            },
-            {
-                busy = true
-                said = null
-                scope.launch {
-                    if (who == Who.SURFSHARK) {
-                        val r = addSurfshark(label, user, password)
-                        busy = false
-                        if (r.ok) onDone("Surfshark account saved. Now get its servers.", who.key) else said = r
-                    } else {
-                        val (r, got) = beginWindscribe(label, user, password)
-                        if (!r.ok || got == null) {
-                            busy = false
-                            said = r
-                        } else {
-                            puzzle = got
-                        }
+            Spacer(Modifier.height(26.dp))
+            Column(Modifier.fillMaxWidth().graphicsLayer { translationX = shake.value * density }) {
+                StoneField(if (who == Who.SURFSHARK) "Service username" else "Username or email", user,
+                    { user = it; userBad = null; said = null },
+                    if (who == Who.SURFSHARK) "from the manual-setup page" else "your Windscribe login",
+                    bad = userBad)
+                Spacer(Modifier.height(14.dp))
+                StoneField("Password", password, { password = it; passBad = null; said = null }, "password",
+                    secret = true, bad = passBad)
+                if (who == Who.WINDSCRIBE && twoOpen) {
+                    Spacer(Modifier.height(14.dp))
+                    StoneField("Two-step code", twoFa, { twoFa = it }, "only if it is on",
+                        keyboard = androidx.compose.ui.text.input.KeyboardType.Number)
+                }
+                if (nameOpen) {
+                    Spacer(Modifier.height(14.dp))
+                    StoneField("Name (optional)", label, { label = it }, "the username, if you leave this")
+                }
+                said?.let {
+                    if (!it.ok && it.text.isNotEmpty()) Row(Modifier.padding(top = 12.dp, start = 2.dp),
+                        verticalAlignment = Alignment.Top) {
+                        Icon(Glyph.alert, null, Modifier.padding(top = 2.dp).size(14.dp), tint = Mirage.bad)
+                        Spacer(Modifier.width(6.dp))
+                        Text(it.text, style = TextStyle(fontFamily = Sans, fontSize = 12.5.sp, lineHeight = 18.sp,
+                            color = Mirage.bad))
                     }
                 }
-            },
-            // At least 52; taller when a large font sets the label on two lines.
-            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), strong = true,
-            enabled = !busy && who.key !in taken && user.isNotBlank() && password.isNotEmpty(),
-            icon = if (who == Who.SURFSHARK) Glyph.check else Glyph.chevRight,
-        )
-        said?.let { SaidLine(it.text, bad = !it.ok) }
+                if ((who == Who.WINDSCRIBE && !twoOpen) || !nameOpen) {
+                    Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                        if (who == Who.WINDSCRIBE && !twoOpen) MiLink("I use two-step sign-in") { twoOpen = true }
+                        if (!nameOpen) MiLink("Add a name (optional)") { nameOpen = true }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(28.dp))
+            // Where it goes, said before it is typed rather than after.
+            Row(Modifier.padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Glyph.key, null, Modifier.size(14.dp), tint = Mirage.red)
+                Spacer(Modifier.width(8.dp))
+                Text("Kept on this phone. Sent only to ${who.label}.",
+                    style = TextStyle(fontFamily = Sans, fontSize = 12.sp, color = Color(0xFF8C8481)))
+            }
+            OrbitButton(
+                when {
+                    signedIn -> "Signed in"
+                    busy -> "Signing in…"
+                    who == Who.SURFSHARK -> "Save account"
+                    else -> "Continue to the puzzle"
+                },
+                { submit() },
+                Modifier.fillMaxWidth(),
+                busy = busy,
+                done = signedIn,
+                paused = puzzle != null,
+            )
+            MiTextButton("Cancel", onClose)
+            Spacer(Modifier.height(16.dp))
+        }
     }
 
     CaptchaSheet(
@@ -186,34 +290,60 @@ fun AddAccount(
             val token = puzzle?.first.orEmpty()
             val r = finishWindscribe(token, solution, xs, ys, twoFa.trim())
             puzzle = null
-            busy = false
-            if (r.ok) onDone("Signed in to Windscribe. Now get its servers.", Who.WINDSCRIBE.key) else said = r
+            if (r.ok) succeed("Signed in to Windscribe. Now get its servers.") else { busy = false; said = r }
         },
     )
 }
 
+/** A small red link that opens a hidden field. */
+@Composable
+private fun MiLink(text: String, onClick: () -> Unit) {
+    Box(Modifier.heightIn(min = 40.dp).press(onClick = onClick).padding(end = 18.dp, top = 8.dp, bottom = 8.dp)) {
+        Text(text, style = TextStyle(fontFamily = Sans, fontSize = 12.5.sp, color = Color(0xFFC9787F)))
+    }
+}
+
 /**
- * The chosen provider: its mark, its name, and the one thing worth knowing
- * before typing - which login it wants. Bare on the page, not a card.
+ * The provider's own mark in a ring of degrees, turning slowly; signed in, a
+ * red ring closes round it ([closed], 0..1).
  */
 @Composable
-private fun ProviderHero(w: Who) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = Space.x1), verticalAlignment = Alignment.Top) {
+private fun Seal(w: Who, turn: androidx.compose.runtime.State<Float>, closed: Float, modifier: Modifier) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        // The degrees: 48 short strokes, drawn once and only turned.
+        Spacer(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { rotationZ = turn.value }
+                .drawBehind {
+                    val r = size.minDimension / 2f - 6.dp.toPx()
+                    val step = (2f * Math.PI.toFloat() * r) / 48f
+                    drawCircle(Mirage.red, r, style = Stroke(5.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(1.dp.toPx(), step - 1.dp.toPx()))))
+                },
+        )
+        Spacer(
+            Modifier
+                .size(56.dp)
+                .drawBehind {
+                    drawCircle(Brush.radialGradient(listOf(Color(0xFF3A1C21), Color(0xFF140C0E)),
+                        center = Offset(size.width * 0.38f, size.height * 0.32f), radius = size.minDimension * 0.8f))
+                    drawCircle(Color(0x73C31C2E), size.minDimension / 2f - 0.5.dp.toPx(), style = Stroke(1.dp.toPx()))
+                },
+        )
         Icon(if (w == Who.WINDSCRIBE) Glyph.windscribe else Glyph.surfshark, w.label,
-            Modifier.size(32.dp), tint = Data.provider(w.key))
-        Spacer(Modifier.width(Space.x4))
-        Column(Modifier.weight(1f)) {
-            Text("Connect ${w.label}", style = Type.subtitle)
-            Text(if (w == Who.SURFSHARK)
-                "The service login from Surfshark's manual-setup page, not your email."
-            else "Your Windscribe login. A short puzzle comes next, asked once.",
-                style = Type.body, modifier = Modifier.padding(top = Space.x1))
-        }
-        InfoTip(if (w == Who.SURFSHARK)
-            "The service username and password from Surfshark's manual-setup page - not " +
-                "the email you log in with. They change when you reset them there."
-        else "Your Windscribe username and password. Windscribe asks you to solve a " +
-            "puzzle; the sign-in is tried once, and never again behind your back.")
+            Modifier.size(28.dp), tint = Color(0xFFE8DCD9))
+        Spacer(
+            Modifier
+                .fillMaxSize()
+                .drawBehind {
+                    if (closed > 0.001f) {
+                        val i = 1.dp.toPx()
+                        drawArc(Mirage.redHi, -90f, 360f * closed, false, Offset(i, i),
+                            Size(size.width - 2 * i, size.height - 2 * i), style = Stroke(2.dp.toPx()))
+                    }
+                },
+        )
     }
 }
 
