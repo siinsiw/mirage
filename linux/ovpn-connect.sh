@@ -149,10 +149,16 @@ usage() {
 
   other
 
-        --set-dns          point the tunnel interface at the DNS the server
-                           pushed (needs systemd-resolved)
+        --set-dns          send DNS through the tunnel, to the resolver the
+                           server pushed. On by default. Per interface with
+                           systemd-resolved; without it /etc/resolv.conf is
+                           swapped for the session and put back on --stop
+        --no-set-dns       leave the resolver as it is (OVPN_SET_DNS=0)
         --kill-switch      block everything that is not the tunnel while it is
-                           up, so a drop cannot leak. Removed on --stop.
+                           up, so a drop cannot leak. On by default (needs
+                           nftables). Stays up if the tunnel dies; removed on
+                           --stop
+        --no-kill-switch   connect without it (OVPN_KILL_SWITCH=0)
         --kill-switch-off  remove a kill switch left behind, and exit
         --install-service  write a systemd unit that connects at boot
         --supervise        connect and stay in the foreground, exiting when
@@ -472,6 +478,22 @@ probe_direct() {
 }
 
 # Used by --fallback next: the first pinned config that answers directly.
+# A kill switch left by a tunnel that is gone lets out only the first
+# selection's addresses (killswitch_admit at the switch below), so every other
+# candidate would look dead through it. They are let through before they are
+# probed. Not from inside $(...): killswitch_admit speaks, and what it says
+# would land in the captured answer.
+admit_candidates() {
+    local i ips=()
+    for i in "${!CFG_FILE[@]}"; do
+        [ "$i" -eq "$SEL_IDX" ] && continue
+        [[ ${CFG_PROTO[$i]} == udp* ]] && continue
+        ips+=("${CFG_IP[$i]}")
+    done
+    [ ${#ips[@]} -gt 0 ] && killswitch_admit "${ips[@]}"
+    return 0
+}
+
 find_reachable() {
     local i
     for i in "${!CFG_FILE[@]}"; do
@@ -486,6 +508,7 @@ find_reachable() {
 
 show_alternatives() {
     local i found=0
+    [ "$DRY_RUN" -eq 0 ] && admit_candidates
     info 'testing the other pinned files...'
     for i in "${!CFG_FILE[@]}"; do
         [ "$i" -eq "$SEL_IDX" ] && continue
@@ -588,6 +611,17 @@ auth_args() {
     printf '%s\n%s\n' '--auth-user-pass' "$AUTH_FILE"
 }
 
+# Is this directive, as the first word of a line, anywhere in these lines?
+# Inline blocks are not looked into more carefully than this: a false yes
+# only costs --auth-nocache, never adds anything.
+has_directive() {
+    local want=$1 line; shift
+    for line in "$@"; do
+        [[ $line =~ ^[[:space:]]*(--)?${want}([[:space:]]|$) ]] && return 0
+    done
+    return 1
+}
+
 start_tunnel() {
     local i=$1 mode=$2 file=${CFG_FILE[$1]} cmd=() ph pp arg authargs
 
@@ -609,6 +643,20 @@ start_tunnel() {
     drop_script_lines "${LINES[@]}"
     cmd=(openvpn --config "$RUN_CONFIG" --script-security 1 --daemon ovpn-pin
          --log "$LOGFILE" --writepid "$PIDFILE" --verb 3 --connect-retry-max 3)
+
+    # The password is not kept in the daemon's memory for the session; it is
+    # read again from the auth file whenever openvpn has to sign in again.
+    # That file is named by an absolute path, in the config or below, so the
+    # daemon finds it from wherever it runs. The exception is a config that
+    # drops root (`user nobody`): after that openvpn cannot open a mode-600
+    # file any more, and its first reconnect would be its last. Such a config
+    # keeps the old behaviour.
+    if has_directive user "${KEPT_LINES[@]}"; then
+        NOCACHE_SKIPPED=1
+    else
+        NOCACHE_SKIPPED=0
+        cmd+=(--auth-nocache)
+    fi
 
     authargs=$(auth_args "$file") || die "$(basename -- "$file") asks for a username and password and no auth file exists.
          Put OVPN_USER and OVPN_PASS in $ROOT/.env and run this again - the auth
@@ -647,8 +695,16 @@ start_tunnel() {
         warn "$(basename -- "$file") asks openvpn to run programs or write files: ${DROPPED_DIRECTIVES[*]}"
         info 'those lines were left out of what openvpn is given.'
     fi
+    [ "$NOCACHE_SKIPPED" -eq 1 ] && \
+        info 'this config drops root after connecting, so openvpn keeps the password in memory to be able to reconnect.'
 
     [ "$mode" = proxy ] && pin_upstream_routes "$pp"
+    # And through a kill switch a dead tunnel left up: the proxy's own server
+    # is what this dial goes out to, not the config's remote.
+    if [ "$mode" = proxy ] && [ -s "$ROUTEFILE" ]; then
+        # shellcheck disable=SC2046
+        killswitch_admit $(cat -- "$ROUTEFILE")
+    fi
 
     if ! $SUDO "${cmd[@]}"; then
         unpin_upstream_routes
@@ -728,18 +784,41 @@ report_up() {
         info 'address your line will not dial directly.'
     fi
 
-    [ "$SET_DNS" -eq 1 ] && apply_dns "$dev"
+    if [ "$SET_DNS" -eq 1 ]; then
+        apply_dns "$dev"
+    else
+        dns_restore
+        warn 'DNS left as it was (--no-set-dns): names are still answered by the resolver your line gives you'
+    fi
 
-    if [ "$KILL_SWITCH" -eq 1 ]; then
+    # Said on every connect that has none, whatever the reason: a tunnel
+    # that gives up puts traffic back on the bare line without a sound.
+    #
+    # Dialled through a local proxy whose own server could not be worked out
+    # (no routes pinned for it), the kill switch would drop that proxy's
+    # connection to its server - the one carrying this tunnel - and the
+    # tunnel would die seconds after "Up" with the machine left offline. So
+    # it is not installed then, and the reason is said instead.
+    if [ "$KILL_SWITCH" -eq 1 ] && [ "$mode" != direct ] && [ ! -s "$ROUTEFILE" ]; then
+        printf '\n'
+        warn "NO KILL SWITCH: it would cut the proxy that carries this tunnel, whose server is not known"
+        info 'Set OVPN_PROXY_UPSTREAM=<ip of your proxy server> in .env and connect'
+        info 'again to have both.'
+    elif [ "$KILL_SWITCH" -eq 1 ]; then
         printf '\n'
         local extra=''
         [ -f "$ROUTEFILE" ] && extra=$(tr '\n' ' ' < "$ROUTEFILE")
-        killswitch_on "$dev" "$(killswitch_peers "$i" "$server")" "$extra"
-        if [ "$SET_DNS" -ne 1 ]; then
-            info 'DNS to anything outside the tunnel is blocked now, your own router'
-            info 'included. If names stop resolving, connect with --set-dns so the'
-            info "server's resolver is used through the tunnel."
+        if killswitch_on "$dev" "$(killswitch_peers "$i" "$server")" "$extra"; then
+            if [ "$SET_DNS" -ne 1 ]; then
+                info 'DNS to anything outside the tunnel is blocked now, your own router'
+                info 'included. If names stop resolving, connect without --no-set-dns so'
+                info "the server's resolver is used through the tunnel."
+            fi
+        else
+            warn 'NO KILL SWITCH: if this tunnel drops, traffic goes back onto the bare line'
         fi
+    else
+        warn 'NO KILL SWITCH (turned off): if this tunnel drops, traffic goes back onto the bare line'
     fi
 
     eg=$(egress_line) && { printf '\n'; info "Cloudflare sees you as $eg"; }
@@ -755,18 +834,25 @@ report_up() {
 }
 
 # Without this the system resolver stays whatever it was, so a poisoned answer
-# reaches you through a perfectly good tunnel. Only systemd-resolved is handled
-# - it is the one that can do this per interface and undo it by itself when
-# the interface goes away.
+# reaches you through a perfectly good tunnel - and when that resolver is the
+# router on your LAN, the questions never enter the tunnel at all.
+#
+# systemd-resolved first: it can do this per interface and undoes it by itself
+# when the interface goes away. Where it is missing, or will not take the
+# setting, /etc/resolv.conf is swapped for the session instead (see below).
 #
 # IPv6 resolvers count too - `dhcp-option DNS6`, an IPv6 address on a plain
 # `dhcp-option DNS`, and the `dns server N address` form openvpn 2.6 pushes -
 # or a v6 resolver the server offered would be left out and the machine's own
 # kept for v6. Only things shaped like addresses are passed on.
+#
+# A server that pushes no resolver gets a public one. The default route is
+# the tunnel's by then, so that is where the questions go; leaving the line's
+# own resolver in place is the one outcome this exists to prevent.
+DNS_FALLBACK='1.1.1.1 1.0.0.1'
 apply_dns() {
     local dev=$1 servers a
-    [ -n "$dev" ] || return 0
-    command -v resolvectl >/dev/null 2>&1 || { warn 'resolvectl not found - DNS left as it was'; return 0; }
+    [ -n "$dev" ] || { warn 'no tunnel device found - DNS left as it was'; return 0; }
     servers=$( { log_cat | grep -oE 'dhcp-option DNS6? [0-9A-Fa-f:.]+' | awk '{print $3}'
                  log_cat | grep -oE 'dns server [0-9]+ address [0-9A-Fa-f:. ]+' \
                      | sed 's/.*address //' | tr ' ' '\n'; } \
@@ -775,13 +861,92 @@ apply_dns() {
                          printf '%s\n' "$a"
                      fi
                  done | sort -u | tr '\n' ' ')
-    [ -n "${servers// /}" ] || { info 'the server pushed no DNS - nothing to set'; return 0; }
-    # shellcheck disable=SC2086
-    if $SUDO resolvectl dns "$dev" $servers 2>/dev/null && $SUDO resolvectl domain "$dev" '~.' 2>/dev/null; then
-        ok "DNS for $dev set to ${servers% }"
-    else
-        warn 'could not set DNS through resolvectl'
+    if [ -z "${servers// /}" ]; then
+        servers="$DNS_FALLBACK "
+        info "the server pushed no DNS - using ${DNS_FALLBACK// / and } through the tunnel"
     fi
+    if command -v resolvectl >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
+        if $SUDO resolvectl dns "$dev" $servers 2>/dev/null && $SUDO resolvectl domain "$dev" '~.' 2>/dev/null; then
+            # A resolv.conf of ours left by a tunnel that died is not wanted
+            # beside it.
+            dns_restore
+            ok "DNS for $dev set to ${servers% }"
+            return 0
+        fi
+        info 'resolvectl would not take the setting - swapping /etc/resolv.conf instead'
+    fi
+    dns_swap_resolvconf "${servers% }"
+}
+
+# The fallback for a machine without systemd-resolved: /etc/resolv.conf is
+# moved aside - whatever it is, a file or a link into somebody's /run - and a
+# plain file naming the tunnel's resolvers put in its place. dns_restore moves
+# the original back; do_stop calls it, so --stop, a switch, and the supervisor
+# on its way out all undo it, the same way they take the kill switch down.
+#
+# The original is kept beside it in /etc rather than in /run, so that a
+# reboot in the middle does not lose it: the next connect or --stop finds it
+# and puts it back. If it is already there, a tunnel of ours died without
+# being stopped, and what sits in /etc/resolv.conf now is our file, not
+# theirs - so it is not saved over the real one.
+#
+# A network manager that rewrites resolv.conf (a DHCP renewal) will write its
+# own over ours; the kill switch still drops port 53 outside the tunnel.
+RESOLV=/etc/resolv.conf
+RESOLV_SAVED=/etc/resolv.conf.ovpn-pin-saved
+dns_swap_resolvconf() {
+    local servers=$1 a body
+    body='# written by ovpn-pin for the life of the tunnel; the original is in'$'\n'
+    body+="# $RESOLV_SAVED and comes back with: ovpn connect --stop"$'\n'
+    for a in $servers; do body+="nameserver $a"$'\n'; done
+    body+='options edns0'
+
+    if ! dns_swapped; then
+        if [ -e "$RESOLV" ] || [ -L "$RESOLV" ]; then
+            $SUDO mv -f -- "$RESOLV" "$RESOLV_SAVED" 2>/dev/null \
+                || { warn "could not move $RESOLV aside - DNS left as it was"; return 1; }
+        else
+            # Nothing there to keep: a marker, so restore knows to remove
+            # ours rather than leave it.
+            $SUDO touch -- "$RESOLV_SAVED.none" 2>/dev/null
+        fi
+    fi
+    # The name is free now (a link was moved, not followed), so this makes a
+    # new file rather than writing through to wherever a link pointed.
+    $SUDO rm -f -- "$RESOLV" 2>/dev/null
+    if ( umask 022; printf '%s\n' "$body" | $SUDO tee "$RESOLV" >/dev/null ) 2>/dev/null; then
+        $SUDO chmod 644 "$RESOLV" 2>/dev/null
+        ok "DNS set to $servers in $RESOLV (no systemd-resolved here)"
+        info "the original is kept in $RESOLV_SAVED and comes back on --stop"
+        return 0
+    fi
+    warn "could not write $RESOLV - putting the original back"
+    dns_restore
+    return 1
+}
+
+# Was /etc/resolv.conf swapped by us and not put back? /etc is readable by
+# everyone, so this needs no sudo and --status can ask it.
+dns_swapped() { [ -e "$RESOLV_SAVED" ] || [ -L "$RESOLV_SAVED" ] || [ -e "$RESOLV_SAVED.none" ]; }
+
+# Put back what dns_swap_resolvconf moved aside. Nothing to do, and nothing
+# said, when it never ran - which is every machine with systemd-resolved.
+dns_restore() {
+    dns_swapped || return 0
+    if [ -e "$RESOLV_SAVED" ] || [ -L "$RESOLV_SAVED" ]; then
+        $SUDO rm -f -- "$RESOLV" 2>/dev/null
+        if $SUDO mv -f -- "$RESOLV_SAVED" "$RESOLV" 2>/dev/null; then
+            ok "$RESOLV put back as it was"
+        else
+            warn "could not put $RESOLV back - the original is in $RESOLV_SAVED"
+            return 1
+        fi
+    else
+        $SUDO rm -f -- "$RESOLV" 2>/dev/null
+    fi
+    $SUDO rm -f -- "$RESOLV_SAVED.none" 2>/dev/null
+    return 0
 }
 
 
@@ -841,8 +1006,8 @@ dns_check() {
 
     if [ "$forged" -eq 1 ]; then
         bad 'your resolver is still handing back a private address - it is lying,'
-        info 'and those answers are not coming through the tunnel. Use --set-dns,'
-        info 'or point the machine at 1.1.1.1 yourself.'
+        info 'and those answers are not coming through the tunnel. Connect without'
+        info '--no-set-dns, or point the machine at 1.1.1.1 yourself.'
     elif [ -n "$doh" ] && [ -z "$(comm -12 <(tr ' ' '\n' <<<"$sys" | sort -u) <(tr ' ' '\n' <<<"$doh" | sort -u) | grep .)" ]; then
         warn 'the two disagree completely. That can be honest - big providers'
         info 'answer differently per region - but on a censored line it is also'
@@ -867,6 +1032,11 @@ dns_check() {
 # is meant to close - and on a censored line the one that lies. The rules
 # that let openvpn reach its server come first, so a server that happens to
 # listen on 53 still works.
+#
+# ICMP gets no rule of its own. It leaves on lo and on the tunnel like
+# everything else there (the two `accept`s at the top), and nowhere else: a
+# ping or a traceroute out of the physical interface is this machine's real
+# address talking to whoever was pinged.
 #
 # The table is declared, deleted and written again in one nft transaction,
 # so running this over a kill switch that is already up (the service
@@ -906,7 +1076,6 @@ table inet ovpn_pin {
 $allow        udp dport { 53, 853 } drop
         tcp dport { 53, 853 } drop
         ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 224.0.0.0/4 } accept
-        ip protocol icmp accept
     }
 }
 EOF
@@ -939,6 +1108,29 @@ killswitch_off() {
 
 killswitch_present() {
     command -v nft >/dev/null 2>&1 && $SUDO nft list table inet ovpn_pin >/dev/null 2>&1
+}
+
+# A tunnel that died leaves its kill switch up - that is what it is for - and
+# the next connect then has to get through it: the probe and openvpn itself
+# are dropped like everything else unless the address is the one the old
+# tunnel used. So the addresses of the config about to be dialled are let
+# through the table that is there, at the top of the chain, ahead of the DNS
+# drops. Nothing is opened beyond those addresses, and killswitch_on replaces
+# the whole table once the new tunnel is up.
+killswitch_admit() {
+    local u
+    [ -e "$STATE/killswitch" ] || return 0
+    killswitch_present || { rm -f -- "$STATE/killswitch" 2>/dev/null; return 0; }
+    warn 'the kill switch from a tunnel that is gone is still up - nothing leaves but this dial'
+    info "to lift it instead:  ./$SELF --stop"
+    for u in "$@"; do
+        if is_ip_literal "$u"; then
+            $SUDO nft insert rule inet ovpn_pin out ip daddr "$u" accept 2>/dev/null
+        elif [[ $u =~ ^[0-9A-Fa-f:]+$ && $u == *:* ]]; then
+            $SUDO nft insert rule inet ovpn_pin out ip6 daddr "$u" accept 2>/dev/null
+        fi
+    done
+    return 0
 }
 
 # Every address this config's openvpn may be talking to: the peer the log
@@ -992,8 +1184,10 @@ install_service() {
     q_cfg=$(sd_quote "$cfg") || die 'that config name has a line break in it - rename the file'
     q_root=$(sd_quote "OVPN_ROOT=$ROOT" env) || die "$ROOT has a line break in it"
     q_desc=${cfg//%/%%}
-    [ "$KILL_SWITCH" -eq 1 ] && flags+=' --kill-switch'
-    [ "$SET_DNS" -eq 1 ] && flags+=' --set-dns'
+    # Both spelled out, on or off: the defaults are on, and a unit that said
+    # nothing would switch back on what was switched off here.
+    if [ "$KILL_SWITCH" -eq 1 ]; then flags+=' --kill-switch'; else flags+=' --no-kill-switch'; fi
+    if [ "$SET_DNS" -eq 1 ]; then flags+=' --set-dns'; else flags+=' --no-set-dns'; fi
 
     body=$(cat <<EOF
 [Unit]
@@ -1724,9 +1918,12 @@ do_stop() {
         # Quiet is the supervisor finding the tunnel already gone: systemd is
         # about to start it again, and a kill switch kept up in between is
         # the point of having one, so it stays (killswitch_on replaces it).
-        [ "$quiet" -eq 1 ] && return 0
+        # A swapped resolv.conf does not: it names a resolver that is only
+        # there through the tunnel, and the next connect swaps it again.
+        if [ "$quiet" -eq 1 ]; then dns_restore >/dev/null; return 0; fi
         head_ 'Nothing to stop'
         info 'no tunnel of ours is running.'
+        dns_restore
         # openvpn can die on its own - a crash, a kill, a lost server - and
         # the kill switch built around it outlives it. --stop has to take
         # that down whether or not there is anything left to stop, or the
@@ -1769,6 +1966,9 @@ do_stop() {
 
     unpin_upstream_routes
     $SUDO rm -f -- "$PIDFILE" "$RUN_CONFIG"
+    # resolved drops its per-interface setting with the interface; a swapped
+    # resolv.conf has to be put back by hand.
+    if [ "$quiet" -eq 1 ]; then dns_restore >/dev/null; else dns_restore; fi
     # Root wrote it, into your folder, so it may take root to remove.
     [ -e "$LEGACY_PIDFILE" ] && { rm -f -- "$LEGACY_PIDFILE" 2>/dev/null || $SUDO rm -f -- "$LEGACY_PIDFILE"; }
     rm -f -- "$CURFILE" "$MODEFILE" 2>/dev/null
@@ -1795,6 +1995,14 @@ do_status() {
         [ "$mode" = proxy ] && info "carried by $PROXY - closing it drops the tunnel"
     else
         info 'no tunnel of ours is up.'
+        if [ -e "$STATE/killswitch" ]; then
+            warn 'a kill switch from a tunnel that is gone may still be up - if so, nothing leaves this machine'
+            info "lift it with:  ./$SELF --stop"
+        fi
+        if dns_swapped; then
+            warn "$RESOLV is still the one written for a tunnel that is gone"
+            info "put the original back with:  ./$SELF --stop"
+        fi
     fi
 
     if command -v ip >/dev/null 2>&1; then
@@ -1875,6 +2083,7 @@ while [ $# -gt 0 ]; do
         --next)            CLI_FALLBACK=next; shift ;;
         --no-proxy-off)    NO_PROXY_OFF=1; shift ;;
         --set-dns)         SET_DNS=1; shift ;;
+        --no-set-dns)      SET_DNS=0; shift ;;
         --kill-switch)     CLI_KILL=1; shift ;;
         --no-kill-switch)  CLI_KILL=0; shift ;;
         --supervise)       SUPERVISE=1; shift ;;
@@ -1923,11 +2132,14 @@ PROXY_ON_CMD=$(env_or OVPN_PROXY_ON_CMD '')
 PROXY_UPSTREAM=$(env_or OVPN_PROXY_UPSTREAM '')
 FALLBACK=${CLI_FALLBACK:-$(env_or OVPN_FALLBACK '')}
 VIA=${CLI_VIA:-$(env_or OVPN_CONNECT_VIA 'auto')}
-KILL_SWITCH=${CLI_KILL:-$(env_or OVPN_KILL_SWITCH 0)}
+# Both on unless switched off, by flag or in .env: a default connect that
+# leaves the resolver alone asks the line that forges answers, and one with
+# no kill switch goes back onto that line the moment openvpn gives up.
+KILL_SWITCH=${CLI_KILL:-$(env_or OVPN_KILL_SWITCH 1)}
 RESOLVER=$(env_or OVPN_RESOLVER 'cloudflare')
-[ -n "$SET_DNS" ] || SET_DNS=$(env_or OVPN_SET_DNS 0)
-[ "$SET_DNS" = 1 ] || SET_DNS=0
-[ "$KILL_SWITCH" = 1 ] || KILL_SWITCH=0
+[ -n "$SET_DNS" ] || SET_DNS=$(env_or OVPN_SET_DNS 1)
+case ${SET_DNS,,} in 0|no|off|false) SET_DNS=0 ;; *) SET_DNS=1 ;; esac
+case ${KILL_SWITCH,,} in 0|no|off|false) KILL_SWITCH=0 ;; *) KILL_SWITCH=1 ;; esac
 [ ${#SITES[@]} -eq 0 ] && { s=$(env_or OVPN_SITE ''); [ -n "$s" ] && SITES=("$s"); }
 
 case $OUT_DIR in /*) ;; *) OUT_DIR=$ROOT/${OUT_DIR#./} ;; esac
@@ -1966,9 +2178,22 @@ probe_devtcp
 case $ACTION in
     status)   do_status; exit 0 ;;
     stop)     do_stop; exit 0 ;;
-    unlock)   head_ 'Kill switch'; killswitch_off; printf '\n'; exit 0 ;;
+    unlock)   head_ 'Kill switch'; killswitch_off
+              # The other thing a tunnel that died leaves behind.
+              running_pid >/dev/null || dns_restore
+              printf '\n'; exit 0 ;;
     dnscheck) dns_check; exit 0 ;;
 esac
+
+# A tunnel that ended without --stop - openvpn killed, a reboot, a host
+# without the supervisor - left /etc/resolv.conf as ours, and the resolver in
+# it may only answer inside a tunnel that is gone. With no tunnel up, it goes
+# back before anything else happens; a connect below swaps it again if asked.
+if ! running_pid >/dev/null && dns_swapped; then
+    head_ 'DNS'
+    info 'a tunnel that ended without --stop left /etc/resolv.conf swapped'
+    dns_restore
+fi
 
 # Past the read-only actions: everything below here can start a tunnel, and a
 # tunnel is exactly what a stale password breaks.
@@ -2010,6 +2235,11 @@ if running_pid >/dev/null; then
     info "$(basename -- "$(cat "$CURFILE" 2>/dev/null)") is up - bringing it down first"
     do_stop 1 || die 'the running tunnel would not stop, so nothing was started.'
     ok 'previous tunnel down'
+elif [ "$DRY_RUN" -eq 0 ]; then
+    # No tunnel, but one that died may have left its kill switch up; let this
+    # dial through it. Every remote of the file, as killswitch_on would.
+    # shellcheck disable=SC2046
+    killswitch_admit $(killswitch_peers "$SEL_IDX" '')
 fi
 
 head_ 'Preflight'
@@ -2079,6 +2309,7 @@ else
             MODE=proxy ;;
         next)
             info 'looking for a pinned file that answers directly...'
+            [ "$DRY_RUN" -eq 0 ] && admit_candidates
             if NEXT=$(find_reachable); then
                 SEL_IDX=$NEXT
                 ok "using ${CFG_NAME[$SEL_IDX]}  ${CFG_IP[$SEL_IDX]}:${CFG_PORT[$SEL_IDX]}"

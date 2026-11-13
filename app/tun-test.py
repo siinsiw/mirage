@@ -98,7 +98,9 @@ def test_wrapper_quotes_what_it_is_given():
         ui=99, out="'o'", err="'e'", pidf="'p'", ready="'r'", failed="'f'",
         stop="'s'", done="'d'", nic="'RelayTun'", watch=1234, startup=25,
         holdf="'h'", held="'hd'", watchf="'w'",
+        allow=tun._ps_list([r"C:\Users\O'Brien\Relay\Relay.exe"]),
         config=tun._ps_string(config))
+    assert r"$allow  = @('C:\Users\O''Brien\Relay\Relay.exe')" in text
     assert "O''Brien" in text
     # The configuration travels inside the (hash-checked) script, and the
     # elevated side writes it - BOM-less, admin-only, CreateNew - where an
@@ -121,9 +123,19 @@ def test_the_kill_switch_is_a_file_the_script_reads():
     hold_at = w.index('Test-Path -LiteralPath $holdf')
     assert w.index('Set-Content -LiteralPath $held') > hold_at
     assert 'Test-Path -LiteralPath $watchf' in w
-    # And the hold is let go of when the window itself is gone: nothing is
-    # left to reconnect or to press Disconnect.
-    assert '-and -not $uiGone' in w and '$watch -eq 0 -and $uiGone' in w
+    # The window going does not end the hold any more - it is only said.
+    assert 'Relay went away while holding traffic' not in w
+    assert 'stays held until Relay opens again' in w
+    gone = w.index('$watch -eq 0 -and $uiGone')
+    assert 'break' not in w[gone:w.index('if (-not $up)', gone)]
+    # sing-box going by itself, with the hold on, hands the hold to the
+    # firewall - and only once the adapter had been up.
+    exited = w.index('if ($box.HasExited)')
+    assert w.index('$up -and (Test-Path -LiteralPath $holdf)', exited) \
+        < w.index('Block-RelayOutbound $allow', exited)
+    # A leftover firewall hold is lifted only once the new adapter is up.
+    assert w.index('Unblock-RelayOutbound') > w.index('if ($seen)')
+    assert w.index('Unblock-RelayOutbound') < w.index("-Value 'up'")
     import tempfile
     with tempfile.TemporaryDirectory() as d:
         t = tun.Tun(lambda pid: False)
@@ -142,6 +154,38 @@ def test_the_kill_switch_is_a_file_the_script_reads():
         with open(os.path.join(d, 'watch')) as f:
             assert f.read() == '4321'
         assert t.record()['watch'] == 4321
+
+
+def test_the_firewall_hold_puts_back_what_it_found():
+    k = tun.KILL_PS
+    # What the profiles said is saved once, before anything is changed, and
+    # under HKLM - not in a folder this user can write.
+    assert "HKLM:\\SOFTWARE\\Relay\\KillSwitch" in k
+    save = k.index('New-ItemProperty')
+    assert save < k.index('-DefaultOutboundAction Block')
+    assert k.index('if (-not (Test-Path -LiteralPath $RelayKillKey))') < save
+    # Outbound blocked on every profile; only the reconnect's programs and
+    # the local network allowed; DNS blocked even to the local network.
+    assert 'Set-NetFirewallProfile -Profile Domain, Private, Public ' \
+           '-DefaultOutboundAction Block' in k
+    assert '-Action Allow -Program $prog' in k
+    assert "'192.168.0.0/16'" in k
+    assert k.count('-RemotePort 53') == 2
+    # Put back: only a value the firewall knows, else NotConfigured, and
+    # the rules go by their group.
+    # A block that fails halfway is undone, key and all: the key is what
+    # firewall_held() reads, and it must never say "held" when nothing is.
+    block = k[k.index('function Block-RelayOutbound'):
+              k.index('function Unblock-RelayOutbound')]
+    failed = block[block.index('} catch {', block.index('New-Item -Path')):]
+    assert failed.index('Unblock-RelayOutbound') < failed.index('return')
+    unblock = k[k.index('function Unblock-RelayOutbound'):]
+    assert "-notin 'Allow', 'Block', 'NotConfigured'" in unblock
+    assert 'Remove-NetFirewallRule -Group $RelayKillGroup' in unblock
+    assert tun.KILL_GROUP in k and tun.KILL_KEY in k.replace('HKLM:\\', '')
+    # The programs it lets out are this app and what carries a reconnect.
+    allowed = [os.path.normcase(p) for p in tun.carriers_of_a_reconnect()]
+    assert os.path.normcase(os.path.normpath(sys.executable)) in allowed
 
 
 def test_explain():

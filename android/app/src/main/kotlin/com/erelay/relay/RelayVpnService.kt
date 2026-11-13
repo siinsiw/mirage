@@ -290,18 +290,11 @@ class RelayVpnService : VpnService() {
         @Volatile var stalled: Boolean = false
             private set
 
-        // How the watchdog paces itself. Counts are read every few seconds and
-        // cost nothing; a real request through the exit is sent once a minute
-        // while somebody is looking at the phone, and at once when the counts
-        // say apps are failing.
-        private const val WATCH_EVERY_MS = 10_000L
-        private const val CHECK_EVERY_MS = 60_000L
+        // How the watchdog paces itself is in VpnLogic, with the rest of its
+        // arithmetic, where a test can reach it.
         // A working exit answers the check in one to two seconds from Iran;
         // eight is slow enough to forgive a bad moment on the line.
         private const val CHECK_TIMEOUT_MS = 8_000L
-        private const val RECHECK_AFTER_MS = 2_000L
-        // Connections in a row the exit failed before it is asked directly.
-        private const val FAILS_BEFORE_CHECK = 2
         // Checks in a row that fail before the exit is given up on. Two, so
         // one dropped packet on a bad line does not cost a working exit.
         private const val MISSES_BEFORE_SWITCH = 2
@@ -653,39 +646,31 @@ class RelayVpnService : VpnService() {
         }
         val apps = splitApps(prefs.getString(Keys.SPLIT_APPS, "").orEmpty(), iran)
 
-        if (mode == SplitMode.BYPASS) {
-            for (pkg in apps.keys) {
-                try {
-                    b.addDisallowedApplication(pkg)
-                } catch (e: PackageManager.NameNotFoundException) {
-                    // Uninstalled since it was looked up: nothing to leave out.
+        // Which of the cases above this is: decided in VpnLogic.splitPlan,
+        // where it is tested, and carried out here. Under Only these with
+        // nothing listed it is SELF_OUT and Off: a tunnel that carries
+        // nothing is a tunnel that does nothing; carrying everything is the
+        // safer way to be wrong, and the window warns before it comes to this.
+        val plan = VpnLogic.splitPlan(mode, apps.isNotEmpty(), hasDest,
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+        when (plan.apps) {
+            VpnLogic.Apps.SELF_OUT -> {
+                leaveSelfOut()
+            }
+            VpnLogic.Apps.LISTED_OUT -> {
+                for (pkg in apps.keys) {
+                    try {
+                        b.addDisallowedApplication(pkg)
+                    } catch (e: PackageManager.NameNotFoundException) {
+                        // Uninstalled since it was looked up: nothing to leave out.
+                    }
                 }
-            }
-            leaveSelfOut()
-            return told(if (hasDest) SplitMode.BYPASS else SplitMode.OFF)
-        }
-
-        // Only these.
-        return when {
-            // Nothing listed. A tunnel that carries nothing is a tunnel that
-            // does nothing; carrying everything is the safer way to be wrong,
-            // and the window warns before it comes to this.
-            apps.isEmpty() && !hasDest -> {
                 leaveSelfOut()
-                told(SplitMode.OFF)
-            }
-            apps.isEmpty() -> {
-                leaveSelfOut()
-                told(SplitMode.ONLY)
-            }
-            hasDest && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
-                leaveSelfOut()
-                told(SplitMode.ONLY, apps.values.distinct().joinToString(","))
             }
             // Apps alone, or apps and destinations on a phone that cannot say
             // whose a connection is: the apps are let in, and whatever they
             // send is carried.
-            else -> {
+            VpnLogic.Apps.LISTED_IN -> {
                 var admitted = 0
                 for (pkg in apps.keys) {
                     try {
@@ -699,9 +684,9 @@ class RelayVpnService : VpnService() {
                 // included. If every listed app went away meanwhile, that is
                 // what this is, and this app leaves itself out as usual.
                 if (admitted == 0) leaveSelfOut()
-                told(SplitMode.OFF)
             }
         }
+        return told(plan.core, if (plan.withUids) apps.values.distinct().joinToString(",") else "")
     }
 
     /**
@@ -903,13 +888,16 @@ class RelayVpnService : VpnService() {
                 // first time used to be handed the API password - and every
                 // provider credential the exit search sends - before anything
                 // had checked its certificate; the core now refuses that
-                // outright. So it is tested first, plainly, and its
-                // certificate kept; ServerPin.call below handles the case
-                // where the core still says there is none.
+                // outright. A server whose certificate has not been confirmed
+                // under Settings is stopped here with the instruction, in
+                // full; ServerPin.call below says the same should the core
+                // still find no pin.
                 try {
                     ServerPin.ensure(applicationContext, cfg)
                 } catch (e: Exception) {
-                    fail(a, "$domain did not answer: " + (e.message ?: e.toString()).take(140))
+                    val why = e.message ?: e.toString()
+                    fail(a, if (why == ServerPin.UNCONFIRMED) "$domain: $why."
+                            else "$domain did not answer: " + why.take(140))
                     return
                 }
                 if (!a.current) return
@@ -1207,7 +1195,7 @@ class RelayVpnService : VpnService() {
                 // A check that just failed is asked again almost at once: it
                 // already waited out its own timeout, and every second spent
                 // here is a second every app on the phone is waiting too.
-                delay(if (misses > 0) RECHECK_AFTER_MS else WATCH_EVERY_MS + backoff)
+                delay(VpnLogic.watchDelay(misses, backoff))
                 if (client !== c) break
                 // Dozing, nothing on the phone has a network - this check
                 // would fail and give up on a working exit for it.
@@ -1219,10 +1207,9 @@ class RelayVpnService : VpnService() {
                 // passed does not reset the core's count, and an idle phone
                 // would otherwise be checked every ten seconds after one bad
                 // burst. A count that went down was reset by a new exit.
-                if (h.fails < failsAtCheck) failsAtCheck = 0
-                val failing = h.fails >= FAILS_BEFORE_CHECK && h.fails > failsAtCheck
-                val due = now - lastCheck >= CHECK_EVERY_MS && power?.isInteractive != false
-                if (!failing && !due && misses == 0 && !stalled) continue
+                failsAtCheck = VpnLogic.failsBaseline(h.fails, failsAtCheck)
+                if (!VpnLogic.shouldCheck(h.fails, failsAtCheck, now - lastCheck,
+                        power?.isInteractive != false, misses, stalled)) continue
 
                 lastCheck = now
                 failsAtCheck = h.fails
@@ -1269,7 +1256,7 @@ class RelayVpnService : VpnService() {
                 if (client !== c) break
                 misses = 0
                 lastCheck = SystemClock.elapsedRealtime()
-                backoff = if (fixed) 0 else (backoff * 2).coerceIn(20_000L, 120_000L)
+                backoff = VpnLogic.nextBackoff(fixed, backoff)
             }
         }
     }

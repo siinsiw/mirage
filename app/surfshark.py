@@ -221,7 +221,10 @@ def _get_json(host, path, timeout):
                 raise ApiError(f'Surfshark answered {response.status} '
                                f'{response.reason} for {path}')
             return json.loads(body.decode('utf-8', 'replace'))
-        except (OSError, ValueError, ssl.SSLError) as e:
+        # ApiError too: a refusal from one address is a reason to try the
+        # next, not to give up on all of them. Only the last reason is kept
+        # if every one says no.
+        except (OSError, ValueError, ssl.SSLError, ApiError) as e:
             trouble.append(f'{address}: {e}')
         finally:
             try:
@@ -360,6 +363,12 @@ def write_configs(dest=None, timeout=TIMEOUT):
             added += 1
         except OSError:
             failed += 1
+
+    # Every one refused, and nothing already here: said now, with the
+    # reason, rather than as "Nothing waiting in ..." one step later.
+    if failed and not added and not (wanted & already):
+        raise ApiError(f'None of the {failed} Surfshark configs could be '
+                       f'written into {dest}.')
 
     # Written whole and moved into place, and never fatal: a folder with no
     # notes beside it is a list that says less, not a broken one.

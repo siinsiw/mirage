@@ -105,8 +105,10 @@ options() {
     --success-dir DIR  where the ones that connect are kept. Default success/
     --no-owner         skip the "rented from" lookup
     --pick             connect the best exit when the sweep is done
-    --set-dns          point the tunnel at the DNS the server pushes
-    --kill-switch      drop everything that is not the tunnel while it is up
+    --no-set-dns       leave the resolver alone (by default DNS goes through
+                       the tunnel, to the resolver the server pushes)
+    --no-kill-switch   connect without the kill switch (by default everything
+                       that is not the tunnel is dropped while it is up)
     --dns-check        is DNS going through the tunnel, or still forged?
     --dry-run          print the openvpn command, change nothing
 
@@ -263,7 +265,7 @@ do_custom() {
     case " $opts " in
         *' --sweep'*|*' --status'*|*' --stop'*|*' --switch'*|*' --dns-check'*|\
         *' --pick'*|*' --retest'*|*' --landlord'*|*' --one-per'*|*' --kill-switch'*|\
-        *' --set-dns'*|*' --dry-run'*|*' --supervise'*)
+        *' --set-dns'*|*' --no-set-dns'*|*' --no-kill-switch'*|*' --dry-run'*|*' --supervise'*)
             # shellcheck disable=SC2086
             run "$CON" $opts ;;
         *)
@@ -327,7 +329,7 @@ case ${1:-} in
         case " $* " in
             *' --sweep'*|*' --status'*|*' --stop'*|*' --switch'*|*' --dns-check'*|\
             *' --retest'*|*' --landlord'*|*' --one-per'*|*' --kill-switch'*|\
-            *' --set-dns'*|*' --dry-run'*|*' --supervise'*|*' --install-service'*)
+            *' --set-dns'*|*' --no-set-dns'*|*' --no-kill-switch'*|*' --dry-run'*|*' --supervise'*|*' --install-service'*)
                 exec bash "$CON" "$@" ;;
             # Through bash for the same reason run() does it: this path never
             # reaches run(), so without it a tree whose executable bits did

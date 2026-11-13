@@ -17,8 +17,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +45,8 @@ import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 /**
  * The meter under the orb: how much has gone each way, and how fast now.
@@ -53,6 +57,13 @@ import kotlin.math.min
  * hangs below it in violet. Each band's scale climbs fast and settles slow,
  * with a floor, so a quiet line is a flat line rather than a magnified one.
  * The desktop's flux, app.js, number for number.
+ *
+ * It is drawn only while something is moving: for the second after a reading
+ * (the scroll) and for as long as a scale is still easing. After that the
+ * picture cannot change until the next reading, so the frame loop stops and
+ * waits for one - an idle or disconnected meter costs nothing. While it does
+ * run it draws about thirty times a second: the wave moves a fraction of a
+ * pixel a frame, and the display's full rate bought nothing visible.
  */
 private class Wave {
     val down = FloatArray(N)
@@ -84,6 +95,20 @@ private class Wave {
         scaleUp = ease(scaleUp, up.max(), FLOOR_UP)
     }
 
+    /**
+     * Whether both scales are where they are going, near enough that the
+     * difference is under a pixel of a 46dp band - and then put exactly
+     * there, so stopping leaves nothing half-eased.
+     */
+    fun settled(): Boolean {
+        val wantDown = max(down.max() * 1.15f, FLOOR_DOWN)
+        val wantUp = max(up.max() * 1.15f, FLOOR_UP)
+        if (abs(scaleDown - wantDown) > wantDown * 0.005f || abs(scaleUp - wantUp) > wantUp * 0.005f) return false
+        scaleDown = wantDown
+        scaleUp = wantUp
+        return true
+    }
+
     companion object {
         const val N = 60
         const val FLOOR_DOWN = 32f * 1024
@@ -96,18 +121,37 @@ fun Flux(traffic: Traffic, modifier: Modifier = Modifier) {
     val wave = remember { Wave() }
     var frame by remember { mutableFloatStateOf(0f) }
 
+    // How many readings have arrived: what wakes the loop below.
+    var pushes by remember { mutableIntStateOf(0) }
+
     LaunchedEffect(traffic) {
         wave.push(traffic, System.nanoTime())
+        pushes++
     }
     // Sub-sample scrolling: how far past the last reading we are, 0..1.
     LaunchedEffect(Unit) {
         var last = 0L
         while (true) {
+            val seen = pushes
+            var moving = true
             withFrameNanos { now ->
+                // The step is capped at a quarter of a second, not a tenth:
+                // frames are a thirtieth apart now, and a hitch still must
+                // not throw the scale.
                 val dt = if (last == 0L) 0f else (now - last) / 1e9f
                 last = now
-                wave.settle(min(dt, 0.1f))
-                frame = min(1f, (System.nanoTime() - wave.pushedAt) / 1e9f)
+                wave.settle(min(dt, 0.25f))
+                val f = min(1f, (System.nanoTime() - wave.pushedAt) / 1e9f)
+                frame = f
+                moving = f < 1f || !wave.settled()
+            }
+            if (moving) {
+                // About thirty frames a second: the next frame after 30ms.
+                delay(30)
+            } else {
+                // Still. Nothing to draw until another reading arrives.
+                snapshotFlow { pushes }.first { it != seen }
+                last = 0L
             }
         }
     }
