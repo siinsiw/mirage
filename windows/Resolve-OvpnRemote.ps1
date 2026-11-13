@@ -267,6 +267,25 @@ function Resolve-Doh {
     @($ips | Select-Object -Unique)
 }
 
+# One lookup that has to come back, tried up to twice before the route is
+# called broken. On the line this is for a single attempt can fail where the
+# next one passes, and every caller below turns a failure here into "nothing
+# was resolved" - so one dropped attempt was enough to fail a setup that would
+# then work on "Try again". Returns the reason for the last failure, or $null
+# when an answer came back.
+function Test-DohAnswer {
+    param([string] $ProxyUrl, [int] $Tries = 2)
+    $why = 'no attempt was made'
+    for ($i = 1; $i -le $Tries; $i++) {
+        try {
+            if (@(Resolve-Doh 'example.com' $ProxyUrl).Count -gt 0) { return $null }
+            $why = 'it answered, but with no addresses'
+        }
+        catch { $why = $_.Exception.GetBaseException().Message }
+    }
+    return $why
+}
+
 # Decide once whether DoH works without help. Trying direct for every hostname
 # on a line where it is blocked costs 20 seconds each time for an answer that
 # was never coming.
@@ -283,35 +302,27 @@ function Select-DohRoute {
     # with the one useful sentence never said.
     if ($Explicit) {
         Write-Info "using the proxy you named: $Explicit"
-        try {
-            if (@(Resolve-Doh 'example.com' $Explicit).Count -gt 0) { return $Explicit }
-            $why = 'it answered, but with no addresses'
-        }
-        catch { $why = $_.Exception.GetBaseException().Message }
+        $why = Test-DohAnswer $Explicit
+        if (-not $why) { return $Explicit }
         throw "DoH did not answer through $Explicit ($why). Nothing was resolved. Check that proxy - one that asks for a password will not do - or resolve directly with -NoProxy."
     }
 
-    # Direct, and told so. Still probed once - not to decide anything, but so
-    # that a blocked line is one sentence here instead of a twenty second
-    # timeout per hostname and an empty folder at the end of it.
+    # Direct, and told so. Still probed - not to decide anything, but so that
+    # a blocked line is one sentence here instead of a twenty second timeout
+    # per hostname and an empty folder at the end of it.
     if ($NoProxy) {
-        try {
-            if (@(Resolve-Doh 'example.com' $null).Count -gt 0) {
-                Write-Ok 'DoH works directly - no proxy needed'
-                return $null
-            }
-        }
-        catch { }
-        throw 'DoH did not answer directly, and -NoProxy says not to look for a proxy. Nothing was resolved. Start your proxy and name it with -Proxy http://127.0.0.1:PORT.'
-    }
-
-    try {
-        if (@(Resolve-Doh 'example.com' $null).Count -gt 0) {
+        $why = Test-DohAnswer $null
+        if (-not $why) {
             Write-Ok 'DoH works directly - no proxy needed'
             return $null
         }
+        throw "DoH did not answer directly ($why), and -NoProxy says not to look for a proxy. Nothing was resolved. Start your proxy and name it with -Proxy http://127.0.0.1:PORT."
     }
-    catch { }
+
+    if (-not (Test-DohAnswer $null)) {
+        Write-Ok 'DoH works directly - no proxy needed'
+        return $null
+    }
 
     Write-Info 'DoH did not answer directly; looking for a local proxy...'
     $p = Find-Proxy

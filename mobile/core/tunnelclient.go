@@ -90,19 +90,12 @@ type TunnelServer struct {
 	// Pin is the SHA-256 of the certificate a server reached by IP address
 	// must serve, in hex. Such a server has no name for a CA to vouch for,
 	// so its installer makes its own certificate and the app trusts that
-	// one exactly. Empty means not yet known: the first answer is taken and
-	// can be read back from SeenPin, to be kept - SSH's first-connect rule.
+	// one exactly. Empty means not yet known, and then nothing is dialled:
+	// the pin comes from the server's key, or from PeekPin's answer once
+	// the person has confirmed it. It is never taken silently.
 	Pin string
 
 	seenPin atomic.Value // string: the certificate the server last showed
-
-	// learnt is the pin taken on first use, when Pin was empty: the
-	// certificate a bare handshake was shown before anything else was sent.
-	// Every connection after it - the one that carries the password included -
-	// has to show the same one. pinMu keeps two first dials from each taking
-	// a different answer.
-	learnt atomic.Value // string
-	pinMu  sync.Mutex
 
 	// Session is the multiplexed session, held between CONNECTs. Nil until
 	// the first one, and dropped whenever it breaks.
@@ -178,11 +171,14 @@ func (t *TunnelServer) dialEdges(ctx context.Context, timeout time.Duration) (ne
 		addrs = []string{t.Domain}
 	}
 
-	// A server by address with no pin yet: its certificate is taken first,
-	// on a handshake that carries nothing, and only then is a connection
-	// made that sends the password - held to that same certificate.
-	if err := t.learnPin(ctx, addrs, timeout); err != nil {
-		return nil, err
+	// A server by address with no pin is not dialled at all. It used to be
+	// trusted on first sight - whatever certificate answered became the pin,
+	// and the tunnel password followed it - so anything sitting on the path
+	// the first time was the server from then on. The pin now has to be
+	// there before the password leaves: from the key, or confirmed by the
+	// person after PeekPin showed it to them.
+	if t.IsAddress() && t.pin() == "" {
+		return nil, ErrNoPin
 	}
 
 	var last error
@@ -256,15 +252,8 @@ func (t *TunnelServer) SeenPin() string {
 	return s
 }
 
-// pin is the certificate to hold an address to: the one configured, or the
-// one first use took. "" only before either exists.
-func (t *TunnelServer) pin() string {
-	if t.Pin != "" {
-		return t.Pin
-	}
-	s, _ := t.learnt.Load().(string)
-	return s
-}
+// pin is the certificate to hold an address to. "" before one is known.
+func (t *TunnelServer) pin() string { return strings.TrimSpace(t.Pin) }
 
 // tlsConfig is a CA's word for a named server, and the pin for an address.
 func (t *TunnelServer) tlsConfig() *tls.Config {
@@ -274,24 +263,21 @@ func (t *TunnelServer) tlsConfig() *tls.Config {
 	return PinnedTLS(t.pin(), func(seen string) { t.seenPin.Store(seen) })
 }
 
-// learnPin is SSH's first-connect rule done in the right order. With no pin,
-// the certificate used to be taken during the very handshake whose
-// connection then carried the tunnel password - so whatever answered first
-// was handed the password in the same breath as it was trusted. Here the
-// certificate is read on a TLS handshake of its own, which sends nothing
-// but a ClientHello and is closed at once; it becomes the pin, and the
-// connection that authenticates is refused unless it shows the same one.
+// PeekPin is the certificate a server by address shows right now, as the
+// SHA-256 the pin is written in - shown, and nothing more. The handshake
+// sends a ClientHello and is closed at once: no password, no request. The
+// answer is not kept as the pin and nothing is trusted because of it; it is
+// for a person to compare with what the installer printed ("certificate
+// sha256 ...") and then hand back as Pin. Until they do, dialEdges refuses.
 //
-// Nothing to do for a server by name (a CA vouches for it) or one already
-// pinned.
-func (t *TunnelServer) learnPin(ctx context.Context, addrs []string, timeout time.Duration) error {
-	if !t.IsAddress() || t.pin() != "" {
-		return nil
+// "" for a server by name: a CA vouches for that one, and there is no pin.
+func (t *TunnelServer) PeekPin(ctx context.Context, timeout time.Duration) (string, error) {
+	if !t.IsAddress() {
+		return "", nil
 	}
-	t.pinMu.Lock()
-	defer t.pinMu.Unlock()
-	if t.pin() != "" {
-		return nil
+	addrs := t.Edges
+	if len(addrs) == 0 {
+		addrs = []string{t.Domain}
 	}
 	var last error
 	for _, addr := range addrs {
@@ -314,19 +300,19 @@ func (t *TunnelServer) learnPin(ctx context.Context, addrs []string, timeout tim
 			last = fmt.Errorf("%s: %w", addr, err)
 			continue
 		}
-		t.learnt.Store(seen)
-		t.seenPin.Store(seen)
-		return nil
+		return seen, nil
 	}
 	if last == nil {
 		last = errors.New("no address to take the certificate from")
 	}
-	return last
+	return "", last
 }
 
-// PinnedTLS trusts exactly one certificate: the one whose SHA-256 is pin,
-// or, with no pin yet, whatever is shown first - handed to seen either way.
-// What a self-signed server by address can be checked against.
+// PinnedTLS trusts exactly one certificate: the one whose SHA-256 is pin -
+// handed to seen either way. What a self-signed server by address can be
+// checked against. With no pin it accepts whatever is shown, which is only
+// for a handshake that sends nothing after it (PeekPin); dialEdges and the
+// server's API both refuse to get this far without one.
 func PinnedTLS(pin string, seen func(string)) *tls.Config {
 	return &tls.Config{
 		// Not what it sounds like: the chain is not a CA's, so Go's own

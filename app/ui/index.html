@@ -1670,6 +1670,18 @@
 
     <section class="screen" data-screen="about-this-copy" hidden>
 
+    <!-- Asked only when pressed: nothing here checks on its own. -->
+    <section class="pane">
+      <span class="pane__copy">
+        <h3 class="pane__title">Newer version</h3>
+        <p class="pane__why">Asks GitHub whether there is a newer Relay for
+          Windows than this one. Nothing about this computer is sent.</p>
+        <p class="note" id="updateSaid" role="status" aria-live="polite"></p>
+      </span>
+      <button class="btn btn--quiet btn--auto" id="updateCheck" type="button">Check</button>
+      <button class="btn btn--quiet btn--auto" id="updateOpen" type="button" hidden>Open the release page</button>
+    </section>
+
     <!-- 7 · a footnote, and shaped like one -->
     <section class="pane pane--foot">
       <div class="pane__head"><h3 class="pane__title">Where this copy keeps its files</h3></div>

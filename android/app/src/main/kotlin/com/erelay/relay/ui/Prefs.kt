@@ -1013,6 +1013,8 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
             SwitchRow("Show the traffic meter",
                 "The live wave of what is going up and down while connected.",
                 feel.meter, { onFeel(feel.copy(meter = it)) })
+            Sep()
+            IranFlagRow()
         }
     }
 

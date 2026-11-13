@@ -30,6 +30,12 @@ object Keys {
     const val TUNNEL_PASSWORD = "tunnelPassword"
     const val TUNNEL_API_PASSWORD = "tunnelApiPassword"
     const val TUNNEL_PIN = "tunnelPin"
+    /**
+     * A certificate a server by address showed on a first Test, waiting for
+     * the second Test that confirms it: "host:port sha256". Not trusted, and
+     * never read as the pin - see RelayCore.testTunnel.
+     */
+    const val TUNNEL_PIN_SHOWN = "tunnelPinShown"
     const val TUNNEL_EDGES = "tunnelEdges"
     const val TUNNEL_PORT = "tunnelPort"
     const val TUNNEL_TRANSPORT = "tunnelTransport"
@@ -53,6 +59,19 @@ object Keys {
      * connection through the exit fails entirely. See [verifyExit].
      */
     const val TUNNEL_VERIFY_OFF = "tunnelVerifyOff"
+
+    /**
+     * Iran drawn as a plain disc with "IR" instead of the Lion and Sun flag
+     * (Settings → Look). Off unless somebody turns it on. See ui/Flags.kt.
+     */
+    const val IRAN_NEUTRAL_FLAG = "iranNeutralFlag"
+
+    /**
+     * The note shown once before the first Windscribe sign-in - that Relay
+     * signs in the way Windscribe's browser extension does, and an account
+     * can be blocked for it - was read and accepted. See ui/WindscribeNote.kt.
+     */
+    const val WINDSCRIBE_NOTE_OK = "windscribeNoteOk"
 
     // -- the tunnel itself ----------------------------------------------------------
     const val MODE = "mode"

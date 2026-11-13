@@ -12,6 +12,7 @@ import android.opengl.GLUtils
 import android.util.Log
 import androidx.compose.ui.graphics.asAndroidBitmap
 import com.erelay.relay.ui.flagBitmap
+import com.erelay.relay.ui.flagHidden
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
@@ -310,7 +311,7 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
         }
         val mask = texture(bmp)
         bmp.recycle()
-        val flag = mapFlag(code)?.let { bmp -> texture(bmp, mipmaps = true).also { bmp.recycle() } }
+        val flag = (if (flagHidden(context, code)) null else mapFlag(code))?.let { bmp -> texture(bmp, mipmaps = true).also { bmp.recycle() } }
             ?: texture(flagBitmap(context, code)?.asAndroidBitmap(), grey = true)
         val t = CountryTex(mask, flag)
         textures[code] = t

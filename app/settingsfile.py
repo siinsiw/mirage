@@ -218,8 +218,13 @@ def _snapshot(data):
 
 
 def save_settings(data):
-    """Write the settings, whole. Thread-safe, never raises, and keeps the
-    previous good file as settings.json.bak."""
+    """Write the settings, whole. Thread-safe, never raises, and writes the
+    same text to settings.json.bak.
+
+    The backup is a second copy of this save, not the save before it: it is
+    there for a settings.json that a crash or a full disk left unreadable,
+    and what load_settings falls back to then is the latest settings, not an
+    older set. It does not undo a save that was valid but wrong."""
     with SETTINGS_LOCK:
         try:
             os.makedirs(os.path.dirname(settings_path()), exist_ok=True)

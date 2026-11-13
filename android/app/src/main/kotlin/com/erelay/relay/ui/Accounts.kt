@@ -87,6 +87,7 @@ fun AddAccount(
     var user by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var twoFa by remember { mutableStateOf("") }
+    @Suppress("NAME_SHADOWING") val beginWindscribe = rememberWindscribeGate(beginWindscribe)
     var label by remember { mutableStateOf("") }
     var said by remember { mutableStateOf<Said?>(null) }
     var busy by remember { mutableStateOf(false) }

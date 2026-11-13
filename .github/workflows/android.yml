@@ -78,6 +78,7 @@ permissions:
 env:
   NDK_VERSION: '27.3.13750724'
   GO_VERSION: '1.27'
+  GOVULNCHECK_VERSION: 'v1.9.0'
 
 jobs:
   # The core on its own, and it has to pass. Its tests that reach real exits
@@ -88,17 +89,74 @@ jobs:
   core:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: mobile/core/go.sum
+      # Two things the core is built from are kept twice, and nothing but
+      # this stops the copies drifting: the Iranian lists (lists/ for the
+      # desktop, mobile/core/lists/ embedded in the phone's core) and the
+      # country tables (app/countries.py, and the Go that
+      # mobile/tools/gen-countries.py writes from it).
+      - name: the two copies of the lists are the same
+        run: |
+          status=0
+          for f in lists/*.txt; do
+            cmp "$f" "mobile/core/lists/$(basename "$f")" || status=1
+          done
+          for f in mobile/core/lists/*.txt; do
+            [ -f "lists/$(basename "$f")" ] || { echo "$f has no copy in lists/"; status=1; }
+          done
+          if [ "$status" -ne 0 ]; then
+            echo "::error::lists/ and mobile/core/lists/ differ - copy the changed .txt across"
+          fi
+          exit "$status"
+      # Not "the file is exactly what the generator writes", because today it
+      # is not: countries.go also carries the continent tables, which the
+      # generator does not emit yet, and gofmt's blank lines. So the question
+      # asked is the one that matters - is every line the generator writes
+      # from countries.py in the committed file, in order? A country added
+      # or renamed in the Python and not regenerated fails it. Run on a copy,
+      # so the tree is not written to. Once the generator emits the whole
+      # file, this becomes `git diff --exit-code`.
+      - name: countries.go has everything the generator writes
+        run: |
+          tmp=$(mktemp -d)
+          mkdir -p "$tmp/app" "$tmp/mobile/tools" "$tmp/mobile/core"
+          cp app/countries.py "$tmp/app/"
+          cp mobile/tools/gen-countries.py "$tmp/mobile/tools/"
+          python3 "$tmp/mobile/tools/gen-countries.py"
+          missing=$(diff "$tmp/mobile/core/countries.go" mobile/core/countries.go | grep '^<' || true)
+          if [ -n "$missing" ]; then
+            printf '%s\n' "$missing"
+            echo "::error::mobile/core/countries.go is behind app/countries.py - run python mobile/tools/gen-countries.py and commit the result"
+            exit 1
+          fi
       - name: vet
         working-directory: mobile/core
         run: go vet ./...
       - name: test
         working-directory: mobile/core
         run: go test ./...
+      # Again under the race detector: the core is goroutines around shared
+      # state (the tunnel, the LAN share, the health checks), and a data race
+      # passes an ordinary run. It needs cgo, which the runner has.
+      - name: test, with the race detector
+        working-directory: mobile/core
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race ./...
+      # Known vulnerabilities in what the core actually calls - the modules
+      # in go.sum and the standard library of the Go above. It reports only
+      # code that is reached, so a finding is a reason to stop.
+      - name: govulncheck
+        working-directory: mobile/core
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"
+          "$(go env GOPATH)/bin/govulncheck" ./...
 
   apk:
     runs-on: ubuntu-latest
@@ -106,23 +164,25 @@ jobs:
     # as fast as before; a failing core job fails the run all the same, and
     # release.yml publishes only from a run that passed.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # javac is not optional and not JAVA_HOME: gomobile compiles the Java it
       # generates by shelling out to `javac` on PATH, and without it the bind
       # runs, all four architectures compile, and it fails on the very last
       # step leaving an empty .aar behind.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '21'
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: mobile/core/go.sum
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
         with:
           packages: 'platform-tools ndk;27.3.13750724'
 
@@ -160,32 +220,47 @@ jobs:
       # release could not be installed over the last, and nothing marked it
       # as not ours. RELAY_REQUIRE_SIGNING makes Gradle refuse the same way,
       # should the key be set and still not be usable.
+      #
+      # Nothing goes into GITHUB_ENV here. The password used to, which handed
+      # it to every step after this one; it is given to the one step that
+      # signs, below, and to no other.
       - name: unpack the signing key
         if: inputs.release
         env:
           KEYSTORE_B64: ${{ secrets.RELAY_KEYSTORE_B64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.RELAY_KEYSTORE_PASSWORD }}
+          HAVE_PASSWORD: ${{ secrets.RELAY_KEYSTORE_PASSWORD != '' }}
         run: |
-          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+          if [ -z "$KEYSTORE_B64" ] || [ "$HAVE_PASSWORD" != "true" ]; then
             echo "::error::no signing key configured (RELAY_KEYSTORE_B64 and RELAY_KEYSTORE_PASSWORD) - a release is not built without it"
             exit 1
           fi
-          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/relay-release.p12"
-          echo "RELAY_KEYSTORE=$RUNNER_TEMP/relay-release.p12" >> "$GITHUB_ENV"
-          echo "RELAY_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-          echo "RELAY_KEY_ALIAS=relay" >> "$GITHUB_ENV"
-          echo "RELAY_REQUIRE_SIGNING=true" >> "$GITHUB_ENV"
+          ( umask 077; printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/relay-release.p12" )
 
       # The unit tests run on both paths: a release is the build that most
       # needs them, and it used to be the one that skipped them.
-      - name: build the APK
+      #
+      # Two steps rather than one with an `if` inside it, so that the signing
+      # environment exists only where a release is being signed.
+      - name: build the release APK
+        if: inputs.release
         working-directory: android
-        run: |
-          if [ "${{ inputs.release }}" = "true" ]; then
-            ./gradlew --no-daemon :app:testReleaseUnitTest :app:assembleRelease
-          else
-            ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
-          fi
+        env:
+          RELAY_KEYSTORE: ${{ runner.temp }}/relay-release.p12
+          RELAY_KEYSTORE_PASSWORD: ${{ secrets.RELAY_KEYSTORE_PASSWORD }}
+          RELAY_KEY_ALIAS: relay
+          RELAY_REQUIRE_SIGNING: 'true'
+        run: ./gradlew --no-daemon :app:testReleaseUnitTest :app:assembleRelease
+
+      - name: build the debug APK
+        if: ${{ !inputs.release }}
+        working-directory: android
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+
+      # The key has done its job; it does not need to sit on the runner
+      # while the artifact is uploaded.
+      - name: remove the signing key
+        if: always() && inputs.release
+        run: rm -f "$RUNNER_TEMP/relay-release.p12"
 
       # One name for both, because what changes between them is the build
       # type rather than what the thing is.
@@ -198,7 +273,7 @@ jobs:
             echo "path=android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: relay-apk
           path: ${{ steps.apk.outputs.path }}
