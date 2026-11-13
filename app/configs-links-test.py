@@ -49,6 +49,8 @@ def test_refusals_never_repeat_the_secret():
     configs, problems = links.parse_text(text)
     assert not configs and len(problems) == 2
     assert 'supersecret' not in json.dumps(problems)
+    _, problems = links.parse_text('hunter2-my-password')
+    assert problems[0]['what'] == '…', problems
 
 
 def test_a_paste_of_many_with_duplicates_and_junk():

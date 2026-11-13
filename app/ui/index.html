@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="app.css">
 <link rel="stylesheet" href="midnight.css">
 <link rel="stylesheet" href="intro.css">
+<link rel="stylesheet" href="configs.css">
 <script>
   // First thing on the page. A script error used to leave a window that
   // looked fine and did nothing, with no way to find out why - so errors are
@@ -175,6 +176,13 @@
       <button class="icon icon--dead" id="dropOpen" type="button" hidden
               data-n="0" aria-label="Exits that stopped answering">
         <svg class="ico" aria-hidden="true"><use href="#i-archive"/></svg>
+      </button>
+      <!-- Configs: servers bought or given from anywhere (vless://, vmess://,
+           trojan://, ss://, hysteria2://, tuic://, subscriptions). A section
+           of its own, with nothing to do with the provider accounts. -->
+      <button class="icon" id="configsOpen" type="button" aria-label="Configs"
+              aria-haspopup="dialog" title="Configs">
+        <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg>
       </button>
       <button class="icon" id="settings" type="button" aria-label="Settings">
         <svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>
@@ -409,6 +417,83 @@
     <p class="note reach__said" id="reachSaid"></p>
   </div>
   <div class="sheet__list" id="list"></div>
+</dialog>
+
+<!-- Configs. One sheet: what is added (by hand, or from a subscription),
+     how each one did when it was last tested, and choosing one connects it.
+     Everything in it is drawn by configs.js from configs(list). -->
+<dialog class="sheet sheet--configs" id="configsDlg" aria-labelledby="cfgTitle">
+  <header class="sheet__top">
+    <span class="sheet__heading">
+      <span class="sheet__kicker">Your own servers</span>
+      <span class="sheet__title" id="cfgTitle">Configs</span>
+    </span>
+    <button class="icon" id="cfgClose" type="button" aria-label="Close">
+      <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </header>
+
+  <div class="cfgbar">
+    <button class="btn btn--quiet btn--auto cfgbar__lead" id="cfgPaste" type="button"
+            title="Add the vless:// vmess:// trojan:// ss:// hysteria2:// tuic:// links on the clipboard">
+      <svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg><span>Paste links</span>
+    </button>
+    <button class="btn btn--quiet btn--auto" id="cfgSubShow" type="button" aria-expanded="false">
+      <svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg><span>Subscription</span>
+    </button>
+    <button class="btn btn--quiet btn--auto" id="cfgTest" type="button">
+      <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg><span id="cfgTestLabel">Test all</span>
+    </button>
+  </div>
+
+  <form class="cfgform" id="cfgSubForm" hidden autocomplete="off">
+    <label class="field">
+      <span class="field__cap">Subscription address</span>
+      <input class="field__in mono" id="cfgSubUrl" type="url" spellcheck="false"
+             placeholder="https://…" aria-describedby="cfgSubWhy">
+    </label>
+    <p class="note" id="cfgSubWhy">Fetched only when you add it or press
+      update, and through the connection when one is up.</p>
+    <div class="cfgform__acts">
+      <button class="btn btn--quiet btn--auto" id="cfgSubAdd" type="submit">Add and fetch</button>
+    </div>
+  </form>
+
+  <form class="cfgform" id="cfgPasteForm" hidden autocomplete="off">
+    <label class="field">
+      <span class="field__cap">Links</span>
+      <textarea class="field__in mono cfgform__links" id="cfgPasteText" rows="4"
+                spellcheck="false" placeholder="vless://…  one or many, or a base64 list"></textarea>
+    </label>
+    <div class="cfgform__acts">
+      <button class="btn btn--quiet btn--auto" id="cfgPasteAdd" type="submit">Add</button>
+    </div>
+  </form>
+
+  <p class="note cfgsaid" id="cfgSaid" role="status" aria-live="polite"></p>
+
+  <div class="cfgask" id="cfgAsk" hidden role="alertdialog" aria-labelledby="cfgAskText">
+    <p class="cfgask__text" id="cfgAskText"></p>
+    <div class="cfgask__acts">
+      <button class="btn btn--quiet btn--auto cfgask__yes" id="cfgAskYes" type="button">Yes</button>
+      <button class="btn btn--quiet btn--auto" id="cfgAskNo" type="button">Cancel</button>
+    </div>
+  </div>
+
+  <div class="sheet__list cfglist" id="cfgList"></div>
+
+  <footer class="cfgfoot">
+    <label class="cfgfoot__opt">
+      <button class="toggle" id="cfgAuto" type="button" role="switch" aria-checked="false"
+              aria-label="Fastest, automatically"><span></span></button>
+      <span><b>Fastest, automatically</b><i>moves to the next when one stops answering</i></span>
+    </label>
+    <label class="cfgfoot__opt">
+      <button class="toggle" id="cfgFragment" type="button" role="switch" aria-checked="false"
+              aria-label="Split the TLS hello"><span></span></button>
+      <span><b>Split the TLS hello</b><i>helps where the filter reads it; off unless needed</i></span>
+    </label>
+  </footer>
 </dialog>
 
 <!-- Where the exits come from. Opened off the head of the list, because that
@@ -2168,5 +2253,6 @@
 <script src="atlas.js"></script>
 <script src="midnight.js"></script>
 <script src="app.js"></script>
+<script src="configs.js"></script>
 </body>
 </html>

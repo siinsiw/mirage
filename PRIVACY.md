@@ -160,6 +160,31 @@ server until the location is pointed elsewhere or the installer is run
 again. The links Relay then shows give whoever holds them use of that
 server.
 
+## Configs (servers from anywhere)
+
+The Configs section connects through servers the user adds by hand or by a
+subscription address, from whoever sold or gave them. Whoever runs such a
+server sees the traffic that goes through it, as with any VPN; Relay cannot
+vouch for them. When connected, traffic goes to that server, and the
+section's DNS questions are asked of Cloudflare (`1.1.1.1`) over HTTPS,
+through it.
+
+- A subscription is fetched only when the user adds it or presses update,
+  from the address the user gave, and through the connection when one is
+  up. Its operator sees the request (and, without a connection, the user's
+  address). An `http://` subscription can be read and changed by the line;
+  the app marks it.
+- A latency test fetches the Cloudflare trace page above through each config
+  being tested, from the user's own line, and only when the user asks.
+- The links, the subscription addresses and the test results are kept only
+  on the device, sealed with Windows' DPAPI for the user's account, and are
+  removed with the rest by erasing the app's data. Logs never contain a link
+  or a password.
+- A link that asks for certificate checks to be skipped does not get its way:
+  the check stays on until the user turns it off for that one server, after
+  a warning. Links that carry traffic without encryption are marked, and
+  connecting to one asks first.
+
 ## Split tunnelling
 
 Split tunnelling is off unless the user turns it on. When it is on, the

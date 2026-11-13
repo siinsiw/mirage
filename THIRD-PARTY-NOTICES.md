@@ -36,9 +36,12 @@ modules (BSD-3-Clause). AndroidX and Jetpack Compose are Apache-2.0.
 | --- | --- | --- |
 | `sing-box.exe` | GPL-3.0-or-later; its licence ships as `sing-box-LICENSE.txt` | [SagerNet/sing-box](https://github.com/SagerNet/sing-box), at the version named by `SINGBOX_VERSION` in `.github/workflows/desktop-release.yml` |
 | `gost.exe` | MIT | [go-gost/gost](https://github.com/go-gost/gost), at the version named by `GOST_VERSION` in the same file |
+| `xray.exe` | MPL-2.0; its licence ships as `xray-LICENSE.txt` | [XTLS/Xray-core](https://github.com/XTLS/Xray-core), at the version named by `XRAY_VERSION` in the same file, checked against the SHA2-256 Xray publishes beside the archive |
 
-Relay starts both as separate programs and does not link them in, so the
-Windows app itself stays under MIT.
+Relay starts all three as separate programs and does not link them in, so
+the Windows app itself stays under MIT. The Configs section runs sing-box
+(and, for xhttp, Xray) as its engine; the provider side runs gost and, in
+Tunnel mode, sing-box.
 
 ## Inside the Windows window (`app/ui`)
 

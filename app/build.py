@@ -567,6 +567,12 @@ def main():
         # that is not is a build that runs and a window that cannot
         # find its own tunnel.
         '--hidden-import', 'tunnel',
+        # The Configs section, a package of its own.
+        *[arg for module in ('configs', 'configs.api', 'configs.links',
+                             'configs.probe', 'configs.procs',
+                             'configs.runner', 'configs.singbox',
+                             'configs.store', 'configs.subs', 'configs.xray')
+          for arg in ('--hidden-import', module)],
         # pystray is imported inside a function so a machine without it still
         # runs. PyInstaller only follows imports it can see statically, so
         # without these the tray silently does not exist in the built app -
@@ -704,6 +710,19 @@ def main():
         print('tun: MISSING - the proxy setting works, but "Tunnel (TUN)" '
               'will be greyed out. Put sing-box.exe in tunnel/ and build '
               'again.')
+
+    # Xray, for the configs sing-box cannot carry (xhttp). MPL-2.0; its
+    # licence goes beside it the same way.
+    carrier = os.path.join(ROOT, 'tunnel', 'xray.exe')
+    if os.path.isfile(carrier):
+        shutil.copy2(carrier, os.path.join(out, 'xray.exe'))
+        licence = os.path.join(ROOT, 'tunnel', 'xray-LICENSE.txt')
+        if os.path.isfile(licence):
+            shutil.copy2(licence, os.path.join(out, 'xray-LICENSE.txt'))
+        print('configs: xray copied')
+    else:
+        print('configs: xray MISSING - xhttp configs will say so instead of '
+              'connecting. Put xray.exe in tunnel/ and build again.')
 
     # Who each address is rented from. Already paid for - one HTTP request per
     # hundred addresses, with a deliberate wait between them - and without it

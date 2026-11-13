@@ -457,6 +457,7 @@ import uishot                                                # noqa: E402
 import vdesk                                                 # noqa: E402
 import surfshark                                             # noqa: E402
 import windscribe                                            # noqa: E402
+from configs import api as configs_api                       # noqa: E402
 from engine import Engine                                    # noqa: E402
 
 
@@ -541,6 +542,21 @@ class Api:
         # and without this the close would be answered with "put it in the
         # tray" and refused - an app that could not be quit at all.
         self._leaving = False
+        # The Configs section (configs/): its own engine, the same machine.
+        # Only one of the two is ever up; see configs(), connect, disconnect.
+        self._configs = configs_api.Section(self)
+
+    def configs(self, action, payload=None):
+        """Everything the Configs section asks, in one door (configs/api.py)."""
+        return self._configs.call(action, payload)
+
+    def _live(self):
+        """Whichever side is carrying: the Configs section's runner while it
+        is up, otherwise the provider engine. Both answer traffic() and
+        hosts() in the same shapes."""
+        if self._configs.runner.active():
+            return self._configs.runner
+        return self._engine
 
     # -- talking to the page ----------------------------------------------
 
@@ -801,8 +817,12 @@ class Api:
         # went) and the page has merely been loaded again: that is a choice
         # the person makes with Disconnect, not one a reload makes for them.
         # A fresh launch never has _holding set, so a crash is still undone.
+        configs_up = self._configs.runner.active()
+        if not configs_up:
+            # A previous run's sing-box or Xray, left by a crash.
+            self._configs.runner.tidy()
         if (self._sysproxy.stashed() and not self._engine.running()
-                and not self._holding
+                and not self._holding and not configs_up
                 and not px_live_elsewhere(self._engine.port)):
             recovered = self._sysproxy.restore()
         # The adapter's version of the same wreckage: its worker gone and the
@@ -830,7 +850,8 @@ class Api:
             # when the last one closed. Watched from now on like one this
             # window made.
             self._engine.expected_up = True
-        status = dict(self._engine.status())
+        status = dict(self._configs.runner.status() if configs_up
+                      else self._engine.status())
         if status.get('state') == 'on' and self._since:
             # So a window opened onto a connection already up counts from
             # when it came up, not from when the window did.
@@ -853,7 +874,7 @@ class Api:
         Only meaningful while disconnected: routed, this comes back with the
         exit's address and would claim it as yours.
         """
-        if self._engine.running():
+        if self._engine.running() or self._configs.runner.active():
             return
         try:
             info = self._engine.current_ip()
@@ -892,7 +913,7 @@ class Api:
         with an empty meter until the next tick.
         """
         try:
-            return self._engine.traffic() or {'live': False}
+            return self._live().traffic() or {'live': False}
         except Exception:
             return {'live': False}
 
@@ -906,7 +927,7 @@ class Api:
         of JSON a second spent on nothing.
         """
         try:
-            return self._engine.hosts() or {'live': False, 'rows': []}
+            return self._live().hosts() or {'live': False, 'rows': []}
         except Exception:
             return {'live': False, 'rows': []}
 
@@ -926,7 +947,7 @@ class Api:
         quiet = True
         while not self._stop.wait(1.0):
             try:
-                reading = self._engine.traffic()
+                reading = self._live().traffic()
             except Exception:
                 reading = None
             if reading:
@@ -953,6 +974,10 @@ class Api:
         a connect in flight, a port move or a disconnect is not a drop.
         """
         while not self._stop.wait(2.0):
+            if self._configs.runner.expected_up:
+                if not self._busy:
+                    self._configs.watch_drop()
+                continue
             if self._busy or not self._engine.expected_up:
                 continue
             try:
@@ -3306,11 +3331,25 @@ class Api:
             return {'ok': False, 'error': str(e)[:200]}
 
     def status(self):
+        if self._configs.runner.active():
+            return self._configs.runner.status()
         return self._engine.status()
 
     def connect(self, country):
         if self._busy:
             return {'ok': False, 'error': 'busy'}
+        # The Configs section's kill switch holding the line: Connect means
+        # bring that connection back, as it does for the provider side.
+        again = self._configs.take_reconnect()
+        if again:
+            return self._configs.call('connect', {'id': again[0],
+                                                  'auto': again[1]})
+        # One connection at a time: a config's goes before a provider's.
+        if self._configs.runner.active():
+            try:
+                self._configs.runner.disconnect(quiet=True)
+            except Exception:
+                pass
         self._busy = True
         self._retray('busy')
 
@@ -3753,7 +3792,10 @@ class Api:
         self._since = None
         try:
             # Never held: Disconnect is the one way out of the kill switch,
-            # and it puts the machine back whatever state it was in.
+            # and it puts the machine back whatever state it was in -
+            # whichever section the connection came from.
+            self._configs.runner.disconnect(quiet=True)
+            self._configs._reconnect = None
             self._engine.disconnect()
         except Exception as e:
             return {'ok': False, 'error': str(e)}
@@ -3888,6 +3930,12 @@ def install_safety(api):
         #
         # Off by default, then. Somebody who wants the connection to outlive
         # the window can say so, and the setting is where they would look.
+        # The Configs section's sing-box and Xray are children of this
+        # process, not detached workers: they go with it, always.
+        try:
+            api._configs.runner.disconnect(quiet=True)
+        except Exception:
+            pass
         if not api._settings.get('keepOnClose'):
             try:
                 api._engine.disconnect(quiet=True)

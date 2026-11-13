@@ -1,0 +1,385 @@
+"""The Configs section, as the window talks to it.
+
+main.Api holds one Section and exposes a single method, configs(action,
+payload), that lands here: main.py is already long, and this keeps its share
+of the section to a handful of lines. Everything the page can ask is a
+do_<action> method below; anything slow (a test, a subscription, a connect)
+runs on a thread and answers through events:
+
+    window.onConfigs({kind: 'list' | 'test' | 'tested' | 'sub' | 'note', ...})
+
+plus the events the home screen already listens for - Progress, Connected,
+Failed, Blocked, Dropped - so the home shows a config connection the way it
+shows any other.
+"""
+
+import ctypes
+import os
+import threading
+import time
+import traceback
+
+import paths
+
+from . import links, probe, runner, store, subs
+
+
+def clipboard_text(limit=links.MAX_TEXT):
+    """The clipboard's text, or '' - Windows only, read-only, capped."""
+    if os.name != 'nt':
+        return ''
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalSize.restype = ctypes.c_size_t
+    kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
+    CF_UNICODETEXT = 13
+    if not user32.OpenClipboard(None):
+        return ''
+    try:
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return ''
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            return ''
+        try:
+            chars = min(kernel32.GlobalSize(handle) // 2, limit + 1)
+            text = ctypes.wstring_at(ptr, chars)
+        finally:
+            kernel32.GlobalUnlock(handle)
+        return text.split('\x00', 1)[0]
+    finally:
+        user32.CloseClipboard()
+
+
+class Section:
+    def __init__(self, owner):
+        # main.Api: _emit, _retray, _engine, _sysproxy, _busy, _since,
+        # _holding. Underscored there, so pywebview never walks into this.
+        self.owner = owner
+        self.runner = runner.Runner(owner._engine, owner._sysproxy)
+        self._cancel = None
+        self._fetching = set()
+        self._reconnect = None
+
+    # -- the one door ------------------------------------------------------
+
+    def call(self, action, payload=None):
+        fn = getattr(self, 'do_' + str(action or ''), None)
+        if fn is None:
+            return {'ok': False, 'error': 'unknown request'}
+        try:
+            out = fn(payload if isinstance(payload, dict) else {})
+            return dict({'ok': True}, **(out or {}))
+        except (links.Invalid, subs.Refused, ValueError, RuntimeError) as e:
+            return {'ok': False, 'error': str(e)}
+        except Exception as e:
+            self._log(f'{action}: ' + traceback.format_exc())
+            return {'ok': False, 'error': f'that did not work ({type(e).__name__})'}
+
+    def _emit(self, kind, **data):
+        self.owner._emit('Configs', dict(data, kind=kind))
+
+    def _log(self, text):
+        try:
+            os.makedirs(paths.STATE_DIR, exist_ok=True)
+            with open(os.path.join(paths.STATE_DIR, 'configs-errors.log'), 'a',
+                      encoding='utf-8') as f:
+                f.write(time.strftime('%Y-%m-%d %H:%M:%S ') + text + '\n')
+        except OSError:
+            pass
+
+    def _listing(self):
+        out = store.listing()
+        out['engines'] = {'singbox': bool(paths.singbox_exe()),
+                          'xray': bool(paths.xray_exe())}
+        r = self.runner
+        out['live'] = {'on': r.alive(), 'current': r.current,
+                       'auto': r.auto, 'using': r.now_using() if r.alive() else None,
+                       'blocked': r.blocked() if r.port else False}
+        out['testing'] = self._cancel is not None
+        return out
+
+    # -- the list ------------------------------------------------------------
+
+    def do_list(self, p):
+        return {'list': self._listing()}
+
+    def do_import(self, p):
+        configs, problems = links.parse_text(p.get('text') or '')
+        added, dup, over = store.add(configs)
+        kinds = {}
+        for c in configs:
+            for w in links.warnings(c):
+                kinds[w] = kinds.get(w, 0) + 1
+        return {'added': added, 'dup': dup, 'over': over,
+                'problems': problems[:30], 'warned': kinds,
+                'ids': [c['id'] for c in configs], 'list': self._listing()}
+
+    def do_remove(self, p):
+        ids = [str(i) for i in (p.get('ids') or [])][:store.MAX_TOTAL]
+        if self.runner.alive() and self.runner.current in ids:
+            raise ValueError('that config is the one connected - disconnect first')
+        return {'removed': store.remove(ids), 'list': self._listing()}
+
+    def do_rename(self, p):
+        store.update(str(p.get('id')), name=str(p.get('name') or ''))
+        return {'list': self._listing()}
+
+    def do_trust(self, p):
+        """The person's own switch to skip the certificate check for one
+        server. The page asks first, in words, every time it is turned on."""
+        store.update(str(p.get('id')), allow_insecure=bool(p.get('on')))
+        return {'list': self._listing()}
+
+    def do_copy(self, p):
+        return {'link': store.link_of(str(p.get('id')))}
+
+    def do_paste(self, p):
+        """What is on the clipboard, read and imported in one step - the
+        page's Paste button. Read here rather than by the page because the
+        window's own clipboard API asks for a permission it cannot show."""
+        text = clipboard_text()
+        if not text.strip():
+            raise ValueError('the clipboard has no text in it')
+        return self.do_import({'text': text})
+
+    def do_option(self, p):
+        key = str(p.get('key'))
+        if key not in ('fragment',):
+            raise ValueError('not an option')
+        store.set_option(key, bool(p.get('on')))
+        return {'list': self._listing(),
+                'reconnect': self.runner.alive()}
+
+    # -- subscriptions -----------------------------------------------------
+
+    def _through(self):
+        """Where to fetch through: the connection that is up, if any."""
+        addr = self.runner.proxy_address()
+        if addr:
+            return addr
+        eng = self.owner._engine
+        try:
+            if eng.running():
+                return f'127.0.0.1:{eng.port}'
+        except Exception:
+            pass
+        return None
+
+    def do_addSub(self, p):
+        url = subs.check_url(p.get('url'))
+        gid = store.add_group(url, str(p.get('name') or ''))
+        self._fetch(gid)
+        return {'group': gid, 'list': self._listing()}
+
+    def do_updateSub(self, p):
+        gid = str(p.get('group'))
+        if not store.group_url(gid):
+            raise ValueError('that subscription is not there any more')
+        self._fetch(gid)
+        return {}
+
+    def do_removeSub(self, p):
+        gid = str(p.get('group'))
+        cur = self.runner.current
+        if self.runner.alive() and any(c['id'] == cur and c.get('group') == gid
+                                       for c in store.load()['configs']):
+            raise ValueError('a config of that subscription is the one '
+                             'connected - disconnect first')
+        return {'removed': store.remove_group(gid), 'list': self._listing()}
+
+    def _fetch(self, gid):
+        if gid in self._fetching:
+            return
+        self._fetching.add(gid)
+        via = self._through()
+
+        def work():
+            try:
+                configs, problems, info, name = subs.fetch(store.group_url(gid), via)
+                n = store.replace_group(gid, configs)
+                fields = {'info': info, 'updated': time.time(), 'error': None}
+                state = store.load()
+                g = next((g for g in state['groups'] if g['id'] == gid), {})
+                if not g.get('name') and name:
+                    fields['name'] = name
+                store.update_group(gid, **fields)
+                self._emit('sub', group=gid, ok=True, count=n,
+                           problems=problems[:30], through=bool(via),
+                           list=self._listing())
+            except Exception as e:
+                said = str(e) if isinstance(e, (subs.Refused, links.Invalid)) \
+                    else f'could not be updated ({type(e).__name__})'
+                if not isinstance(e, (subs.Refused, links.Invalid)):
+                    self._log('sub: ' + traceback.format_exc())
+                store.update_group(gid, error=said[:200])
+                self._emit('sub', group=gid, ok=False, error=said,
+                           list=self._listing())
+            finally:
+                self._fetching.discard(gid)
+        threading.Thread(target=work, daemon=True).start()
+
+    # -- tests --------------------------------------------------------------
+
+    def do_test(self, p):
+        if self._cancel is not None:
+            raise ValueError('a test is already running')
+        state = store.load()
+        ids = p.get('ids')
+        if ids:
+            want = set(str(i) for i in ids)
+            configs = [c for c in state['configs'] if c['id'] in want]
+        else:
+            gid = p.get('group')
+            configs = [c for c in state['configs']
+                       if gid is None or c.get('group') == gid]
+        if not configs:
+            raise ValueError('nothing to test')
+        cancel = self._cancel = threading.Event()
+        fragment = bool(state.get('fragment'))
+
+        def work():
+            try:
+                results = probe.test(
+                    configs, fragment=fragment, cancel=cancel,
+                    progress=lambda done, total, cid, r: self._emit(
+                        'test', done=done, total=total, id=cid, result=r))
+                store.set_results({k: v for k, v in results.items()
+                                   if v.get('error') != 'cancelled'})
+                self._cancel = None
+                self._emit('tested', count=len(results), list=self._listing())
+            except Exception as e:
+                self._log('test: ' + traceback.format_exc())
+                self._cancel = None
+                self._emit('tested', count=0, error=str(e)[:200],
+                           list=self._listing())
+        threading.Thread(target=work, daemon=True).start()
+        return {'total': len(configs)}
+
+    def do_cancelTest(self, p):
+        if self._cancel is not None:
+            self._cancel.set()
+        return {}
+
+    # -- the connection --------------------------------------------------
+
+    def do_connect(self, p):
+        cid = str(p.get('id') or store.load().get('selected') or '')
+        auto = bool(p.get('auto'))
+        if not cid:
+            raise ValueError('pick a config first')
+        owner = self.owner
+        if owner._busy:
+            raise ValueError('busy')
+        owner._busy = True
+        owner._retray('busy')
+        self._reconnect = None
+
+        def work():
+            try:
+                # One connection at a time: the provider side goes first.
+                try:
+                    if owner._engine.running() or owner._engine.engaged():
+                        owner._engine.disconnect(quiet=True)
+                except Exception:
+                    pass
+                status = self.runner.connect(
+                    cid, lambda ph: owner._emit('Progress', ph), auto=auto)
+                owner._since = time.time()
+                owner._holding = False
+                owner._retray('on')
+                owner._emit('Connected', dict(status, since=owner._since))
+                self._emit('list', list=self._listing())
+                self._confirm()
+            except Exception as e:
+                self._log(f'connect {cid}: ' + traceback.format_exc())
+                kind = str(e).split(':')[0] if str(e) else type(e).__name__
+                blocked = False
+                try:
+                    blocked = self.runner.blocked()
+                except Exception:
+                    pass
+                owner._holding = blocked
+                if blocked:
+                    self._reconnect = (cid, auto)
+                owner._retray('off')
+                owner._emit('Failed', {'kind': kind, 'detail': str(e)[:600],
+                                       'port': self.runner.port or 0,
+                                       'blocked': blocked, 'mode': 'configs'})
+                self._emit('list', list=self._listing())
+            finally:
+                owner._busy = False
+        threading.Thread(target=work, daemon=True).start()
+        return {}
+
+    def do_switch(self, p):
+        cid = str(p.get('id') or '')
+        if self.runner.alive() and not self.runner.auto and self.runner.switch(cid):
+            self.owner._emit('Connected', dict(self.runner.status(),
+                                               since=self.owner._since))
+            self._emit('list', list=self._listing())
+            self._confirm()
+            return {'live': True}
+        return self.do_connect({'id': cid})
+
+    def do_disconnect(self, p):
+        return self.owner.disconnect()
+
+    def _confirm(self):
+        def work():
+            info = self.runner.info
+            if not info:
+                return
+            try:
+                info['seen_as'] = self.runner.verify()
+            except Exception as e:
+                info['unconfirmed'] = str(e)[:120]
+            if self.runner.info is info:
+                self.owner._emit('Connected', dict(self.runner.status(),
+                                                   since=self.owner._since))
+                self.owner._retray()
+        threading.Thread(target=work, daemon=True).start()
+
+    # -- for main.py -----------------------------------------------------
+
+    def take_reconnect(self):
+        """The config to bring back when the home's Connect is pressed while
+        this section's kill switch is holding, or None."""
+        if self._reconnect and self.runner.blocked():
+            return self._reconnect
+        return None
+
+    def watch_drop(self):
+        """The programs went away by themselves (a crash, an antivirus).
+        The kill switch decides, exactly as for the provider worker."""
+        r = self.runner
+        if r.alive() or not r.expected_up:
+            return
+        if not r.lock.acquire(timeout=0.5):
+            return
+        try:
+            if not r.expected_up or r.alive():
+                return
+            r.expected_up = False
+            held = r.blocked()
+            cur = (r.current, r.auto)
+        finally:
+            r.lock.release()
+        owner = self.owner
+        owner._since = None
+        owner._retray('off')
+        if held:
+            owner._holding = True
+            self._reconnect = (None if cur[0] == 'auto' else cur[0], cur[1])
+            owner._emit('Blocked', {'reason': 'adapter' if r.mode == 'tun'
+                                    else 'dropped', 'status': r.status()})
+        else:
+            try:
+                r.disconnect(quiet=True)
+            except Exception:
+                pass
+            owner._emit('Dropped', {'status': r.status()})

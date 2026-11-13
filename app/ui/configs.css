@@ -1,0 +1,370 @@
+/* ============================================================================
+   Configs - the sheet for servers bought or given from anywhere.
+
+   Mirage's rules: black, red and white. White is the connection's and the
+   fastest time's; pale red is "careful" (the certificate check asked off,
+   slow); bright red is "this is wrong" (no encryption, a failed test). The
+   current row carries the accent bar the picker's chosen row carries.
+
+   Dense on purpose. A seller's list is a hundred lines, and the thing being
+   compared is the column of times on the right, so the rows are short, the
+   times are in the mono face and right-aligned, and everything else steps
+   back. Motion is opacity and transform only (configs.js, GSAP).
+   ========================================================================= */
+
+/* The three ways in, left to right in the order they are reached for:
+   pasting is most of it, so it leads, and only it is lit. */
+.cfgbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 10px;
+}
+
+.cfgbar .btn {
+  height: 32px;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.cfgbar .ico { width: 15px; height: 15px; }
+
+.cfgbar__lead {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: var(--accent-glow);
+}
+
+.cfgbar__lead:hover { filter: brightness(1.08); background: var(--accent); }
+
+#cfgTest[data-on='1'] {
+  color: var(--work);
+  border-color: color-mix(in srgb, var(--work), transparent 60%);
+}
+
+.cfgform {
+  margin: 0 16px 10px;
+  padding: 12px;
+  border: 1px solid var(--stroke);
+  border-radius: var(--r-ctl);
+  background: var(--surface);
+}
+
+.cfgform .field { margin-top: 0; }
+
+.cfgform .note { margin: 8px 0 0; }
+
+.cfgform__links {
+  min-height: 84px;
+  resize: vertical;
+  font-size: 12px;
+  line-height: 17px;
+  white-space: pre;
+}
+
+.cfgform__acts {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.cfgsaid {
+  min-height: 0;
+  margin: 0 16px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-2);
+}
+
+.cfgsaid:empty { display: none; }
+
+.cfgsaid[data-bad='1'] { color: var(--fail); }
+
+.cfgsaid:not(:empty) { margin-bottom: 8px; }
+
+/* A question that needs an answer before anything happens. */
+.cfgask {
+  margin: 0 16px 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--fail), transparent 55%);
+  border-radius: var(--r-ctl);
+  background: color-mix(in srgb, var(--fail), transparent 92%);
+}
+
+.cfgask__text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text);
+}
+
+.cfgask__acts {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.cfgask__yes {
+  color: #fff;
+  background: color-mix(in srgb, var(--fail), #000 35%);
+}
+
+/* ------------------------------------------------------------------ list */
+
+.cfglist {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+}
+
+.cfggroup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 16px 8px 6px;
+}
+
+.cfggroup:first-child { padding-top: 4px; }
+
+.cfggroup__title {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.cfggroup__meta {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.cfggroup__err {
+  flex-basis: 100%;
+  order: 9;
+  font-size: 11.5px;
+  color: var(--fail);
+}
+
+.cfggroup__acts {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.cfggroup__acts .icon { width: 26px; height: 26px; }
+
+.cfggroup__acts .ico { width: 14px; height: 14px; }
+
+.cfg {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 80px 28px;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 6px 4px 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  outline: 0;
+}
+
+.cfg:hover { background: var(--control-hover); }
+
+.cfg:focus-visible { box-shadow: inset 0 0 0 1.5px var(--focus); }
+
+/* The connected one: the accent bar on the leading edge. */
+.cfg[data-on='1']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: var(--accent-glow);
+}
+
+.cfg[data-on='1'] .cfg__name { color: #fff; }
+
+.cfg__flag {
+  width: 22px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--surface-2) center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+
+.cfg__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.cfg__name {
+  overflow: hidden;
+  font-size: 13.5px;
+  line-height: 18px;
+  font-weight: 550;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  unicode-bidi: plaintext;
+}
+
+.cfg__meta {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  line-height: 14px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.cfg__kind { color: var(--text-2); }
+
+.cfg__host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.cfg__via { color: var(--text-3); }
+
+.cfg__marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.cfg__warn {
+  padding: 1px 7px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--r-pill);
+  font-size: 10.5px;
+  line-height: 15px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.cfg__warn--plain {
+  border-color: color-mix(in srgb, var(--fail), transparent 40%);
+  color: var(--fail);
+}
+
+.cfg__warn--insecure {
+  border-color: color-mix(in srgb, var(--work), transparent 50%);
+  color: var(--work);
+}
+
+.cfg__ms {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+
+.cfg__ms[data-q='fast'] { color: var(--text); }
+.cfg__ms[data-q='fair'] { color: var(--text-2); }
+.cfg__ms[data-q='slow'] { color: var(--work); }
+.cfg__ms[data-q='fail'] { color: var(--fail); }
+
+.cfg__more { width: 28px; height: 28px; }
+
+.cfg__more .ico { width: 14px; height: 14px; transition: transform var(--t-small) var(--ease); }
+
+.cfg__more[aria-expanded='true'] .ico { transform: rotate(180deg); }
+
+/* A row's own actions, opened under it. */
+.cfgacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 2px;
+  margin: 0 4px 6px 42px;
+  padding: 4px 6px;
+  border-left: 1px solid var(--stroke-strong);
+}
+
+.cfgacts .btn {
+  flex: none;
+  width: auto;
+  height: 28px;
+  min-height: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.cfgacts .btn:hover { background: var(--control-hover); color: var(--text); }
+
+.cfgacts .cfgacts__del { color: var(--fail); }
+
+.cfgacts__name {
+  flex: 1 1 200px;
+  height: 30px;
+  font-size: 13px;
+}
+
+.cfgempty {
+  padding: 28px 18px;
+}
+
+.cfgempty__lead {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------- footer */
+
+.cfgfoot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--stroke);
+}
+
+.cfgfoot__opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.cfgfoot__opt b {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cfgfoot__opt i {
+  display: block;
+  font-size: 11px;
+  font-style: normal;
+  color: var(--text-3);
+}
+
+.cfgfoot .toggle[aria-checked='true'] { background: var(--accent-mid); }
+
+.cfgfoot .toggle[aria-checked='true'] span { background: #fff; }
+

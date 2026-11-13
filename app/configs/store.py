@@ -296,6 +296,10 @@ def listing(state=None):
             'proto': c.get('proto'), 'host': c.get('host'),
             'port': c.get('port'), 'warnings': links.warnings(c),
             'engine': links.engine_for(c),
+            # Whether there is a certificate to check at all - the switch
+            # to skip the check is offered only where there is.
+            'tls': c.get('security') == 'tls'
+                   or c.get('proto') in ('hysteria2', 'tuic'),
             'allowInsecure': bool(c.get('allow_insecure')),
             'last': c.get('last')})
     return {'groups': [_public_group(g) for g in state['groups']],

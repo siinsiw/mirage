@@ -695,8 +695,11 @@ def masked(cfg_or_link):
     host, never an id or a password."""
     if isinstance(cfg_or_link, dict):
         return f'{cfg_or_link.get("proto")}://{cfg_or_link.get("host")}'
-    scheme = str(cfg_or_link).split('://', 1)[0][:12].lower()
-    return f'{scheme}://…' if scheme else '…'
+    text = str(cfg_or_link)
+    if '://' not in text:
+        return '…'          # not a link at all: nothing of it is repeated
+    scheme = text.split('://', 1)[0][:12].lower()
+    return f'{scheme}://…' if re.match(r'^[a-z0-9+.-]+$', scheme) else '…'
 
 
 # -- whole pastes ------------------------------------------------------------------
