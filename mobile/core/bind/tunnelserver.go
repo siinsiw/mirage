@@ -42,8 +42,9 @@ type ServerConfig struct {
 	Edges string
 
 	// Pin is the SHA-256 of the certificate a server reached by IP serves,
-	// in hex. Empty until the first Test or connect has seen it; then kept,
-	// and a server showing anything else is refused.
+	// in hex: from the server's key, or what ServerFingerprint showed and the
+	// person confirmed. A server showing anything else is refused - and a
+	// server by address with no pin is not dialled at all (NoPinError).
 	Pin string
 
 	// Transport is how the server is reached: "" or "ws" for the WebSocket
@@ -110,6 +111,29 @@ func TestServer(cfg *ServerConfig, timeoutMs int) (string, error) {
 	return withPin(out, srv.SeenPin()), err
 }
 
+// ServerFingerprint is the certificate a server by address shows right now,
+// as the SHA-256 its pin is written in (hex, lower case) - the same number
+// its installer prints beside "certificate sha256". What the settings screen
+// shows the first time such a server is tested without a key, for the person
+// to compare and confirm before it becomes cfg.Pin.
+//
+// Nothing but a TLS ClientHello is sent: no password, no request. Nothing is
+// trusted or kept because of the answer. "" for a server by name (a CA
+// vouches for it).
+func ServerFingerprint(cfg *ServerConfig, timeoutMs int) (string, error) {
+	if cfg == nil || cfg.Domain == "" {
+		return "", errors.New("no server to ask")
+	}
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	srv := core.NewTunnelServer(cfg.Domain, "", cfg.edges(), core.ModeSingle)
+	srv.Port = cfg.Port
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return srv.PeekPin(ctx, timeout)
+}
+
 // server is the client this config describes, pin and all.
 //
 // Over Shadowsocks the mode is a port rather than a path: multi dials the
@@ -143,8 +167,9 @@ func ParseKey(text string) (string, error) {
 	return string(out), err
 }
 
-// withPin adds the certificate the server showed to a seen-as answer, so the
-// window can keep it after the first Test - the pin is learnt, not typed.
+// withPin adds the certificate the server showed to a seen-as answer. It is
+// the pin the connection was already held to - a server by address is not
+// dialled without one - so it tells the window nothing new to trust.
 func withPin(seenAs, pin string) string {
 	if pin == "" {
 		return seenAs
@@ -215,4 +240,21 @@ func SeenAsLiveJSON(timeoutMs int) string {
 	}
 	out, _ := core.SeenAsThrough(w, time.Duration(timeoutMs)*time.Millisecond)
 	return out
+}
+
+// LatestReleaseTag is the tag of the newest published release (GitHub's
+// releases/latest for this repository), asked through the tunnel that is up.
+// What a "check for a newer version" button calls while connected; the
+// window compares it with its own version. An error when nothing is carrying
+// - the window then decides whether to ask some other way - or when GitHub
+// did not answer. Never called by the core on its own.
+func LatestReleaseTag(timeoutMs int) (string, error) {
+	w := core.LiveWay()
+	if w == nil {
+		return "", errors.New("not connected")
+	}
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return core.LatestRelease(ctx, w, timeout)
 }

@@ -193,8 +193,12 @@ function setStatus(word, kind, where, host) {
   }
   s.textContent = word;
   s.dataset.state = kind;
-  $('statusWhere').innerHTML = where || '&nbsp;';
-  $('statusHost').innerHTML = host || '&nbsp;';
+  // As text: these carry an exit's name and place, and this page holds
+  // the whole Python bridge - markup taken from a hostname would be script
+  // with every pywebview.api call in reach. A no-break space keeps the
+  // line's height when there is nothing to say.
+  $('statusWhere').textContent = where || ' ';
+  $('statusHost').textContent = host || ' ';
 }
 
 function setHint(text, bad) {
@@ -946,8 +950,12 @@ function clearBlocked() {
   $('blocked').hidden = true;
 }
 
-window.onBlocked = () => {
-  showBlocked('The connection dropped.');
+window.onBlocked = (info) => {
+  // 'adapter': sing-box itself went, and Windows Firewall holds traffic
+  // until Reconnect brings up a new adapter or Disconnect lets it go.
+  showBlocked(info && info.reason === 'adapter'
+    ? 'The network adapter stopped. Windows Firewall is holding traffic.'
+    : 'The connection dropped.');
 };
 
 /* The same drop with the kill switch off: Windows has already been put
@@ -2717,6 +2725,34 @@ function shut(dlg) {
   dlg.addEventListener('animationend', finish, { once: true });
   setTimeout(finish, SHUT_MS + 80);
 }
+
+/* Newer version: asked only when pressed (updates.py). */
+let updateUrl = '';
+$('updateCheck').addEventListener('click', async () => {
+  const btn = $('updateCheck');
+  busy(btn, true);
+  said($('updateSaid'), 'Asking GitHub…', 'work');
+  $('updateOpen').hidden = true;
+  let r;
+  try {
+    r = await window.pywebview.api.checkUpdate();
+  } catch (e) {
+    r = { ok: false, error: `Could not check: ${(e && e.message) || e}` };
+  } finally {
+    busy(btn, false);
+  }
+  if (!r || !r.ok) { said($('updateSaid'), (r && r.error) || 'Could not check.', 'bad'); return; }
+  if (r.newer) {
+    updateUrl = r.url;
+    said($('updateSaid'), `Relay ${r.latest} is out. This copy is ${r.current}.`, 'good');
+    $('updateOpen').hidden = false;
+  } else {
+    said($('updateSaid'), `This is the newest Windows release (${r.latest}).`, 'good');
+  }
+});
+$('updateOpen').addEventListener('click', () => {
+  window.pywebview.api.openReleases(updateUrl);
+});
 
 function said(el, text, kind) {
   el.textContent = text || '';
@@ -6677,6 +6713,16 @@ $('acctSave').addEventListener('click', async () => {
   }
   if (!user) { said($('acctNewSaid'), 'Enter the username.', 'bad'); return; }
   if (!pass) { said($('acctNewSaid'), 'Enter the password.', 'bad'); return; }
+  // Said before anything is sent, once per run: what this sign-in is, and
+  // what it can cost. The second press is the person deciding to go on.
+  if (acct.provider === 'windscribe' && !acct.windscribeNoteSeen) {
+    acct.windscribeNoteSeen = true;
+    said($('acctNewSaid'), 'Before you sign in: Relay signs in the way '
+      + 'Windscribe’s browser extension does. Windscribe may not allow that, '
+      + 'and your account could be blocked. Press the button again to go on.',
+    'bad');
+    return;
+  }
 
   busy($('acctSave'), true);
   acctBusy(true);
@@ -8401,7 +8447,12 @@ $('welcomeServer').addEventListener('click', () => {
 /* The setup: an account's servers fetched and then pinned, with each step
    shown as it happens. What the Android app does on its own after a sign-in
    - and what this app used to leave to two buttons in Settings. */
-const setup = { provider: null, finish: null };
+const setup = { provider: null, finish: null, lastPin: 0, watch: null };
+
+// How long a pinning run may go without a single word before the sheet stops
+// waiting. One hostname is at most a 20 s lookup plus a reachability check
+// per address, so three silent minutes is a run that is not coming back.
+const SETUP_STALL_MS = 180000;
 
 function setupAt(step, at) {
   const row = $('setupDlg').querySelector(`.steps__row[data-step="${step}"]`);
@@ -8415,6 +8466,33 @@ function setupFail(why) {
   $('setupAgain').hidden = false;
   $('setupDlg').querySelector('.logo-mark').classList.remove('logo-mark--spin');
   setup.finish = null;
+  // Written down on the Python side: the sheet shows this sentence once,
+  // and a setup that fails and then works on "Try again" otherwise leaves
+  // nothing to say which step it was.
+  try {
+    const logged = window.pywebview.api.logSetup(setup.provider, why || '');
+    if (logged && logged.catch) logged.catch(() => {});
+  } catch (e) { /* the log is not worth a second failure */ }
+}
+
+/* Resolves with the run's 'finished' event, or with an error when the run
+   has said nothing for SETUP_STALL_MS - so the sheet can never spin on a
+   run that died without saying so. */
+function pinFinished() {
+  setup.lastPin = Date.now();
+  const finished = new Promise((resolve) => { setup.finish = resolve; });
+  const stalled = new Promise((resolve) => {
+    setup.watch = setInterval(() => {
+      if (Date.now() - setup.lastPin < SETUP_STALL_MS) return;
+      clearInterval(setup.watch);
+      setup.watch = null;
+      resolve({ error: 'The server check stopped answering. Press Try again.',
+                stalled: true });
+    }, 5000);
+  });
+  return Promise.race([finished, stalled]).finally(() => {
+    if (setup.watch) { clearInterval(setup.watch); setup.watch = null; }
+  });
 }
 
 async function prepareServers(provider) {
@@ -8434,21 +8512,41 @@ async function prepareServers(provider) {
   shut($('welcomeDlg'));
   if (!dlg.open) dlg.showModal();
 
-  const got = await (provider === 'windscribe'
-    ? window.pywebview.api.windscribeServers()
-    : window.pywebview.api.surfsharkServers());
-  if (!got || !got.ok) { setupFail(got && got.error); return false; }
-  setupAt('servers', 'done');
-  setupAt('pinning', 'now');
+  // Every step is a call into Python, and an exception there rejects the
+  // promise rather than returning {ok: false}. Uncaught, that left the sheet
+  // spinning with no sentence and no Try again.
+  let p;
+  try {
+    const got = await (provider === 'windscribe'
+      ? window.pywebview.api.windscribeServers()
+      : window.pywebview.api.surfsharkServers());
+    if (!got || !got.ok) { setupFail(got && got.error); return false; }
+    setupAt('servers', 'done');
+    setupAt('pinning', 'now');
 
-  const aimed = await window.pywebview.api.pinForProvider(provider);
-  if (!aimed || !aimed.ok) { setupFail(aimed && aimed.error); return false; }
-  const finished = new Promise((resolve) => { setup.finish = resolve; });
-  const started = await window.pywebview.api.startPin();
-  if (!started || !started.ok) { setupFail(started && started.error); return false; }
-  const p = await finished;
-
-  await refreshPrefs();
+    const aimed = await window.pywebview.api.pinForProvider(provider);
+    if (!aimed || !aimed.ok) { setupFail(aimed && aimed.error); return false; }
+    if (aimed.blockers && aimed.blockers.length) {
+      setupFail(aimed.blockers[0].say);
+      return false;
+    }
+    const finished = pinFinished();
+    const started = await window.pywebview.api.startPin();
+    if (!started || !started.ok) {
+      setup.finish = null;
+      setupFail(started && started.error);
+      return false;
+    }
+    p = await finished;
+    if (p.stalled) {
+      try { await window.pywebview.api.cancelPin(); } catch (e) { /* gone */ }
+    }
+    await refreshPrefs();
+  } catch (e) {
+    setup.finish = null;
+    setupFail(`Setup stopped: ${(e && e.message) || e}`);
+    return false;
+  }
   if (p.error) { setupFail(p.error); return false; }
   if (!p.written) { setupFail('No server answered. Try again in a moment.'); return false; }
   setupAt('pinning', 'done');
@@ -8467,16 +8565,20 @@ async function prepareServers(provider) {
 /* Pin progress goes where it always went - the Servers screen - and, while
    a setup is waiting on it, to the setup sheet too. */
 window.onPin = (p) => {
-  drawPin(p);
-  if (!setup.finish || !p) return;
-  if (p.phase === 'result' && p.total) {
-    $('setupBar').style.width = `${Math.max(2, Math.round((p.done / p.total) * 100))}%`;
-    $('setupDetail').textContent = `${p.done} of ${p.total}`;
-  } else if (p.phase === 'finished') {
-    const finish = setup.finish;
-    setup.finish = null;
-    finish(p);
+  // The setup first: a fault while painting the Servers screen must not be
+  // what keeps the sheet from ever hearing that the run finished.
+  if (setup.finish && p) {
+    setup.lastPin = Date.now();
+    if (p.phase === 'result' && p.total) {
+      $('setupBar').style.width = `${Math.max(2, Math.round((p.done / p.total) * 100))}%`;
+      $('setupDetail').textContent = `${p.done} of ${p.total}`;
+    } else if (p.phase === 'finished') {
+      const finish = setup.finish;
+      setup.finish = null;
+      finish(p);
+    }
   }
+  drawPin(p);
 };
 
 $('setupRetry').addEventListener('click', () => prepareServers(setup.provider));

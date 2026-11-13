@@ -1,0 +1,110 @@
+# The scripts that run as root, and the one that runs elevated.
+#
+# linux/ starts openvpn and writes nft rules as root; tunnel/install-server.sh
+# is root on somebody's server; windows/*.ps1 is run by the desktop app, one
+# of them elevated. None of it is compiled, so nothing but this reads it
+# before a person runs it: a syntax error in a branch nobody took is found
+# here, or by the first user who takes it.
+name: scripts
+
+on:
+  push:
+    paths:
+      - 'linux/**'
+      - 'windows/**'
+      - 'tunnel/**'
+      - 'tests/scripts/**'
+      - '.github/workflows/scripts.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'linux/**'
+      - 'windows/**'
+      - 'tunnel/**'
+      - 'tests/scripts/**'
+      - '.github/workflows/scripts.yml'
+  workflow_dispatch:
+
+# Read the repository and nothing else.
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Every file, not stopping at the first: one run should name them all.
+      # linux/ovpn has no extension, so it is listed by name.
+      - name: bash -n
+        run: |
+          status=0
+          for f in linux/*.sh linux/ovpn tunnel/*.sh tests/scripts/*.sh; do
+            bash -n "$f" || { echo "::error file=$f::bash -n failed"; status=1; }
+          done
+          exit "$status"
+
+      # Errors only. The warnings are worth reading, but these scripts were
+      # written without shellcheck and a wall of style notes would bury the
+      # one finding that is a bug. --shell=bash because ovpn-shell.sh is
+      # sourced and carries no shebang.
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck --shell=bash --severity=error \
+            linux/*.sh linux/ovpn tunnel/*.sh tests/scripts/*.sh
+
+      # The config sanitiser, against a config written to get past it: the
+      # script hooks, plugin, script-security and the rest must not come out
+      # the other side. No root, no network.
+      - name: config sanitiser fixtures
+        run: bash tests/scripts/sanitiser-test.sh
+
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # In Windows PowerShell 5.1, not pwsh: powershell.exe is what the app
+      # starts these with, and it reads a file differently (no BOM means the
+      # system code page), so that is the parser whose opinion counts.
+      - name: parse
+        shell: powershell
+        run: |
+          $failed = $false
+          $files = @(Get-ChildItem -Path windows -Filter *.ps1 -File)
+          if ($files.Count -eq 0) { throw 'no windows/*.ps1 found' }
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName, [ref]$tokens, [ref]$errors)
+            foreach ($e in @($errors)) {
+              $failed = $true
+              Write-Host "::error file=windows/$($file.Name),line=$($e.Extent.StartLineNumber)::$($e.Message)"
+            }
+            Write-Host "$($file.Name): $(@($errors).Count) parse error(s)"
+          }
+          if ($failed) { exit 1 }
+
+      # Errors only, for the same reason as shellcheck above. The runner
+      # image ships PSScriptAnalyzer; the pinned install is for the day it
+      # does not.
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+          }
+          $found = @(Invoke-ScriptAnalyzer -Path windows -Recurse -Severity Error, ParseError)
+          foreach ($f in $found) {
+            Write-Host "::error file=windows/$($f.ScriptName),line=$($f.Line)::$($f.RuleName): $($f.Message)"
+          }
+          Write-Host "PSScriptAnalyzer: $($found.Count) error(s)"
+          if ($found.Count -gt 0) { exit 1 }

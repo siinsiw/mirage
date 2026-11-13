@@ -1636,6 +1636,11 @@ class RelayCore(private val app: Application) {
                     (e.message ?: e.toString()).take(140))
             }
         }
+        // A server typed in by address, with no key and so no pin: nothing is
+        // sent to it until its certificate has been shown and confirmed.
+        if (cfg.pin.isEmpty() && ServerPin.isAddress(domain)) {
+            firstContact(cfg)?.let { return@withContext it }
+        }
         try {
             ask(cfg)
         } catch (first: Exception) {
@@ -1659,14 +1664,45 @@ class RelayCore(private val app: Application) {
 
     private fun ask(cfg: relay.ServerConfig): Said {
         val seen = JSONObject(Relay.testServer(cfg, 20000L))
-        // A server by address: its certificate, kept the first time it is
-        // seen and required from then on.
-        val pin = seen.optString("pin")
-        if (pin.isNotEmpty() && cfg.pin.isEmpty()) {
-            prefs.edit().putString(Keys.TUNNEL_PIN, pin).apply()
-            _tunnel.value = readTunnel()
-        }
         return Said(true, "Carrying traffic - it comes out at ${seen.optString("ip")}.")
+    }
+
+    /**
+     * The first Test of a server by address that came without a key.
+     *
+     * Its certificate used to be kept the moment it was first seen, and the
+     * tunnel password sent after it - so whatever answered on that address
+     * the first time was the server from then on. Now the first Test only
+     * looks: a bare handshake that sends no password, and the SHA-256 it was
+     * shown comes back in the answer, to be compared with the "certificate
+     * sha256" line the installer printed. A second Test that is shown the
+     * same certificate is the confirmation, and keeps it as the pin; a
+     * different one starts over. The core dials no address without a pin,
+     * so there is no way round this by connecting instead.
+     *
+     * Null when the certificate is now confirmed and on [cfg], and the Test
+     * goes on; otherwise what to say, with nothing sent.
+     */
+    private fun firstContact(cfg: relay.ServerConfig): Said? {
+        val shown = try {
+            Relay.serverFingerprint(cfg, 15000L).trim().lowercase()
+        } catch (e: Exception) {
+            return Said.no("${cfg.domain} did not show a certificate: " +
+                (e.message ?: e.toString()).take(140))
+        }
+        if (shown.isEmpty()) return null
+        val waiting = "${cfg.domain}:${cfg.port} $shown"
+        if (prefs.getString(Keys.TUNNEL_PIN_SHOWN, "") == waiting) {
+            prefs.edit().putString(Keys.TUNNEL_PIN, shown).remove(Keys.TUNNEL_PIN_SHOWN).apply()
+            cfg.pin = shown
+            _tunnel.value = readTunnel()
+            return null
+        }
+        prefs.edit().putString(Keys.TUNNEL_PIN_SHOWN, waiting).apply()
+        return Said.no("Not trusted yet, and nothing was sent. ${cfg.domain} shows the certificate " +
+            "sha256 $shown - compare it with the \"certificate sha256\" line the installer printed. " +
+            "If it is the same, press Test again to trust it; pasting the server's relay:// key " +
+            "does the same without comparing.")
     }
 
     /**

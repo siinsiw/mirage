@@ -108,6 +108,28 @@ if paths.WORKER_FLAG in sys.argv:
     raise SystemExit(0)
 
 
+def _log_line(name, text, cap=64_000):
+    """One timestamped line appended to .state/<name>, kept short.
+
+    For the failures the window shows in one sentence and then forgets. The
+    same cap as connect-errors.log: past it, the older half goes, because
+    what is wanted is the last few, not a history. Never raises - a log that
+    cannot be written must not become the failure."""
+    try:
+        os.makedirs(paths.STATE_DIR, exist_ok=True)
+        path = os.path.join(paths.STATE_DIR, name)
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(time.strftime('%Y-%m-%d %H:%M:%S ')
+                    + ' '.join(str(text).split()) + '\n')
+        if os.path.getsize(path) > cap:
+            with open(path, encoding='utf-8', errors='replace') as f:
+                tail = f.read()[-cap // 2:]
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(tail[tail.find('\n') + 1:])
+    except OSError:
+        pass
+
+
 def _diagnostics_to_file(name):
     """A --noconsole build has no stdout at all, so a diagnostic that prints
     is a diagnostic nobody can read. Everything goes to a file as well, and
@@ -780,6 +802,17 @@ class Api:
                 recovered_tun = self._engine.tun.tidy()
             except Exception:
                 pass
+            # And the firewall's hold, when sing-box went too (tun.KILL_PS).
+            # Not on this thread: lifting it may be a UAC prompt, and the
+            # page is waiting on this answer to draw anything at all.
+            try:
+                if (not self._engine.running()
+                        and self._engine.tun.held_by_firewall()):
+                    threading.Thread(
+                        target=self._release_firewall_after_crash,
+                        daemon=True).start()
+            except Exception:
+                pass
         if self._engine.running():
             # A window opening onto a connection already up - left running
             # when the last one closed. Watched from now on like one this
@@ -912,6 +945,8 @@ class Api:
                 continue
             try:
                 if self._engine.running():
+                    if self._adapter_lost():
+                        self._lose_adapter()
                     continue
             except Exception:
                 continue
@@ -939,6 +974,55 @@ class Api:
                     pass
                 self._emit('Dropped', {'status': self._engine.status()})
 
+    def _adapter_lost(self):
+        """The worker is up, but the adapter carrying the machine to it ended
+        by itself - sing-box crashed, or an antivirus took it. The worker
+        alone carries nothing then: every program is either on the bare line
+        or, with the kill switch on, held by the firewall (tun.KILL_PS)."""
+        eng = self._engine
+        return bool(eng.set_system_proxy and eng.route_with == 'tun'
+                    and eng.tun.ended_by_itself())
+
+    def _lose_adapter(self):
+        """What a drop is, for the adapter: the same two answers as the
+        worker going, decided by whether the firewall is holding."""
+        if not self._engine.lock.acquire(timeout=0.5):
+            return
+        try:
+            if (not self._engine.expected_up or self._busy
+                    or not self._adapter_lost()):
+                return
+            self._engine.expected_up = False
+            held = self._engine.tun.held_by_firewall()
+            try:
+                # With the hold in place the worker goes and the hold stays:
+                # Reconnect lifts it once a new adapter is up, Disconnect
+                # lifts it at once.
+                self._engine.disconnect(quiet=True, hold=held)
+            except Exception:
+                pass
+        finally:
+            self._engine.lock.release()
+        self._since = None
+        self._retray('off')
+        if held:
+            self._holding = True
+            self._emit('Blocked', {'reason': 'adapter',
+                                   'status': self._engine.status()})
+        else:
+            self._emit('Dropped', {'status': self._engine.status()})
+
+    def _release_firewall_after_crash(self):
+        """Relay opened again onto a firewall hold it did not make in this
+        run: the last window went while holding, and opening again is what
+        the hold waits for. One UAC prompt; refused, it stays held and the
+        page keeps saying so."""
+        try:
+            if self._engine.tun.release_firewall():
+                self._emit('Dropped', {'status': self._engine.status()})
+        except Exception:
+            pass
+
     def setKillSwitch(self, on):
         """Whether a dropped connection blocks the internet until you
         reconnect or disconnect (on, the default), or lets traffic fall back
@@ -955,7 +1039,9 @@ class Api:
         except Exception:
             pass
         released = False
-        if not on and not self._engine.running() and self._engine.engaged():
+        if not on and not self._engine.running() and (
+                self._engine.engaged()
+                or self._engine.tun.held_by_firewall()):
             try:
                 self._engine.disconnect(quiet=True)
                 released = True
@@ -2161,6 +2247,8 @@ class Api:
         a click puts something else back to what it was."""
         if route in pin.ROUTES:
             self._settings['pinRoute'] = route
+            # Chosen by a person now, so the setup stops choosing for them.
+            self._settings.pop('pinRouteAuto', None)
         if port is not None:
             self._settings['pinPort'] = pin.clean_port(port)
         if maxIps is not None:
@@ -2184,17 +2272,55 @@ class Api:
             return {'ok': False,
                     'error': f'Nothing waiting in {folder}.'}
         self._settings['pinFolder'] = folder
-        # Nobody has named a port, so the default is a guess, and the setup
-        # sheet has no port field to correct it from. Happ listens on 10808
-        # and wants a password there; its HTTP port is 10809. Whichever port
-        # really carries a lookup is kept, where Settings shows it.
-        if (self._settings.get('pinRoute', 'proxy') == 'proxy'
-                and 'pinPort' not in self._settings):
-            found = pin.find_port()
-            if found:
-                self._settings['pinPort'] = found
+        routed = self._choose_pin_route()
         save_settings(self._settings)
-        return {'ok': True, **self.pinPlan()}
+        plan = self.pinPlan()
+        # Still ok: the card's Pin button opens the Servers screen with this,
+        # and that screen is where a route is chosen. The setup sheet, which
+        # has no such control, stops on the first blocker instead of starting
+        # a run that makes the same check a third time and fails on it.
+        if not routed:
+            plan['blockers'] = [{
+                'kind': 'no-route',
+                'say': 'Could not reach DNS-over-HTTPS directly, and no local '
+                       'proxy (v2rayN, Clash, Nekoray, sing-box, Hiddify) '
+                       'carried a lookup either. Start your proxy and press '
+                       'Try again, or choose the route in Settings > '
+                       'Servers.'}] + list(plan.get('blockers') or [])
+        return {'ok': True, **plan}
+
+    def _choose_pin_route(self):
+        """Settle how the setup's lookups go out. False when nothing works.
+
+        The setup sheet has no route or port control, so when nobody has
+        chosen - or the last choice was this method's own - it is found out
+        here, every time: DoH straight out, else whichever local proxy really
+        carries a lookup. The answer is kept where Settings shows it, marked
+        as found rather than chosen, so a later setup asks again instead of
+        holding on to a proxy that has since been closed.
+
+        A route somebody picked in Settings is theirs and is left alone; the
+        only guess made for it is the port, when they chose a proxy and never
+        named one. Happ listens on 10808 and wants a password there; its HTTP
+        port is 10809, and whichever port really carries a lookup is kept.
+        """
+        chosen = ('pinRoute' in self._settings
+                  and not self._settings.get('pinRouteAuto'))
+        if chosen:
+            if (self._settings.get('pinRoute') == 'proxy'
+                    and 'pinPort' not in self._settings):
+                found = pin.find_port()
+                if found:
+                    self._settings['pinPort'] = found
+            return True
+        route, port = pin.auto_route(self._settings.get('pinPort'))
+        if not route:
+            return False
+        self._settings['pinRoute'] = route
+        self._settings['pinRouteAuto'] = True
+        if port:
+            self._settings['pinPort'] = port
+        return True
 
     def choosePinFolder(self):
         """Where the files you downloaded are."""
@@ -2249,12 +2375,54 @@ class Api:
             # just written is invisible until the app is restarted. That is
             # what left Windscribe greyed out saying "none pinned" straight
             # after pinning it.
-            if isinstance(p, dict) and p.get('phase') == 'finished':
-                self._apply_sources()
-                self._sync_providers()
-            self._emit('Pin', p)
+            #
+            # And whatever that refresh does, 'finished' still goes out: the
+            # setup sheet waits for it and has nothing else to end on.
+            try:
+                if isinstance(p, dict) and p.get('phase') == 'finished':
+                    self._apply_sources()
+                    self._sync_providers()
+            except Exception as e:
+                _log_line('setup.log', f'refreshing the server list after '
+                                       f'pinning failed: {e}')
+            finally:
+                self._emit('Pin', p)
 
         return self._pin.start(was, into, progress, **self._pin_choices())
+
+    def checkUpdate(self):
+        """Whether GitHub has a newer Windows release than this copy - asked
+        only when the About screen's button is pressed (updates.py)."""
+        import updates
+        return updates.check(app_version())
+
+    def openReleases(self, url=None):
+        """The release page, in the default browser. Only ever a GitHub
+        page: the address comes back from the page, and a page is not
+        trusted to name what this machine opens."""
+        import updates
+        url = str(url or '')
+        if not url.startswith('https://github.com/siinsiw/ovpn-pin/'):
+            url = updates.PAGE
+        try:
+            os.startfile(url)
+        except (OSError, AttributeError) as e:
+            return {'ok': False, 'error': f'Could not open the browser: {e}'}
+        return {'ok': True}
+
+    def logSetup(self, provider=None, why=None):
+        """A setup that did not finish, written down.
+
+        The sheet shows one sentence and then it is gone; without this a
+        setup that fails once and works on "Try again" leaves nothing behind
+        to say which step it was. The route in use goes with it, because
+        that is most of what decides whether a lookup can work."""
+        _log_line('setup.log',
+                  f'{provider or "?"}: {str(why or "no reason given")[:600]} '
+                  f'[route={self._settings.get("pinRoute", "-")} '
+                  f'port={self._settings.get("pinPort", "-")} '
+                  f'auto={bool(self._settings.get("pinRouteAuto"))}]')
+        return {'ok': True}
 
     def cancelPin(self):
         return self._pin.cancel()

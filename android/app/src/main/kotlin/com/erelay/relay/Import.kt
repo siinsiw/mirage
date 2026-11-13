@@ -4,6 +4,49 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import java.io.File
+import java.io.InputStream
+
+/**
+ * The name a picked document is kept under, or null when it is not one to
+ * keep. The name is whatever the documents provider says it is - any app can
+ * be one - and it used to go into File(folder, name) as it came, so
+ * "../../x.ovpn" wrote outside the folder. Only a bare file name ending in
+ * .ovpn passes: no separator of either kind, no "..", no control character,
+ * something before the extension, and short enough to be a file name.
+ */
+internal fun safeOvpnName(raw: String?): String? {
+    val name = raw?.trim().orEmpty()
+    if (name.length <= ".ovpn".length || name.length > 200) return null
+    if (!name.endsWith(".ovpn", ignoreCase = true)) return null
+    if (name.startsWith(".") || name.contains("..")) return null
+    if (name.any { it == '/' || it == '\\' || it == ':' || it.code < 0x20 || it.code == 0x7f }) return null
+    // What the file system itself takes the last segment to be, as a second opinion.
+    if (File(name).name != name) return null
+    return name
+}
+
+/** The most one config may weigh. A real one is a few kilobytes, inline keys and all. */
+internal const val MAX_OVPN_BYTES = 1L shl 20
+
+/**
+ * Copy [input] to [into], giving up past [limit] bytes: false then, with
+ * [into] left for the caller to delete. A provider can say a file is a
+ * config and hand over a stream that never ends.
+ */
+internal fun copyCapped(input: InputStream, into: File, limit: Long = MAX_OVPN_BYTES): Boolean {
+    val buffer = ByteArray(8192)
+    var total = 0L
+    into.outputStream().use { out ->
+        while (true) {
+            val n = input.read(buffer)
+            if (n < 0) break
+            total += n
+            if (total > limit) return false
+            out.write(buffer, 0, n)
+        }
+    }
+    return true
+}
 
 /**
  * Configs, in from a folder somebody picked.
@@ -40,6 +83,9 @@ object Import {
      * mark in the name and sent to their own inboxes, so that a folder holding
      * both arrives as two piles ready to pin rather than one that neither
      * provider card can count.
+     *
+     * A name that is not a plain file name ([safeOvpnName]) and a file over
+     * [MAX_OVPN_BYTES] are counted as seen and not copied.
      */
     fun fromTree(ctx: Context, tree: Uri): Result {
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(
@@ -57,9 +103,10 @@ object Import {
         )?.use { rows ->
             while (rows.moveToNext()) {
                 val id = rows.getString(0) ?: continue
-                val name = rows.getString(1) ?: continue
-                if (!name.endsWith(".ovpn", ignoreCase = true)) continue
+                val shown = rows.getString(1) ?: continue
+                if (!shown.trim().endsWith(".ovpn", ignoreCase = true)) continue
                 seen++
+                val name = safeOvpnName(shown) ?: continue
 
                 val into = File(destination(ctx, name), name)
                 if (into.exists()) {
@@ -69,10 +116,10 @@ object Import {
                 val from = DocumentsContract.buildDocumentUriUsingTree(tree, id)
                 try {
                     into.parentFile?.mkdirs()
-                    ctx.contentResolver.openInputStream(from)?.use { input ->
-                        into.outputStream().use { input.copyTo(it) }
+                    val whole = ctx.contentResolver.openInputStream(from)?.use { input ->
+                        copyCapped(input, into)
                     } ?: continue
-                    copied++
+                    if (whole) copied++ else into.delete()
                 } catch (e: Exception) {
                     // One unreadable file is not a failed import. The count
                     // says how many arrived, and the page prints the count.

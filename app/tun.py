@@ -58,6 +58,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 
 import paths
@@ -302,6 +303,85 @@ def build_config(port, keep=(), own=(), carriers=(), log_path=None,
     }
 
 
+# The kill switch's last line, for when the adapter itself is gone.
+#
+# While sing-box runs, holding traffic is the adapter's job: every program's
+# packets fall into it and go nowhere. When sing-box is gone - it crashed, an
+# antivirus took it - there is no adapter to fall into, and the routes go
+# with it, so every program is back on the bare line. Then the only thing
+# left that can stop them is Windows Firewall:
+#
+#   Outbound is blocked by default on every profile, and allowed only for
+#   the programs that carry a reconnect (this app's exe or interpreter,
+#   sing-box, gost) and for the local network - the same addresses the
+#   adapter routes around. DNS is blocked even there: a lookup sent to the
+#   router is a list of the sites being opened, handed to the line.
+#
+#   What the profiles said before is kept under HKLM, which only an
+#   administrator can write, and put back exactly when the block is lifted:
+#   by the next adapter once it is up, by Disconnect or quitting, and when
+#   Relay opens again. It survives a restart of Windows on purpose - that is
+#   what "until Relay opens again" means - and README says how to lift it by
+#   hand if Relay is gone for good.
+#
+# Plain text, not a str.format template: it is put in front of WRAPPER, and
+# run on its own by Tun.release_firewall.
+KILL_GROUP = 'Relay kill switch'
+KILL_KEY = r'SOFTWARE\Relay\KillSwitch'
+KILL_PS = r'''
+$RelayKillGroup = 'Relay kill switch'
+$RelayKillKey = 'HKLM:\SOFTWARE\Relay\KillSwitch'
+
+function Block-RelayOutbound {
+    param([string[]] $Programs)
+    try {
+        $profiles = @(Get-NetFirewallProfile -PolicyStore PersistentStore -ErrorAction Stop)
+    } catch {
+        return "Windows Firewall could not be read ($($_.Exception.Message)), so nothing is holding traffic"
+    }
+    try {
+        # Only the first block saves what the profiles said: a second one
+        # would save the block itself as the thing to put back.
+        if (-not (Test-Path -LiteralPath $RelayKillKey)) {
+            New-Item -Path $RelayKillKey -Force -ErrorAction Stop | Out-Null
+            foreach ($p in $profiles) {
+                New-ItemProperty -LiteralPath $RelayKillKey -Name ([string]$p.Name) -Value ([string]$p.DefaultOutboundAction) -PropertyType String -Force -ErrorAction Stop | Out-Null
+            }
+        }
+        Remove-NetFirewallRule -Group $RelayKillGroup -ErrorAction SilentlyContinue
+        foreach ($prog in $Programs) {
+            if ($prog -and (Test-Path -LiteralPath $prog -PathType Leaf)) {
+                New-NetFirewallRule -DisplayName ("$RelayKillGroup - " + [IO.Path]::GetFileName($prog)) -Group $RelayKillGroup -Direction Outbound -Action Allow -Program $prog -ErrorAction Stop | Out-Null
+            }
+        }
+        New-NetFirewallRule -DisplayName "$RelayKillGroup - local network" -Group $RelayKillGroup -Direction Outbound -Action Allow -RemoteAddress @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '224.0.0.0/4', '255.255.255.255', 'fe80::/10', 'ff00::/8') -ErrorAction Stop | Out-Null
+        New-NetFirewallRule -DisplayName "$RelayKillGroup - no DNS (UDP)" -Group $RelayKillGroup -Direction Outbound -Action Block -Protocol UDP -RemotePort 53 -ErrorAction Stop | Out-Null
+        New-NetFirewallRule -DisplayName "$RelayKillGroup - no DNS (TCP)" -Group $RelayKillGroup -Direction Outbound -Action Block -Protocol TCP -RemotePort 53 -ErrorAction Stop | Out-Null
+        Set-NetFirewallProfile -Profile Domain, Private, Public -DefaultOutboundAction Block -ErrorAction Stop
+    } catch {
+        return "Windows Firewall would not hold traffic ($($_.Exception.Message))"
+    }
+    $off = @($profiles | Where-Object { -not $_.Enabled } | ForEach-Object { [string]$_.Name })
+    if ($off.Count) {
+        return ('Windows Firewall is turned off for the ' + ($off -join ', ') + ' profile, so traffic is not held there')
+    }
+    return $null
+}
+
+function Unblock-RelayOutbound {
+    if (Test-Path -LiteralPath $RelayKillKey) {
+        $saved = Get-ItemProperty -LiteralPath $RelayKillKey -ErrorAction SilentlyContinue
+        foreach ($name in 'Domain', 'Private', 'Public') {
+            $was = if ($saved) { [string]$saved.$name } else { '' }
+            if ($was -notin 'Allow', 'Block', 'NotConfigured') { $was = 'NotConfigured' }
+            Set-NetFirewallProfile -Profile $name -DefaultOutboundAction $was -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $RelayKillKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Remove-NetFirewallRule -Group $RelayKillGroup -ErrorAction SilentlyContinue
+}
+'''
+
 # Run elevated. Doubled braces are literal; single ones are filled in by
 # str.format. Everything it says, it says in a file, because elevation
 # leaves no pipe to say it down.
@@ -322,7 +402,12 @@ def build_config(port, keep=(), own=(), carriers=(), log_path=None,
 #   keeps going into the adapter and from there to a port nobody answers, so
 #   nothing reaches the internet on the bare line until the window says
 #   otherwise - a stop file (Disconnect, quitting) or a new worker's pid in
-#   `watch`, which it then watches instead. It says so in `held`.
+#   `watch`, which it then watches instead. It says so in `held`. The window
+#   going away does not end the hold either: a crashed window is no reason to
+#   put every program back on the bare line, and Relay opening again is what
+#   lets it go (Tun.tidy). And if sing-box itself goes, which takes the
+#   adapter with it, the firewall takes over the hold (KILL_PS) until a new
+#   adapter is up or Relay is told to let go.
 WRAPPER = r'''
 $ErrorActionPreference = 'Continue'
 $exe    = {exe}
@@ -339,6 +424,7 @@ $ui     = {ui}
 $holdf  = {holdf}
 $held   = {held}
 $watchf = {watchf}
+$allow  = {allow}
 $config = {config}
 
 Remove-Item -LiteralPath $done -Force -ErrorAction SilentlyContinue
@@ -384,6 +470,7 @@ try {{
 Set-Content -LiteralPath $pidf -Value $box.Id -Encoding ascii
 
 $up = $false
+$saidGone = $false
 $began = Get-Date
 $deadline = $began.AddSeconds({startup})
 # Where the NetAdapter module is missing, three seconds of sing-box not
@@ -401,13 +488,12 @@ while (-not $box.HasExited) {{
             Remove-Item -LiteralPath $held -Force -ErrorAction SilentlyContinue
         }}
     }}
-    # The window itself. Holding the line is the window's promise to undo
-    # it - by reconnecting or by Disconnect - and a window that has gone (a
-    # crash, a kill) can keep neither, so with it gone a hold is let go of
-    # rather than leaving the machine offline until somebody notices.
+    # The window itself. With the kill switch on, a window that has gone (a
+    # crash, a kill) does not end the hold: the adapter stays, and Relay
+    # opening again is what lets it go. Only said, so the held note is true.
     $uiGone = ($ui -and -not (Get-Process -Id $ui -ErrorAction SilentlyContinue))
     if ($watch -and -not (Get-Process -Id $watch -ErrorAction SilentlyContinue)) {{
-        if ((Test-Path -LiteralPath $holdf) -and -not $uiGone) {{
+        if (Test-Path -LiteralPath $holdf) {{
             Set-Content -LiteralPath $held -Value 'the proxy it was carrying traffic to has stopped; traffic is held' -Encoding utf8
             $watch = 0
         }} else {{
@@ -415,9 +501,9 @@ while (-not $box.HasExited) {{
             break
         }}
     }}
-    if ($watch -eq 0 -and $uiGone) {{
-        Set-Content -LiteralPath $failed -Value 'Relay went away while holding traffic; the adapter was taken down' -Encoding utf8
-        break
+    if ($watch -eq 0 -and $uiGone -and -not $saidGone) {{
+        Set-Content -LiteralPath $held -Value 'Relay closed while holding traffic; it stays held until Relay opens again' -Encoding utf8
+        $saidGone = $true
     }}
     if (-not $up) {{
         if ($canAsk) {{
@@ -428,6 +514,10 @@ while (-not $box.HasExited) {{
         }}
         if ($seen) {{
             $up = $true
+            # A firewall hold left by the last adapter (see KILL_PS) is let
+            # go only now, with this one carrying traffic: lifted before,
+            # the seconds in between would be on the bare line.
+            Unblock-RelayOutbound
             Set-Content -LiteralPath $ready -Value 'up' -Encoding ascii
         }} elseif ((Get-Date) -gt $deadline) {{
             Set-Content -LiteralPath $failed -Value 'the network adapter did not come up' -Encoding utf8
@@ -441,7 +531,18 @@ while (-not $box.HasExited) {{
 
 if ($box.HasExited) {{
     if (-not (Test-Path -LiteralPath $failed) -and -not (Test-Path -LiteralPath $stop)) {{
-        Set-Content -LiteralPath $failed -Value ("sing-box stopped by itself (exit " + $box.ExitCode + ")") -Encoding utf8
+        $why = "sing-box stopped by itself (exit " + $box.ExitCode + ")"
+        # The adapter went with it, so every program is on the bare line
+        # again - unless the kill switch is on, and the firewall holds them.
+        if ($up -and (Test-Path -LiteralPath $holdf)) {{
+            $fw = Block-RelayOutbound $allow
+            if ($fw) {{
+                $why += "; $fw"
+            }} else {{
+                $why += '; traffic is held by Windows Firewall until Relay reconnects or is told to disconnect'
+            }}
+        }}
+        Set-Content -LiteralPath $failed -Value $why -Encoding utf8
     }}
 }} else {{
     # The adapter, its routes and its firewall filters all belong to the
@@ -458,6 +559,47 @@ Remove-Item -LiteralPath $pidf -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $held -Force -ErrorAction SilentlyContinue
 Set-Content -LiteralPath $done -Value 'done' -Encoding ascii
 '''
+
+
+def _ps_list(values):
+    """A PowerShell array literal of single-quoted strings."""
+    return '@(' + ','.join(_ps_string(v) for v in values) + ')'
+
+
+def carriers_of_a_reconnect():
+    """The programs a firewall hold still lets out (KILL_PS): whatever this
+    app runs as - the frozen exe, or the interpreter running it from source,
+    both window and worker - and sing-box and gost, without which a
+    reconnect has no way to come up."""
+    out = []
+    exe = os.path.normpath(sys.executable) if sys.executable else ''
+    if exe:
+        out.append(exe)
+        # From source the window may be pythonw.exe and the worker python.exe.
+        folder, name = os.path.split(exe)
+        for other in ('python.exe', 'pythonw.exe'):
+            if name.lower() in ('python.exe', 'pythonw.exe') \
+                    and name.lower() != other:
+                out.append(os.path.join(folder, other))
+    for found in (paths.singbox_exe(), paths.gost_exe()):
+        if found:
+            out.append(os.path.normpath(found))
+    return out
+
+
+def firewall_held():
+    """Whether a firewall hold from KILL_PS is in place. Read from the key
+    only an administrator can write, so this needs no elevation to ask."""
+    if os.name != 'nt':
+        return False
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, KILL_KEY, 0,
+                             winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+        winreg.CloseKey(key)
+        return True
+    except OSError:
+        return False
 
 
 def explain(error):
@@ -607,8 +749,9 @@ class Tun:
                                          if split_rules else None),
                             ensure_ascii=True)
 
-        wrapper = WRAPPER.format(
+        wrapper = KILL_PS + WRAPPER.format(
             exe=_ps_string(exe),
+            allow=_ps_list(carriers_of_a_reconnect()),
             ui=int(os.getpid()),
             out=_ps_string(self._path('sing-box.out')),
             err=_ps_string(self._path('sing-box.err')),
@@ -729,6 +872,46 @@ class Tun:
                     creationflags=CREATE_NO_WINDOW)
         except (OSError, subprocess.SubprocessError):
             pass
+
+    def held_by_firewall(self):
+        return firewall_held()
+
+    def ended_by_itself(self):
+        """The script finished without being asked: a record still here, its
+        done file written, and no stop file of ours. stop() writes the stop
+        file first and removes the record last, so a stop in progress is
+        never mistaken for this."""
+        return bool(self.record()
+                    and os.path.exists(self._path('done'))
+                    and not os.path.exists(self._path('stop')))
+
+    def release_firewall(self):
+        """Lift a firewall hold (KILL_PS) and put the profiles back as they
+        were. Needs administrator rights, so from an unelevated window it is
+        one UAC prompt. True when nothing is held any more - False when the
+        prompt was refused, and the machine stays as it was."""
+        if not firewall_held():
+            return True
+        script, script_path = elevated(KILL_PS + '\nUnblock-RelayOutbound\n',
+                                       self.dir, 'release')
+        try:
+            if is_admin():
+                subprocess.run(['powershell'] + script, capture_output=True,
+                               timeout=120, creationflags=CREATE_NO_WINDOW)
+            else:
+                # -Wait, unlike the adapter's start: the answer to "is it
+                # lifted" is only true once the elevated side has finished.
+                subprocess.run(
+                    ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                     '-Command',
+                     'Start-Process powershell -Verb RunAs -Wait '
+                     '-WindowStyle Hidden -ArgumentList ' + _ps_array(script)],
+                    capture_output=True, text=True, timeout=300,
+                    creationflags=CREATE_NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        discard(script_path)
+        return not firewall_held()
 
     def tidy(self):
         """After a crash: an adapter whose worker is gone is wreckage.

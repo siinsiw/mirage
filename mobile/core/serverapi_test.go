@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -18,16 +19,24 @@ func TestServerByAddress(t *testing.T) {
 	}
 	pw := os.Getenv("RELAY_TEST_PASSWORD")
 
-	// First connect: no pin yet, so the certificate is taken and reported.
+	// First contact: no pin yet, so nothing is dialled - the certificate is
+	// looked at on a bare handshake and handed back as the pin (here the
+	// test stands in for the person who confirms it).
 	srv := NewTunnelServer(host, pw, nil, ModeSingle)
+	if _, err := SeenAsThrough(srv, 20*time.Second); err == nil || !strings.Contains(err.Error(), ErrNoPin.Error()) {
+		t.Fatalf("an address without a pin was dialled: %v", err)
+	}
+	pctx, pcancel := context.WithTimeout(context.Background(), 20*time.Second)
+	pin, err := srv.PeekPin(pctx, 20*time.Second)
+	pcancel()
+	if err != nil || len(pin) != 64 {
+		t.Fatalf("no pin seen: %q, %v", pin, err)
+	}
+	srv.Pin = pin
 	out, err := SeenAsThrough(srv, 20*time.Second)
 	srv.Close()
 	if err != nil {
 		t.Fatalf("through %s: %v", host, err)
-	}
-	pin := srv.SeenPin()
-	if len(pin) != 64 {
-		t.Fatalf("no pin seen: %q", pin)
 	}
 	t.Logf("seen as %s, pin %s", out, pin)
 

@@ -27,12 +27,14 @@ buttons on it. So the window always says which, every time: -Proxy for one,
 -NoProxy for the other.
 """
 
+import json
 import math
 import os
 import re
 import socket
 import subprocess
 import threading
+import urllib.request
 
 import paths
 import sweep
@@ -303,12 +305,70 @@ def proxy_answer(port, host='127.0.0.1', timeout=5.0):
     return 'ok' if code == 200 else 'auth' if code == 407 else 'refused'
 
 
-def find_port(first=DEFAULT_PORT):
-    """The first local port that really carries a lookup, or None."""
+# How long a proxy that is listening gets to open its first tunnel - the same
+# wait the script gives it (Test-HttpProxy). A proxy that has only just
+# started opens its own way out on the first CONNECT, and that first answer
+# can take far longer than a warm one. Five seconds could take such a proxy
+# for absent, so the setup after a sign-in went on to a port that could not
+# work, while "Try again" - by then talking to a warm proxy - found it at once.
+FIND_TIMEOUT = 20.0
+
+
+def find_port(first=DEFAULT_PORT, timeout=FIND_TIMEOUT):
+    """The first local port that really carries a lookup, or None.
+
+    A port with nothing on it answers 'none' within a second, so the wait
+    only applies to ports where something is actually listening."""
     for port in (first, *(p for p in PROXY_PORTS if p != first)):
-        if proxy_answer(port) == 'ok':
+        if proxy_answer(port, timeout=timeout) == 'ok':
             return port
     return None
+
+
+# The question the script asks first, asked from here when nobody has chosen
+# a route: does DoH answer straight out? The resolver and the name are the
+# script's own (Resolve-Doh, Select-DohRoute).
+DOH_PROBE = 'https://cloudflare-dns.com/dns-query?name=example.com&type=A'
+
+
+def direct_doh(timeout=10.0, tries=2):
+    """Whether DNS-over-HTTPS answers with no proxy at all.
+
+    Asked twice before the answer is no: on the line this app is for a
+    single attempt can fail where the next one passes, and one failure is
+    not the same as a blocked resolver. A forged answer cannot get here -
+    the certificate is checked - so any A record back means the route works.
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    request = urllib.request.Request(
+        DOH_PROBE, headers={'Accept': 'application/dns-json',
+                            'User-Agent': 'ovpn-pin'})
+    for _ in range(max(1, tries)):
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                body = json.loads(response.read().decode('utf-8', 'replace'))
+        except (OSError, ValueError):
+            # URLError, timeouts and TLS failures are all OSErrors.
+            continue
+        if isinstance(body, dict) and any(
+                isinstance(a, dict) and a.get('type') == 1
+                for a in body.get('Answer') or []):
+            return True
+    return False
+
+
+def auto_route(port_hint=DEFAULT_PORT):
+    """('direct', None), ('proxy', port), or (None, None) when neither works.
+
+    Direct first: it needs nothing else running, and a lookup that works
+    without a proxy keeps working when that proxy is closed. Then whatever
+    local proxy really carries a lookup."""
+    if direct_doh():
+        return 'direct', None
+    found = find_port(clean_port(port_hint))
+    if found:
+        return 'proxy', found
+    return None, None
 
 
 def clean_port(value, fallback=DEFAULT_PORT):
@@ -525,6 +585,25 @@ class Pin:
         return argv
 
     def _run(self, folder, out, route, port, max_ips, test, emit):
+        """The run, and the promise that it always ends in 'finished'.
+
+        The page waits for that one event - the setup sheet after a sign-in
+        has nothing else to stop its spinner - so an exception anywhere in
+        here still has to end the run out loud rather than kill the thread
+        and leave the run 'running' with nobody coming back to it."""
+        try:
+            self._work(folder, out, route, port, max_ips, test, emit)
+        except Exception as e:
+            proc, self.proc = self.proc, None
+            if proc:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            if self.state == 'running':
+                self._finish(emit, error=f'The resolver run stopped: {e}')
+
+    def _work(self, folder, out, route, port, max_ips, test, emit):
         try:
             os.makedirs(out, exist_ok=True)
         except OSError as e:
