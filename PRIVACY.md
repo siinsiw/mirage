@@ -37,9 +37,17 @@ can be contacted, each only by the feature named:
   `-NoOwner` and the Linux scripts with `--no-owner`, and the Windows app has
   a setting to turn it off; with it off no address is sent and only cached
   answers are shown.
+- **GitHub** (`api.github.com`) - only when the user presses **Check** for a
+  newer version (Windows: Settings, About this copy). One request for the
+  public list of releases; nothing about the device is sent. The Android
+  app's newer-version check, where present, asks the same thing.
 
 Site tests contact the sites the user names, through the connection being
 tested.
+
+Before a Windscribe sign-in, both apps say once that Relay signs in the way
+Windscribe's own browser extension does, which Windscribe may not allow, and
+that the account could be blocked for it.
 
 The server installer (`tunnel/install-server.sh`), run on the user's own
 server, downloads gost and sing-box from their GitHub release pages, installs
@@ -72,11 +80,35 @@ for administrator rights and runs sing-box to add a temporary network adapter
 and its routes, so that every program's traffic reaches the same connection.
 DNS lookups are then sent over HTTPS to Cloudflare's 1.1.1.1 through that
 connection. The adapter, its routes and its firewall filters are removed on
-disconnect, exit, failed connection, or when the connection's proxy process
-stops.
+disconnect, exit, or failed connection. With the kill switch off they are
+also removed when the connection's proxy process stops.
+
+With the kill switch on (the default), a connection that drops leaves the
+adapter in place so that nothing reaches the internet on the user's normal
+line, until the user reconnects, presses Disconnect, or opens Relay again.
+If sing-box itself stops, which removes the adapter, Relay changes Windows
+Firewall to block outgoing traffic for every program except Relay, sing-box,
+gost and the local network, with DNS blocked as well, until the user
+reconnects, presses Disconnect, or opens Relay again. It saves the previous
+firewall setting under `HKLM\SOFTWARE\Relay\KillSwitch` and puts it back
+exactly when the block is lifted. This block stays across a restart of
+Windows; README explains how to lift it by hand if Relay has been deleted.
+
+Relay writes short diagnostic logs in `%LOCALAPPDATA%\Relay\.state`:
+`proxy.log` (connection failures), `connect-errors.log`, `setup.log` (a
+server setup after sign-in that did not finish, with the lookup route that
+was in use), and `settings.log`. The names and addresses of the sites being
+opened are not written to `proxy.log`: they are replaced with `<host>`, and
+a log from an older copy is cleaned the same way the first time a newer copy
+writes to it. Only the provider server a connection used is named. Each log
+is capped in size and keeps only its latest part. Setting the environment
+variable `OVPN_LOG_HOSTS=1` keeps the names, for chasing a fault on one's
+own machine.
 
 To erase Relay's data on Windows: quit it from the tray, then delete the
-`%LOCALAPPDATA%\Relay` folder and the folder the app was extracted to.
+`%LOCALAPPDATA%\Relay` folder and the folder the app was extracted to. If a
+kill switch firewall block is still in place, opening Relay once before
+deleting it lifts the block.
 
 ## Android
 
@@ -110,7 +142,10 @@ storage - or uninstall the app, which removes all of the above.
 The command-line scripts keep their settings (`.env`), the OpenVPN
 credential file (`.ovpn-auth`), pinned configurations and their state
 (`.state`, including the owner-lookup cache `owners.tsv`) in the repository
-folder they run from. Deleting that folder erases them. A systemd service
+folder they run from. By default a connection sends DNS through the tunnel
+(with `systemd-resolved`, or by replacing `/etc/resolv.conf` for the session
+and putting the original back on `--stop`) and turns on an `nftables` kill
+switch; `--no-set-dns` and `--no-kill-switch` turn them off. Deleting that folder erases them. A systemd service
 installed with `--install-service` also leaves
 `/etc/systemd/system/ovpn-pin.service` and `/usr/local/lib/ovpn-pin`.
 

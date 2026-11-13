@@ -264,14 +264,17 @@ A tunnel does not fix your resolver. Without an `up` script, OpenVPN on Linux
 leaves `/etc/resolv.conf` alone, so a poisoned answer still reaches you
 through a perfectly good tunnel.
 
-```bash
-ovpn connect de-fra --set-dns       # or OVPN_SET_DNS=1 in .env
-```
+So `ovpn connect` points DNS at the tunnel by default: at the DNS the server
+pushed (1.1.1.1 and 1.0.0.1 when it pushes none), through `systemd-resolved`.
+On a machine without `resolvectl`, `/etc/resolv.conf` is swapped for the
+session instead, kept as `/etc/resolv.conf.ovpn-pin-saved`, and put back by
+`--stop` (also when switching servers). To leave the resolver alone - for
+example when your config carries its own `up`/`down` scripts that do the same
+job:
 
-points the tunnel interface at the DNS the server pushed, through
-`systemd-resolved`. It is off by default because that is the only resolver it
-knows how to talk to, and because plenty of configs carry their own
-`up`/`down` scripts that do the same job.
+```bash
+ovpn connect de-fra --no-set-dns    # or OVPN_SET_DNS=0 in .env
+```
 
 To answer the question directly, at any time:
 
@@ -296,8 +299,11 @@ away, because no public hostname resolves to a machine on your LAN.
 
 ### Kill switch
 
+On by default. To connect without it (every such connect prints a
+`NO KILL SWITCH` warning):
+
 ```bash
-ovpn connect de-fra --kill-switch   # or OVPN_KILL_SWITCH=1 in .env
+ovpn connect de-fra --no-kill-switch   # or OVPN_KILL_SWITCH=0 in .env
 ```
 
 While the tunnel is up, everything that is not the tunnel is dropped — only
@@ -310,9 +316,10 @@ drop policy, which is where a leak around a v4 tunnel usually goes.
 DNS is the exception to "your LAN gets out": port 53 and 853 (DNS over TLS)
 are dropped on anything but the tunnel, your router included, because a
 resolver outside the tunnel is the leak — and on a censored line, the one
-that lies. If names stop resolving with the kill switch on, connect with
-`--set-dns` (or `OVPN_SET_DNS=1`) so the resolver the server pushed is used,
-through the tunnel.
+that lies. That is why DNS goes through the tunnel by default; if names stop
+resolving with the kill switch on, check that you did not connect with
+`--no-set-dns` (or `OVPN_SET_DNS=0`). ICMP (ping, traceroute) leaves only
+through the tunnel and loopback, like everything else.
 
 `--stop` removes it, even when openvpn has already died on its own. If
 something goes wrong and it outlives the tunnel your network will look broken,

@@ -62,6 +62,17 @@ class PinChanged(RuntimeError):
     """A server by address showing a certificate other than the one kept."""
 
 
+class PinUnconfirmed(PinChanged):
+    """First contact with a server by address and no key to check it by:
+    the certificate it shows is not trusted until a second Test sees the
+    same one, after the person has compared it with what the installer
+    printed. Carries the fingerprint to compare."""
+
+    def __init__(self, message, fingerprint):
+        super().__init__(message)
+        self.fingerprint = fingerprint
+
+
 KEY_PREFIX = 'relay://'
 SS_METHODS = ('chacha20-ietf-poly1305', 'aes-256-gcm', 'aes-128-gcm')
 
@@ -171,7 +182,8 @@ class Tunnel:
         # and the WebSocket through Cloudflare (or the address) is.
         self.ss = ss
         # The pin a key came with. Without one the first certificate seen is
-        # taken on trust, SSH-style; with one, even the first must match.
+        # trusted only once a second Test sees it again (ensure_cert); with
+        # one, even the first must match.
         self.expected_pin = (expected_pin or '').lower()
         self.child = None
 
@@ -214,14 +226,29 @@ class Tunnel:
     # -- a server by address, and its own certificate ---------------------
     #
     # No CA vouches for an address, so the installer makes the server its own
-    # certificate. It is taken the first time it is seen and kept beside the
-    # client's configuration; from then on gost and the API trust that one
-    # certificate and nothing else - SSH's rule for a host met for the first
-    # time.
+    # certificate. With the server's key (relay://...) the pin comes with it.
+    # Without one it is SSH's rule for a host met for the first time, asked
+    # out loud: the first Test shows the certificate's SHA-256 and trusts
+    # nothing, the person compares it with the "certificate sha256" line the
+    # installer printed, and a second Test that sees the same certificate
+    # keeps it. From then on gost and the API trust that one certificate and
+    # nothing else. Taking whatever answered first, silently, handed the
+    # tunnel and API passwords to anybody in the middle on that first Test.
 
     @property
     def cert_path(self):
         return os.path.join(self.dir, f'server-{self.domain}.pem')
+
+    @property
+    def pending_path(self):
+        return os.path.join(self.dir, f'server-{self.domain}.pending')
+
+    def _pending(self):
+        try:
+            with open(self.pending_path, encoding='ascii') as f:
+                return f.read().strip().lower()
+        except OSError:
+            return ''
 
     def pin(self):
         """The kept certificate's SHA-256, in hex, or '' before first contact."""
@@ -241,17 +268,31 @@ class Tunnel:
         if not os.path.exists(self.cert_path):
             pem = ssl.get_server_certificate((self.domain, self.port),
                                              timeout=timeout)
+            got = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+            os.makedirs(self.dir, exist_ok=True)
             if self.expected_pin:
-                got = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
                 if got != self.expected_pin:
                     raise PinChanged(
                         f'{self.domain} is showing a certificate that is not '
                         f'the one in its key (sha256 {got[:16]}…, key says '
                         f'{self.expected_pin[:16]}…). Something between here '
                         'and the server is answering in its place.')
-            os.makedirs(self.dir, exist_ok=True)
+            elif self._pending() != got:
+                # Seen, not trusted: nothing has been sent to it yet.
+                with open(self.pending_path, 'w', encoding='ascii') as f:
+                    f.write(got)
+                raise PinUnconfirmed(
+                    f'First contact with {self.domain}. It shows the '
+                    f'certificate sha256 {got}. Check that this is the '
+                    '"certificate sha256" line the server installer printed, '
+                    'then press Test again to trust it - or paste the '
+                    "server's key (relay://...), which carries it.", got)
             with open(self.cert_path, 'w', encoding='ascii') as f:
                 f.write(pem)
+            try:
+                os.remove(self.pending_path)
+            except OSError:
+                pass
         return self.cert_path
 
     def check_cert(self, timeout=15):
@@ -270,10 +311,11 @@ class Tunnel:
         return True
 
     def forget_cert(self):
-        try:
-            os.remove(self.cert_path)
-        except OSError:
-            pass
+        for path in (self.cert_path, self.pending_path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     def edges(self):
         """The addresses this client is dialling, as the file has them."""

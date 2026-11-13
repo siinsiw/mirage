@@ -15,7 +15,7 @@ changes a feature updates its row.
 | Automatic fetch and pin right after sign-in | yes | yes | |
 | Pin from the account cards | part | yes | Windows: on the provider cards only |
 | Race the provider's exits, first to answer wins | yes | yes | |
-| Own server, and server + exit | yes | yes | by IP (self-signed, pinned on first Test) or domain; one install command from Settings with the app's own passwords; server + exit sends the picked location and its provider's account |
+| Own server, and server + exit | yes | yes | by IP (self-signed: the first Test shows its sha256 and trusts nothing, a second Test that sees the same certificate keeps it; a relay:// key carries the pin) or domain; one install command from Settings with the app's own passwords; server + exit sends the picked location and its provider's account |
 | Exit check for server + exit, per server, with Iran notices | yes | yes | on by default; the server sends the exit's real name and checks its certificate (from Iran this is what keeps upload fast - without it about 10 KB/s); turning it off asks first. Server in Iran: "keep it on", plus a Surfshark-is-blocked-from-Iran notice when a Surfshark account is in use, and that reason in a failed server + exit through Surfshark |
 | Direct exits: Windscribe dialled with its real name (SNI), Surfshark without | yes | yes | certificate checked by hand against the pinned name either way; Windows core/ovpn-proxy.py sni_for, Android mobile/core/exit.go sniFor |
 | Every program through it, not only proxy-aware ones (TUN) | yes | yes | Windows: Settings → Connection → Tunnel, sing-box + UAC; Android: always, VpnService |
@@ -45,7 +45,12 @@ changes a feature updates its row.
 | (i) buttons instead of inline help | yes | yes | |
 | Long addresses shrink to fit | yes | yes | |
 | Live connection timer | yes | yes | Android: in the notification too |
-| Version in About | no | yes | |
+| Version in About | yes | yes | Windows: Settings → About this copy |
+| Check for a newer version, only when pressed | yes | part | Windows: About this copy → Check (desktop-v* releases); Android: the check exists in data/Updates.kt, no button yet |
+| Kill switch holds when the tunnel program itself dies | yes | n/a | Windows: Windows Firewall blocks all but Relay, sing-box, gost and the LAN until reconnect, Disconnect or reopening Relay; Android: Android's own always-on VPN / block-without-VPN settings |
+| Note before the Windscribe sign-in (extension-style login, account risk) | yes | yes | once per run on Windows, once ever on Android |
+| Neutral flag for Iran as a setting | no | yes | Android: Settings; the Lion and Sun stays the default |
+| Setup after sign-in picks its lookup route and logs failures | yes | n/a | Windows: direct DoH, else a local proxy that answers; `.state/setup.log` |
 | Tray / quick-settings tile, one-press connect | part | yes | Windows: tray menu |
 | Accounts screen, one card per provider, one account each | yes | yes | |
 | Quick timing: one exit per country, on its own every 6 h | yes | yes | |
@@ -58,6 +63,17 @@ changes a feature updates its row.
 | Narrow screens: rows fold to two lines instead of cutting text | yes | yes | Android also for a large font |
 | Wide screens: content in a centred column | yes | yes | Windows from 720px, Android tablets |
 | Window size, single instance | yes | n/a | |
+
+## Linux
+
+The Linux command (`linux/`) is a third product, and deliberately a smaller
+one: OpenVPN with pinned configs, for Surfshark or any provider's `.ovpn`
+files. It has pinning, server timing, the owner lookup, DNS through the
+tunnel and an `nftables` kill switch (both on by default), a systemd service,
+and the local proxy with your own tunnel (`linux/README.md`). It has no
+Windscribe sign-in, no automatic setup after sign-in, no split tunnelling, no
+exit check and no window. A feature added to both apps is not owed to Linux
+unless this section says so.
 
 ## Releases
 
