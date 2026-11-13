@@ -478,6 +478,22 @@ probe_direct() {
 }
 
 # Used by --fallback next: the first pinned config that answers directly.
+# A kill switch left by a tunnel that is gone lets out only the first
+# selection's addresses (killswitch_admit at the switch below), so every other
+# candidate would look dead through it. They are let through before they are
+# probed. Not from inside $(...): killswitch_admit speaks, and what it says
+# would land in the captured answer.
+admit_candidates() {
+    local i ips=()
+    for i in "${!CFG_FILE[@]}"; do
+        [ "$i" -eq "$SEL_IDX" ] && continue
+        [[ ${CFG_PROTO[$i]} == udp* ]] && continue
+        ips+=("${CFG_IP[$i]}")
+    done
+    [ ${#ips[@]} -gt 0 ] && killswitch_admit "${ips[@]}"
+    return 0
+}
+
 find_reachable() {
     local i
     for i in "${!CFG_FILE[@]}"; do
@@ -492,6 +508,7 @@ find_reachable() {
 
 show_alternatives() {
     local i found=0
+    [ "$DRY_RUN" -eq 0 ] && admit_candidates
     info 'testing the other pinned files...'
     for i in "${!CFG_FILE[@]}"; do
         [ "$i" -eq "$SEL_IDX" ] && continue
@@ -682,6 +699,12 @@ start_tunnel() {
         info 'this config drops root after connecting, so openvpn keeps the password in memory to be able to reconnect.'
 
     [ "$mode" = proxy ] && pin_upstream_routes "$pp"
+    # And through a kill switch a dead tunnel left up: the proxy's own server
+    # is what this dial goes out to, not the config's remote.
+    if [ "$mode" = proxy ] && [ -s "$ROUTEFILE" ]; then
+        # shellcheck disable=SC2046
+        killswitch_admit $(cat -- "$ROUTEFILE")
+    fi
 
     if ! $SUDO "${cmd[@]}"; then
         unpin_upstream_routes
@@ -770,7 +793,18 @@ report_up() {
 
     # Said on every connect that has none, whatever the reason: a tunnel
     # that gives up puts traffic back on the bare line without a sound.
-    if [ "$KILL_SWITCH" -eq 1 ]; then
+    #
+    # Dialled through a local proxy whose own server could not be worked out
+    # (no routes pinned for it), the kill switch would drop that proxy's
+    # connection to its server - the one carrying this tunnel - and the
+    # tunnel would die seconds after "Up" with the machine left offline. So
+    # it is not installed then, and the reason is said instead.
+    if [ "$KILL_SWITCH" -eq 1 ] && [ "$mode" != direct ] && [ ! -s "$ROUTEFILE" ]; then
+        printf '\n'
+        warn "NO KILL SWITCH: it would cut the proxy that carries this tunnel, whose server is not known"
+        info 'Set OVPN_PROXY_UPSTREAM=<ip of your proxy server> in .env and connect'
+        info 'again to have both.'
+    elif [ "$KILL_SWITCH" -eq 1 ]; then
         printf '\n'
         local extra=''
         [ -f "$ROUTEFILE" ] && extra=$(tr '\n' ' ' < "$ROUTEFILE")
@@ -2144,9 +2178,22 @@ probe_devtcp
 case $ACTION in
     status)   do_status; exit 0 ;;
     stop)     do_stop; exit 0 ;;
-    unlock)   head_ 'Kill switch'; killswitch_off; printf '\n'; exit 0 ;;
+    unlock)   head_ 'Kill switch'; killswitch_off
+              # The other thing a tunnel that died leaves behind.
+              running_pid >/dev/null || dns_restore
+              printf '\n'; exit 0 ;;
     dnscheck) dns_check; exit 0 ;;
 esac
+
+# A tunnel that ended without --stop - openvpn killed, a reboot, a host
+# without the supervisor - left /etc/resolv.conf as ours, and the resolver in
+# it may only answer inside a tunnel that is gone. With no tunnel up, it goes
+# back before anything else happens; a connect below swaps it again if asked.
+if ! running_pid >/dev/null && dns_swapped; then
+    head_ 'DNS'
+    info 'a tunnel that ended without --stop left /etc/resolv.conf swapped'
+    dns_restore
+fi
 
 # Past the read-only actions: everything below here can start a tunnel, and a
 # tunnel is exactly what a stale password breaks.
@@ -2262,6 +2309,7 @@ else
             MODE=proxy ;;
         next)
             info 'looking for a pinned file that answers directly...'
+            [ "$DRY_RUN" -eq 0 ] && admit_candidates
             if NEXT=$(find_reachable); then
                 SEL_IDX=$NEXT
                 ok "using ${CFG_NAME[$SEL_IDX]}  ${CFG_IP[$SEL_IDX]}:${CFG_PORT[$SEL_IDX]}"

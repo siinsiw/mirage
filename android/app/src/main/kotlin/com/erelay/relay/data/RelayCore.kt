@@ -1968,15 +1968,17 @@ class RelayCore(private val app: Application) {
         }
 
         // The server's certificate before its API: a server by address whose
-        // pin is not kept yet is tested first, plainly, and the pin kept -
-        // the core refuses every API call until then (see ServerPin). Every
-        // call below also goes through ServerPin.call, which does this again
-        // and retries once should the core still say there is no pin.
+        // certificate has not been confirmed (Test, under Settings) is not
+        // sent anything - the core refuses every API call until then (see
+        // ServerPin). Every call below also goes through ServerPin.call,
+        // which says the same should the core still find no pin.
         if (picks.isNotEmpty()) {
             try {
                 ServerPin.ensure(app, cfg)
             } catch (e: Exception) {
-                return Said.no("$domain did not answer a test: ${(e.message ?: e.toString()).take(160)}. " +
+                val why = e.message ?: e.toString()
+                return if (why == ServerPin.UNCONFIRMED) Said.no("$domain: $why.")
+                else Said.no("$domain did not answer a test: ${why.take(160)}. " +
                     "Press Test under Settings → Connection, then try again.")
             }
             _tunnel.value = readTunnel()

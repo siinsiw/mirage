@@ -34,8 +34,49 @@ def gomap(name, data, doc):
     out = [doc, 'var %s = map[string]string{' % name]
     for k in sorted(data):
         out.append('\t%s: %s,' % (q(k), q(data[k])))
-    out.append('}\n')
+    # The blank line gofmt keeps between two declarations, so the output is
+    # already what gofmt would leave and a CI diff against it is exact.
+    out.append('}\n\n')
     return '\n'.join(out)
+
+
+def continents():
+    """ContinentOrder, continentOf and ContinentOf, from CONTINENT_ORDER and
+    CONTINENTS - in gofmt's layout, the keys padded so the values line up."""
+    width = max(len(q(name)) + 1 for name in C.CONTINENTS)
+    rows = []
+    for name in C.CONTINENT_ORDER:
+        key = q(name) + ':'
+        rows.append('\t\t%s%s%s,' % (key, ' ' * (width - len(key) + 1),
+                                     q(' '.join(C.CONTINENTS[name]))))
+    order = ', '.join(q(n) for n in C.CONTINENT_ORDER)
+    return '''
+// ContinentOrder is the order the groups are listed in. Turkey and the
+// Caucasus are with Europe, where people looking for them look; the Gulf, Iran's
+// neighbours and the Levant are their own group, because from Iran they are the
+// near places and a list that buries them in Asia hides them.
+var ContinentOrder = []string{%s}
+
+var continentOf = func() map[string]string {
+\tm := map[string]string{}
+\tfor name, codes := range map[string]string{
+%s
+\t} {
+\t\tfor _, code := range strings.Fields(codes) {
+\t\t\tm[code] = name
+\t\t}
+\t}
+\treturn m
+}()
+
+// ContinentOf is the group a country is listed under, or "Elsewhere".
+func ContinentOf(code string) string {
+\tif c, ok := continentOf[strings.ToLower(code)]; ok {
+\t\treturn c
+\t}
+\treturn "Elsewhere"
+}
+''' % (order, '\n'.join(rows))
 
 
 def main():
@@ -110,8 +151,12 @@ func Aliases(code string) []string {
 \treturn countryAliases[Canon(code)]
 }
 ''')
+    src.write(continents())
 
-    out = os.path.join(ROOT, 'mobile', 'core', 'countries.go')
+    # Where to write: the real file, or a path given on the command line -
+    # which is how CI regenerates it to compare without touching the tree.
+    out = (sys.argv[1] if len(sys.argv) > 1
+           else os.path.join(ROOT, 'mobile', 'core', 'countries.go'))
     with open(out, 'w', encoding='utf-8') as f:
         f.write(src.getvalue())
 
