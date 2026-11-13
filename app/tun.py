@@ -359,7 +359,14 @@ function Block-RelayOutbound {
         New-NetFirewallRule -DisplayName "$RelayKillGroup - no DNS (TCP)" -Group $RelayKillGroup -Direction Outbound -Action Block -Protocol TCP -RemotePort 53 -ErrorAction Stop | Out-Null
         Set-NetFirewallProfile -Profile Domain, Private, Public -DefaultOutboundAction Block -ErrorAction Stop
     } catch {
-        return "Windows Firewall would not hold traffic ($($_.Exception.Message))"
+        $why = $_.Exception.Message
+        # Half a block is no block, and the key is what Relay reads as "held"
+        # (tun.firewall_held): left behind, the window would say traffic is
+        # held while it goes out on the bare line. So everything this did is
+        # undone - profiles put back, rules and key removed - and the failure
+        # is said as what it is.
+        Unblock-RelayOutbound
+        return "Windows Firewall would not hold traffic ($why), so nothing is holding it"
     }
     $off = @($profiles | Where-Object { -not $_.Enabled } | ForEach-Object { [string]$_.Name })
     if ($off.Count) {
