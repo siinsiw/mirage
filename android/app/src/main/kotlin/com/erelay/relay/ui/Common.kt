@@ -195,18 +195,18 @@ fun Sheet(
                 // A short screen gives the list under the title the height
                 // the title's air would have taken.
                 val short = shortScreen()
+                // The reference's bar: the way back on the leading edge, the
+                // title centred over the page, close on the trailing edge.
                 Row(
-                    Modifier.fillMaxWidth().padding(start = Space.x5, end = Space.x4,
-                        top = if (short) Space.x2 else Space.x4, bottom = if (short) Space.x2 else Space.x3),
+                    Modifier.fillMaxWidth().padding(horizontal = Space.x2,
+                        vertical = if (short) Space.x1 else Space.x3),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (onBack != null) {
-                        IconButton(Glyph.chevLeft, "Back", onBack, quiet = true)
-                        Spacer(Modifier.width(Space.x2))
-                    }
-                    Text(title, style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f))
-                    IconButton(Glyph.x, "Close", onClose)
+                    if (onBack != null) IconButton(Glyph.chevLeft, "Back", onBack, quiet = true, tint = Tone.text)
+                    else Spacer(Modifier.size(48.dp))
+                    Text(title, style = Type.subtitle.copy(fontSize = 17.sp, textAlign = TextAlign.Center).script(title),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    IconButton(Glyph.x, "Close", onClose, tint = Tone.text)
                 }
                 val body = Modifier.fillMaxWidth().weight(1f)
                 if (scroll) {
@@ -298,10 +298,18 @@ fun Section(
 fun Group(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(Shape.card)
     Column(
-        modifier.fillMaxWidth().clip(shape).background(Tone.surface).border(1.dp, Tone.stroke, shape),
+        modifier.fillMaxWidth().clip(shape).background(surfaceBrush()).border(1.dp, Tone.stroke, shape),
         content = content,
     )
 }
+
+/**
+ * A card's face: the surface, a touch lighter along its top, so a card reads
+ * as lit from above the way the reference's slate panels are. Flat on the
+ * white page.
+ */
+fun surfaceBrush(): Brush = if (Tone.light) androidx.compose.ui.graphics.SolidColor(Tone.surface)
+    else Brush.verticalGradient(listOf(androidx.compose.ui.graphics.lerp(Tone.surface, Color.White, 0.045f), Tone.surface))
 
 /** A group whose content is not rows - fields, a paragraph, a button - with the group's padding. */
 @Composable
@@ -383,14 +391,18 @@ fun SwitchRow(
     )
 }
 
-/** A switch: Pulse when on (the state "on" is the accent), Raised Slate with an Edge when off. */
+/**
+ * A switch: the accent when on, white thumb; Raised Slate with an Edge when
+ * off. Green stays the connection's alone.
+ */
 @Composable
 fun switchColors() = androidx.compose.material3.SwitchDefaults.colors(
-    checkedTrackColor = Tone.pulse, checkedThumbColor = Tone.ink, checkedBorderColor = Color.Transparent,
-    checkedIconColor = Tone.pulse,
+    checkedTrackColor = com.erelay.relay.ui.theme.Accent.mid, checkedThumbColor = Color.White,
+    checkedBorderColor = Color.Transparent, checkedIconColor = com.erelay.relay.ui.theme.Accent.mid,
     uncheckedTrackColor = Tone.surface2, uncheckedThumbColor = Tone.text3,
     uncheckedBorderColor = Tone.stroke,
-    disabledCheckedTrackColor = Tone.pulse.copy(alpha = 0.35f), disabledCheckedThumbColor = Tone.ink.copy(alpha = 0.6f),
+    disabledCheckedTrackColor = com.erelay.relay.ui.theme.Accent.mid.copy(alpha = 0.35f),
+    disabledCheckedThumbColor = Color.White.copy(alpha = 0.6f),
     disabledUncheckedTrackColor = Tone.surface2.copy(alpha = 0.6f),
     disabledUncheckedThumbColor = Tone.text3.copy(alpha = 0.4f), disabledUncheckedBorderColor = Tone.hairline,
 )
@@ -410,11 +422,10 @@ fun Btn(
     danger: Boolean = false,
     icon: ImageVector? = null,
 ) {
-    // The primary is the page's own text colour, inverted: nothing here is
-    // coloured for being clickable, and the accent is never a button's fill.
-    val bg = if (strong) Tone.text else Color.Transparent
+    // The primary carries the accent run, white type, and on a dark page the
+    // soft light it throws under itself; everything else is a ghost pill.
     val fg = when {
-        strong -> Tone.ink
+        strong -> Color.White
         danger -> Tone.fail
         else -> Tone.text
     }
@@ -423,8 +434,10 @@ fun Btn(
         modifier
             .heightIn(min = 44.dp)
             .press(enabled, pill, nudge = true, onClick = onClick)
+            .then(if (strong && enabled) Modifier.accentGlow(pill) else Modifier)
             .clip(pill)
-            .background(if (enabled) bg else bg.copy(alpha = bg.alpha * 0.45f))
+            .then(if (strong) Modifier.background(com.erelay.relay.ui.theme.Accent.brush(),
+                alpha = if (enabled) 1f else 0.45f) else Modifier)
             .border(1.dp, when {
                 strong -> Color.Transparent
                 danger -> Tone.fail.copy(alpha = 0.4f)
@@ -484,11 +497,15 @@ fun <T> Segment(options: List<T>, chosen: T, label: (T) -> String, onPick: (T) -
                 .drawBehind {
                     val w = size.width / options.size
                     val r = androidx.compose.ui.geometry.CornerRadius(size.height / 2)
-                    val tl = androidx.compose.ui.geometry.Offset(w * at, 0f)
+                    // Mirrored in a right-to-left layout, where the first option is on the right.
+                    val rtl = layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl
+                    val x = if (rtl) size.width - w * (at + 1) else w * at
+                    val tl = androidx.compose.ui.geometry.Offset(x, 0f)
                     val sz = androidx.compose.ui.geometry.Size(w, size.height)
-                    drawRoundRect(Tone.surface2, topLeft = tl, size = sz, cornerRadius = r)
-                    drawRoundRect(Tone.stroke, topLeft = tl, size = sz, cornerRadius = r,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
+                    // The chosen option sits on the accent run.
+                    drawRoundRect(Brush.horizontalGradient(
+                        listOf(com.erelay.relay.ui.theme.Accent.a, com.erelay.relay.ui.theme.Accent.b),
+                        startX = x, endX = x + w), topLeft = tl, size = sz, cornerRadius = r)
                 },
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -502,7 +519,7 @@ fun <T> Segment(options: List<T>, chosen: T, label: (T) -> String, onPick: (T) -
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(labels[i], style = base.copy(fontSize = fit.size, lineHeight = 1.15.em,
-                        color = if (o == chosen) Tone.text else Tone.text3),
+                        color = if (o == chosen) Color.White else Tone.text3),
                         maxLines = fit.lines, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -573,30 +590,42 @@ fun Field(
     secret: Boolean = false,
     mono: Boolean = false,
     keyboard: KeyboardType = KeyboardType.Text,
+    /** A mark on the leading edge: a person for a user name, a lock for a password. */
+    leading: ImageVector? = null,
 ) {
     var shown by remember { mutableStateOf(false) }
     val focus = remember { MutableInteractionSource() }
     val focused by focus.collectIsFocusedAsState()
-    // The focus ring is Pulse (DESIGN-NIGHT 2); at rest a field is an Edge on the page's own ink.
-    val ring by androidx.compose.animation.animateColorAsState(if (focused) Tone.focus else Tone.strokeStrong,
-        tween(if (rememberReducedMotion()) 0 else 160), label = "ring")
+    val reduced = rememberReducedMotion()
+    // A filled well; focused, its edge takes the accent and the well lifts a shade.
+    val ring by androidx.compose.animation.animateColorAsState(
+        if (focused) com.erelay.relay.ui.theme.Accent.mid else Tone.stroke,
+        tween(if (reduced) 0 else 160), label = "ring")
+    val well by androidx.compose.animation.animateColorAsState(
+        if (focused) Tone.surface2 else Tone.surface2.copy(alpha = if (Tone.light) 1f else 0.7f),
+        tween(if (reduced) 0 else 160), label = "well")
     val shape = RoundedCornerShape(Shape.tip)
     Row(
         modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
+            .heightIn(min = 52.dp)
             .clip(shape)
-            .background(Tone.bg)
-            .border(1.dp, ring, shape)
-            .padding(start = Space.x4, end = Space.x2),
+            .background(well)
+            .border(if (focused) 1.5.dp else 1.dp, ring, shape)
+            .padding(start = if (leading != null) Space.x3 else Space.x4, end = Space.x2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (leading != null) {
+            Icon(leading, null, Modifier.size(18.dp),
+                tint = if (focused) com.erelay.relay.ui.theme.Accent.mid else Tone.text3)
+            Spacer(Modifier.width(Space.x3))
+        }
         val style = if (mono) TextStyle(fontFamily = Mono, color = Tone.text) else Type.body.copy(color = Tone.text).script(value)
         Box(Modifier.weight(1f).padding(vertical = Space.x3)) {
             if (value.isEmpty()) Text(placeholder, style = style.copy(color = Tone.text3))
             BasicTextField(
                 value = value, onValueChange = onChange, singleLine = true, textStyle = style,
-                cursorBrush = SolidColor(Tone.pulse), interactionSource = focus,
+                cursorBrush = SolidColor(com.erelay.relay.ui.theme.Accent.mid), interactionSource = focus,
                 visualTransformation = if (secret && !shown) PasswordVisualTransformation()
                     else VisualTransformation.None,
                 keyboardOptions = KeyboardOptions(keyboardType =
@@ -741,7 +770,7 @@ fun Prompt(
                 .widthIn(max = 420.dp)
                 .fillMaxWidth()
                 .clip(shape)
-                .background(Tone.surface)
+                .background(surfaceBrush())
                 .border(1.dp, Tone.stroke, shape)
                 .padding(Space.x5),
         ) {
@@ -769,11 +798,12 @@ fun Chevron() = Icon(Glyph.chevRight, null, Modifier.size(16.dp), tint = Tone.te
 fun NavRow(title: String, desc: String?, onClick: () -> Unit, icon: ImageVector? = null) =
     SettingRow(title, desc = desc, icon = icon, onClick = onClick) { Chevron() }
 
-/** Checkbox colours: Pulse when ticked - "on" is the accent - with Void ink. */
+/** Checkbox colours: the accent when ticked, a white tick. */
 @Composable
 fun checkColors() = androidx.compose.material3.CheckboxDefaults.colors(
-    checkedColor = Tone.pulse, checkmarkColor = Tone.ink, uncheckedColor = Tone.strokeStrong,
-    disabledCheckedColor = Tone.pulse.copy(alpha = 0.35f), disabledUncheckedColor = Tone.stroke,
+    checkedColor = com.erelay.relay.ui.theme.Accent.mid, checkmarkColor = Color.White,
+    uncheckedColor = Tone.strokeStrong,
+    disabledCheckedColor = com.erelay.relay.ui.theme.Accent.mid.copy(alpha = 0.35f), disabledUncheckedColor = Tone.stroke,
 )
 
 /** A row whose whole width ticks a checkbox at its leading edge. */

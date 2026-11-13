@@ -1,0 +1,731 @@
+/* ============================================================================
+   Mirage - the first run: the intro, then the welcome. Loaded after
+   midnight.css. The decisions behind every value here are in
+   preview/DECISIONS.md. The star chart both show is #mi-chart in the sprite.
+
+   Black and dark red only. The logo, the name and the button stay put; the
+   title and the sentence change. What moves is a transform or an opacity on
+   a layer of its own: the star chart, the logo's tick ring, the name's
+   reflection, the button's travelling light. Nothing here animates a size,
+   a shadow or a filter, so a weak machine keeps its frame rate.
+   ========================================================================= */
+
+@font-face {
+  font-family: 'Cinzel Mirage';
+  src: url('fonts/Cinzel-500.woff2') format('woff2');   /* OFL: fonts/OFL-Cinzel.txt */
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;   /* local and 15 KB: wait for it rather than flash a fallback */
+}
+
+.mi {
+  --mi-red: #A3141F;
+  --mi-red-hi: #C21C2E;
+  --mi-red-lo: #6E0D16;
+  --mi-page: #060607;
+  --mi-ink: #EDE6E3;
+  isolation: isolate;
+  background: var(--mi-page);
+}
+
+.mi[open] { align-items: stretch; }
+
+/* the window's own strip (added by app.js) and the Skip button sit over the
+   backdrop layers */
+.mi > .winbar, .mi__top { position: relative; z-index: 2; }
+
+/* ----------------------------------------------------------- the backdrop */
+
+.mi__bg { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+
+.mi__glow {
+  position: absolute; inset: 0; opacity: 0.6;
+  background:
+    radial-gradient(130% 55% at 50% 108%, rgba(140, 16, 28, 0.55), rgba(140, 16, 28, 0) 62%),
+    radial-gradient(90% 45% at 50% -5%, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 70%);
+}
+
+/* centred on the logo; app.js sets `top` to the logo's centre */
+.mi__chart {
+  position: absolute; left: 50%; top: 40%;
+  width: 560px; height: 560px; margin: -280px 0 0 -280px;
+  will-change: transform;
+}
+
+.mi__vig {
+  position: absolute; inset: 0;
+  background: radial-gradient(75% 60% at 50% 40%, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.6));
+}
+
+.mi__defs { position: absolute; width: 0; height: 0; }
+
+/* -------------------------------------------------------------- the body */
+
+.mi__body {
+  position: relative; z-index: 1; flex: 1; min-height: 0;
+  display: flex; flex-direction: column; align-items: center;
+  padding: clamp(4px, 3vh, 32px) 24px 0;
+}
+
+.mi__logo { position: relative; flex: none; width: 150px; height: 150px; }
+
+.mi__logo svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+.mi__low {
+  fill: none; stroke: var(--mi-red-lo); stroke-width: 3;
+  stroke-linecap: round; stroke-dasharray: 1.5 4.5;
+}
+
+.mi__inner { fill: none; stroke: var(--mi-red); stroke-width: 1.4; }
+
+.mi__pupil, .mi__bead { fill: var(--mi-red); }
+
+.mi__cut { fill: var(--mi-page); }
+
+.mi__lid { fill: none; stroke: var(--mi-red); stroke-width: 4; stroke-linecap: round; }
+
+.mi__ticks { will-change: transform; }
+
+.mi__ticks circle {
+  fill: none; stroke: var(--mi-red); stroke-width: 3; stroke-dasharray: 0.9 3.03;
+}
+
+/* the name, and its reflection in the heat */
+.mi__word { flex: none; display: flex; flex-direction: column; align-items: center; height: 72px; margin-top: 4px; }
+
+.mi__name {
+  margin: 0;
+  font-family: 'Cinzel Mirage', 'Cinzel', Georgia, serif;
+  font-weight: 500; font-size: 30px; line-height: 1;
+  letter-spacing: 0.42em; padding-left: 0.42em;   /* tracking adds space after the last letter too */
+  color: var(--mi-ink); white-space: nowrap; direction: ltr;
+}
+
+.mi__name span { display: inline-block; }
+
+.mi__echo { margin-top: 3px; will-change: transform; }
+
+.mi__name--echo {
+  transform: scaleY(-1);
+  opacity: 0.22;
+  filter: url(#miHeat);
+  -webkit-mask-image: linear-gradient(to top, #000, transparent 75%);
+  mask-image: linear-gradient(to top, #000, transparent 75%);
+}
+
+/* the step: one line of title, two or three full lines under it. A fixed
+   height, so the button never moves from one step to the next. */
+.mi__stage {
+  position: relative; flex: none;
+  width: 100%; max-width: 340px; height: 132px; margin-top: 18px;
+  overflow: hidden;
+}
+
+.mi__title {
+  margin: 0 0 10px; padding-top: 8px;
+  font-size: 20px; font-weight: 500; letter-spacing: -0.01em;
+  color: #F4F1EF; text-align: center; white-space: nowrap;
+}
+
+.mi__say {
+  margin: 0 auto; max-width: 300px;
+  font-size: 14px; line-height: 1.6; color: #A8A2A0; text-align: center;
+  text-wrap: balance;
+}
+
+/* each word sits in a slot it can sink into */
+.mi__w { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: 3px; }
+
+.mi__wi { display: inline-block; }
+
+/* the chisel line that carves one step out and the next one in */
+.mi__chisel {
+  position: absolute; left: 6px; right: 6px; top: 44px; height: 1px;
+  background: var(--mi-red-hi);
+  transform: scaleX(0); transform-origin: left center;
+  will-change: transform;
+}
+
+/* ------------------------------------------------------------- the foot */
+
+.mi__foot {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 24px 24px;
+}
+
+/* four ticks, like the astrolabe's degrees: the steps reached stand tall */
+.mi__steps { display: flex; align-items: center; gap: 6px; height: 20px; }
+
+.mi__steps i {
+  width: 2px; height: 18px; border-radius: 1px;
+  background: #3A3536;
+  transform: scaleY(0.55);
+  transition: transform 350ms cubic-bezier(0.3, 0.7, 0.4, 1.5), background-color 300ms ease;
+}
+
+.mi__steps i.is-here { transform: scaleY(1); background: var(--mi-red-hi); }
+
+/* the button: obsidian, with a red light travelling round its edge - the
+   bead of the logo. The light is a conic layer turned by app.js; the face
+   covers all of it but a 1.5 px rim. */
+.mi__go {
+  position: relative; flex: 1; height: 52px;
+  border: 0; border-radius: 26px; padding: 0;
+  background: transparent; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 450ms cubic-bezier(0.3, 0.7, 0.4, 1.5);
+}
+
+.mi__go:active { transform: scale(0.965); transition: transform 60ms; }
+
+.mi__go:focus { outline: none; }
+
+.mi__go:focus-visible { outline: 2px solid #E7A9B1; outline-offset: 4px; }
+
+.mi__ring { position: absolute; inset: 0; border-radius: 26px; overflow: hidden; background: #2B1418; }
+
+.mi__spin {
+  position: absolute; left: 50%; top: 50%;
+  width: 320px; height: 320px; margin: -160px 0 0 -160px;
+  background: conic-gradient(from 0deg,
+    rgba(212, 44, 64, 0) 0deg, rgba(212, 44, 64, 0) 290deg,
+    #C2253A 345deg, #FFD7DC 356deg, rgba(212, 44, 64, 0) 360deg);
+  transform: rotate(200deg);
+  will-change: transform;
+}
+
+.mi__face {
+  position: absolute; inset: 1.5px; border-radius: 25px;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: linear-gradient(180deg, #1F1B1D, #0E0C0D);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: var(--mi-ink); font-size: 15px; font-weight: 500;
+}
+
+/* the sprite's arrow points down; turned to point the way the steps go */
+.mi__face .ico { width: 18px; height: 18px; color: #D0283C; transform: rotate(-90deg); }
+
+/* ========================================================== the welcome
+   The intro's ground (the .mi tokens, backdrop and chart) under a small eye
+   and name, a title, and three choices of equal weight. */
+
+.mw__vig { background: radial-gradient(80% 55% at 50% 30%, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.7)); }
+
+.mw__body {
+  position: relative; z-index: 1; flex: 1; min-height: 0;
+  display: flex; flex-direction: column; align-items: center;
+  padding: clamp(8px, 4vh, 40px) 22px 22px;
+  overflow-y: auto;   /* a short window scrolls rather than clipping a choice */
+}
+
+.mw__lock { flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+
+.mw__eye { width: 64px; height: 64px; overflow: visible; }
+
+.mw__tick { fill: none; stroke: var(--mi-red); stroke-width: 3; stroke-dasharray: 0.9 3.03; }
+
+.mw__name { font-size: 19px; }
+
+.mw__title {
+  width: 100%; margin: 26px 0 8px;
+  font-size: 20px; font-weight: 500; letter-spacing: -0.01em;
+  color: #F4F1EF; text-align: center; white-space: nowrap;
+}
+
+.mw__say {
+  margin: 0 auto; max-width: 300px;
+  font-size: 14px; line-height: 1.6; color: #A8A2A0; text-align: center;
+  text-wrap: balance;
+}
+
+.mw__list { width: 100%; max-width: 360px; margin-top: 22px; display: flex; flex-direction: column; gap: 8px; }
+
+.mw__group {
+  margin: 6px 4px 2px;
+  font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: #8C8481;
+}
+
+/* a choice: obsidian with a red rim; the rim's light is a conic layer that
+   app.js turns once on hover or keyboard focus */
+.mw__row {
+  position: relative; flex: none; width: 100%; height: 62px;
+  border: 0; padding: 0; background: transparent;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 450ms cubic-bezier(0.3, 0.7, 0.4, 1.5);
+}
+
+.mw__row:active { transform: scale(0.98); transition: transform 60ms; }
+
+.mw__row:focus { outline: none; }
+
+.mw__row:focus-visible { outline: 2px solid #E7A9B1; outline-offset: 3px; border-radius: 16px; }
+
+.mw__rim { position: absolute; inset: 0; border-radius: 16px; overflow: hidden; background: #2A1A1D; }
+
+.mw__light {
+  position: absolute; left: 50%; top: 50%;
+  width: 420px; height: 420px; margin: -210px 0 0 -210px;
+  background: conic-gradient(from 0deg,
+    rgba(212, 44, 64, 0) 0deg, rgba(212, 44, 64, 0) 300deg,
+    #C2253A 350deg, #FFD7DC 357deg, rgba(212, 44, 64, 0) 360deg);
+  opacity: 0;
+  will-change: transform;
+}
+
+.mw__face {
+  position: absolute; inset: 1px; border-radius: 15px;
+  background: linear-gradient(180deg, #1C181A, #0E0C0D);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.mw__in { position: relative; display: flex; align-items: center; gap: 14px; height: 100%; padding: 0 16px; }
+
+.mw__mark {
+  flex: none; width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: radial-gradient(circle at 35% 30%, #3A1C21, #1A0F11 75%);
+  box-shadow: inset 0 0 0 1px rgba(195, 28, 46, 0.45);
+  color: #E8DCD9;
+}
+
+.mw__mark .ico { width: 20px; height: 20px; }
+
+.mw__copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+
+.mw__label { font-size: 15px; font-weight: 500; color: #F4F1EF; }
+
+.mw__note {
+  font-size: 12.5px; color: #9C9592;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.mw__chev { flex: none; width: 18px; height: 18px; color: var(--mi-red-hi); will-change: transform; }
+
+/* ===================================================== adding an account
+   The provider's own logo in the astrolabe ring, obsidian fields whose rim
+   lights on focus, the orbiting-bead button. The chart sits faint behind
+   the ring and fades to black over the form. */
+
+.ma__glow {
+  position: absolute; inset: 0; opacity: 0.45;
+  background: radial-gradient(90% 40% at 50% 0%, rgba(140, 16, 28, 0.35), rgba(140, 16, 28, 0) 70%);
+}
+
+.ma #maChart { opacity: 0.7; }
+
+.ma__fade {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(6, 6, 7, 0) 0%, rgba(6, 6, 7, 0.75) 42%, var(--mi-page) 70%);
+}
+
+.ma__top { position: relative; z-index: 2; display: flex; justify-content: flex-end; padding: 2px 12px 0; }
+
+.ma__sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.ma__close {
+  width: 32px; height: 32px; border: 0; border-radius: 50%;
+  display: grid; place-items: center;
+  background: transparent; color: #9C9592; cursor: pointer;
+}
+
+.ma__close:hover { background: #1A1517; color: var(--mi-ink); }
+
+.ma__close .ico { width: 16px; height: 16px; }
+
+.ma__body {
+  position: relative; z-index: 1; flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  padding: 0 22px 20px;
+  overflow-y: auto;
+}
+
+.ma__hero { flex: none; display: flex; flex-direction: column; align-items: center; text-align: center; }
+
+.ma__seal { width: 84px; height: 84px; overflow: visible; color: #E8DCD9; }
+
+.ma__ticks { fill: none; stroke: var(--mi-red); stroke-width: 5; stroke-dasharray: 1 4.97; }
+
+.ma__disc { fill: #120D0F; stroke: var(--mi-red-lo); stroke-width: 1; }
+
+/* closes round the logo when the sign-in goes through */
+.ma__done { fill: none; stroke: var(--mi-red-hi); stroke-width: 2; stroke-dasharray: 195; stroke-dashoffset: 195; }
+
+.ma__name { margin-top: 12px; font-size: 20px; font-weight: 500; color: #F4F1EF; }
+
+.ma__say {
+  margin-top: 6px; max-width: 290px;
+  font-size: 13px; line-height: 1.55; color: #A8A2A0; text-wrap: balance;
+}
+
+.ma__full { margin: 24px 0 0; font-size: 13px; line-height: 1.6; color: #A8A2A0; text-align: center; }
+
+.ma__form { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; margin-top: 22px; }
+
+.ma__field { display: block; }
+
+.ma__cap { display: block; margin: 0 0 6px 2px; font-size: 12px; color: #B5ACA9; }
+
+/* a field: obsidian with a red rim; the rim brightens while it has focus
+   and a conic light (turned once by app.js) runs round it as it takes it */
+.ma__box { position: relative; display: block; height: 48px; }
+
+.ma__rim {
+  position: absolute; inset: 0; border-radius: 12px; overflow: hidden;
+  background: #2A1A1D;
+  transition: background-color 250ms ease;
+}
+
+.ma__light {
+  position: absolute; left: 50%; top: 50%;
+  width: 420px; height: 420px; margin: -210px 0 0 -210px;
+  background: conic-gradient(from 0deg,
+    rgba(212, 44, 64, 0) 0deg, rgba(212, 44, 64, 0) 300deg,
+    #C2253A 350deg, #FFD7DC 357deg, rgba(212, 44, 64, 0) 360deg);
+  opacity: 0;
+  will-change: transform;
+}
+
+.ma__face {
+  position: absolute; inset: 1px; border-radius: 11px;
+  background: linear-gradient(180deg, #141113, #0C0A0B);
+}
+
+.ma__box:focus-within .ma__rim { background: #6E1A26; }
+
+.ma__field.is-bad .ma__rim { background: #B0202F; }
+
+.ma__in {
+  position: relative; z-index: 1;
+  width: 100%; height: 100%; box-sizing: border-box;
+  border: 0; outline: none; background: transparent;
+  padding: 0 14px;
+  color: #F4F1EF; font-size: 14px;
+}
+
+.ma__in--peek { padding-right: 46px; }
+
+.ma__in::placeholder { color: #6E6765; }
+
+.ma__in:disabled { color: #8C8481; }
+
+.ma__peek {
+  position: absolute; z-index: 2; right: 6px; top: 8px;
+  width: 32px; height: 32px; border: 0; border-radius: 50%;
+  display: grid; place-items: center;
+  background: transparent; color: #9C9592; cursor: pointer;
+}
+
+.ma__peek:hover { color: var(--mi-ink); }
+
+.ma__peek:focus-visible, .ma__close:focus-visible, .ma__link:focus-visible, .ma__cancel:focus-visible {
+  outline: 2px solid #E7A9B1; outline-offset: 2px;
+}
+
+.ma__peek .ico { width: 17px; height: 17px; }
+
+/* the form's one line of news, right under the fields */
+.ma__said { margin: -6px 2px 0; font-size: 12px; line-height: 1.5; color: #A8A2A0; }
+
+.ma__said:empty { display: none; }
+
+.ma__said.is-bad { color: #F07A86; }
+
+.ma__said.is-good { color: #9FD8AE; }
+
+.ma__more { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+
+.ma__link {
+  border: 0; background: transparent; padding: 2px;
+  color: #C9787F; font-size: 12.5px; cursor: pointer;
+}
+
+.ma__link:hover { color: #F0A3AA; }
+
+.ma__foot { margin-top: auto; display: flex; flex-direction: column; padding-top: 14px; }
+
+.ma__safe {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin: 0 0 12px; font-size: 12px; color: #8C8481;
+}
+
+.ma__safe .ico { width: 14px; height: 14px; color: var(--mi-red); }
+
+.ma__go { flex: none; width: 100%; }
+
+/* while it asks: still unpressable, but not drawn as broken */
+.ma__go:disabled { cursor: progress; }
+
+.ma__go.is-done .mi__face { background: linear-gradient(180deg, #8E1422, #5E0A14); }
+
+.ma__go.is-done .mi__face .ico { color: #FFFFFF; transform: none; }
+
+.ma__cancel {
+  align-self: center; border: 0; background: transparent;
+  padding: 10px; color: #9C9592; font-size: 13px; cursor: pointer;
+}
+
+.ma__cancel:hover { color: var(--mi-ink); }
+
+/* =============================================== getting servers ready
+   The eye searching over three engraved steps and a degree-scale bar. */
+
+.ms__glow {
+  position: absolute; inset: 0; opacity: 0.55;
+  background: radial-gradient(130% 55% at 50% 108%, rgba(140, 16, 28, 0.45), rgba(140, 16, 28, 0) 62%);
+}
+
+.ms__fade {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(6, 6, 7, 0) 0%, rgba(6, 6, 7, 0.55) 40%, rgba(6, 6, 7, 0.85) 60%);
+}
+
+.ms__body {
+  position: relative; z-index: 1; flex: 1; min-height: 0;
+  display: flex; flex-direction: column; align-items: center;
+  padding: clamp(16px, 6vh, 56px) 26px 22px;
+  overflow-y: auto;
+}
+
+.ms__hero { flex: none; width: 110px; height: 110px; }
+
+.ms__eye { width: 100%; height: 100%; overflow: visible; }
+
+/* closes round the eye once the servers are in */
+.ms__done { fill: none; stroke: var(--mi-red-hi); stroke-width: 1.6; stroke-dasharray: 214; stroke-dashoffset: 214; }
+
+.ms__title {
+  width: 100%; margin: 20px 0 6px;
+  font-size: 20px; font-weight: 500; letter-spacing: -0.01em;
+  color: #F4F1EF; text-align: center; white-space: nowrap;
+}
+
+.ms__say {
+  margin: 0; max-width: 290px; min-height: 44px;
+  font-size: 13.5px; line-height: 1.6; color: #A8A2A0; text-align: center;
+  text-wrap: balance;
+}
+
+/* the steps, on an engraved line */
+.ms__steps { position: relative; width: 100%; max-width: 330px; margin: 28px 0 0; padding: 0; list-style: none; }
+
+.ms__steps::before {
+  content: ''; position: absolute; left: 9px; top: 12px; bottom: 30px; width: 1px;
+  background: repeating-linear-gradient(180deg, #3A2A2D 0 3px, transparent 3px 7px);
+}
+
+.ms__row { position: relative; display: flex; gap: 14px; padding: 0 0 22px; }
+
+.ms__mk { position: relative; flex: none; width: 19px; height: 19px; margin-top: 1px; }
+
+.ms__m { position: absolute; inset: 0; width: 19px; height: 19px; overflow: visible; display: none; }
+
+.ms__row[data-at='done'] .ms__m--done,
+.ms__row[data-at='now'] .ms__m--now,
+.ms__row[data-at='todo'] .ms__m--todo,
+.ms__row[data-at='fail'] .ms__m--fail { display: block; }
+
+.ms__copy { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.ms__name { font-size: 14px; line-height: 1.45; color: #6E6765; transition: color 300ms ease; }
+
+.ms__row[data-at='done'] .ms__name { color: #CFC6C3; }
+
+.ms__row[data-at='now'] .ms__name { color: #F4F1EF; }
+
+.ms__row[data-at='fail'] .ms__name { color: #F07A86; }
+
+.ms__detail { margin-top: 6px; font-size: 12px; color: #A8A2A0; }
+
+.ms__detail:empty { display: none; }
+
+/* the progress: a ruler with ten degrees, filled red from the left */
+.ms__scale { position: relative; display: block; height: 6px; margin-top: 8px; overflow: hidden; }
+
+.ms__row:not([data-at='now']):not([data-at='done']) .ms__scale { opacity: 0.35; }
+
+.ms__ticksbar {
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(#3A2A2D, #3A2A2D) 0 5px / 100% 1px no-repeat,
+    repeating-linear-gradient(90deg, #4A2A2F 0 1px, transparent 1px 10%) 0 0 / 100% 5px no-repeat;
+}
+
+.ms__fill {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+  background: var(--mi-red-hi);
+  transform: scaleX(0.02); transform-origin: left center;
+  transition: transform 300ms linear;
+  will-change: transform;
+}
+
+.ms__err { width: 100%; max-width: 330px; margin: 0; padding-left: 33px; font-size: 12.5px; line-height: 1.5; color: #F07A86; }
+
+.ms__again { width: 100%; max-width: 360px; margin-top: auto; padding-top: 16px; display: flex; flex-direction: column; }
+
+.ms__go { flex: none; width: 100%; }
+
+.ms__go .ms__redo { transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mi__steps i, .mi__go, .mi__go:active, .mw__row, .mw__row:active, .ma__rim,
+  .ms__name, .ms__fill { transition: none; }
+}
+
+
+
+/* --------------------------- home: the astrolabe ring and the connected colour */
+
+/* Mirage keeps to black, red and white: connected is white (not green), the
+   ring and its bead are red at rest. One token, so it can be changed in one
+   place (preview/DECISIONS.md). */
+:root { --mi-on: #F4F1EF; --mi-on-soft: rgba(244, 241, 239, 0.22); }
+
+.power__astro {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  overflow: visible; pointer-events: none;
+  will-change: transform;
+}
+
+.power__deg { fill: none; stroke: #A3141F; stroke-width: 4.5; stroke-dasharray: 1.1 4.27; opacity: 0.85; }
+
+.power__bead { fill: #C21C2E; transition: fill 250ms ease; }
+
+.power[data-mode='busy'] .power__bead,
+.power[data-mode='on'] .power__bead { fill: #FFFFFF; }
+
+.power[data-mode='on'] .power__deg { opacity: 1; }
+
+.power[data-mode='busy'] .power__arc { opacity: 0; }
+
+.power__disc {
+  background: radial-gradient(circle at 32% 26%, #2a1d1f, #120d0e 72%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 0 0 1px rgba(110, 13, 22, 0.9),
+    0 14px 30px -6px rgba(0, 0, 0, 0.6);
+}
+
+.power[data-mode='on'] .power__disc {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 0 1px var(--mi-on-soft),
+    0 14px 30px -6px rgba(0, 0, 0, 0.6);
+}
+
+.power[data-mode='on'] .power__ico { color: var(--mi-on); }
+
+.power[data-mode='busy'] .power__ico { color: #F0A8B0; }
+
+.power__wave i { border-color: var(--mi-on-soft); }
+
+.power[data-mode='on']::before { background: radial-gradient(closest-side, rgba(244, 241, 239, 0.07), transparent); }
+
+.head .status[data-state='on'], .secure[data-state='on'] { color: var(--mi-on); }
+
+.head .status[data-state='busy'], .secure[data-state='busy'] { color: #F0A8B0; }
+
+.secure[data-state='off'] { color: #C2253A; }
+
+.head .live { background: var(--mi-on); }
+
+.head .live__halo { background: var(--mi-on-soft); }
+
+/* the pin on the country the traffic leaves from: Mirage's white, not green */
+.pin {
+  background: var(--mi-on);
+  box-shadow: 0 0 0 6px var(--mi-on-soft), 0 0 14px rgba(244, 241, 239, 0.45);
+}
+
+
+/* ------------------------------------------- home: layout 7 (2026-11-13) */
+
+/* Chosen from eight wireframes: no button at the top - the status, the time
+   and the protection line stay there as words; the world fills the middle;
+   at the foot the place card, then the Connect button, then the three ways
+   out as three cards side by side (never a menu). Only where things sit
+   changed here; how each part looks is as it was. */
+.hero .power { display: none; }
+
+.app .card { display: flex; flex-direction: column; gap: 10px; }
+
+.app .card .go { display: grid; order: 1; height: 54px; font-size: 16px; }
+
+.app .card .way { order: 2; margin: 0; }
+
+.app .card .way__row { display: block; }
+
+.app .card #wayInfo, .dd--seg .dd__field, .dd--seg .dd__check { display: none; }
+
+.dd--seg { position: relative; }
+
+.dd--seg .dd__list {
+  position: relative !important; inset: auto !important; display: flex !important; gap: 8px;
+  margin: 0; padding: 0; transform: none !important; opacity: 1 !important; visibility: visible !important;
+  background: none; border: 0; box-shadow: none; backdrop-filter: none; max-height: none; overflow: visible;
+}
+
+.dd--seg .dd__opt {
+  flex: 1; min-width: 0; position: relative; z-index: 1;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 11px 12px; border-radius: 16px; cursor: pointer;
+  background: var(--glass); border: 1px solid var(--glass-edge); border-top-color: var(--glass-top);
+  backdrop-filter: blur(18px);
+}
+
+.dd--seg .dd__opt[hidden] { display: none; }
+
+.dd--seg .dd__opt::before, .dd--seg .dd__opt::after { display: none; }
+
+.dd--seg .dd__name { font-size: 13px; line-height: 17px; font-weight: 600; color: var(--text); white-space: nowrap; }
+
+.dd--seg .dd__hint { font-size: 11px; line-height: 15px; color: var(--text-3); white-space: normal; }
+
+/* the chosen card: one ring that slides from card to card */
+.dd--seg .dd__glow {
+  position: absolute; left: 0; top: 0; right: auto; bottom: auto; z-index: 2; pointer-events: none;
+  border-radius: 16px; background: none; border: 1.5px solid var(--text-2);
+}
+
+.dd--seg .dd__glow::before, .dd--seg .dd__glow::after { display: none; }
+
+/* No card over the globe once connected (flag, name, address): the place card
+   at the foot already says it (2026-11-13). */
+.hero .tip { display: none !important; }
+
+/* ------------------------------------------------------ the top bar, in red */
+
+/* The mark and the bar's buttons in Mirage's red, bright enough to read on the
+   dark page: they had the old muted greys and sank into it (2026-11-13). */
+.bar .bar__disc { fill: #3A1216; }
+
+.bar .bar__ring { stroke: #E0303F; }
+
+.bar .bar__bead { fill: #FF5A6C; }
+
+.bar .bar__name { color: #F4F1EF; font-weight: 600; }
+
+.bar .icon { color: #E0303F; }
+
+.bar .icon:hover { color: #FF6B7A; background: rgba(194, 28, 46, 0.16); border-color: rgba(224, 48, 63, 0.35); }
+
+.bar .icon--shut:hover { background: #C21C2E; color: #FFFFFF; }
+
+.bar .bar__win { border-left-color: rgba(224, 48, 63, 0.25); }
+
+/* The home's dark scrim (.hero::before, fixed over the whole window so the
+   words read over the globe) was painting over the bar too: the bar is lifted
+   above it. */
+.bar { position: relative; z-index: 2; }
+
+/* the bar's mark is Mirage's eye, and its word MIRAGE in Cinzel */
+.bar .bar__logo--eye { width: 34px; height: 24px; flex: 0 0 34px; }
+
+.bar .bar__name { font-family: 'Cinzel Mirage', serif; font-weight: 500; font-size: 13px; letter-spacing: 0.3em; text-transform: uppercase; }
+
+/* the three way-out cards: their words centred */
+.dd--seg .dd__opt { align-items: center; text-align: center; }

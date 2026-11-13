@@ -60,9 +60,17 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
     private var ringCount = 0
     private var coneVao = 0
     private var blank = 0
+    /** Every country's land, equirectangular, one byte a texel: what the dots are drawn on. */
+    private var worldMask = 0
+    /** This frame's pixels to the dp and height, for the dots' pitch. */
+    private var frameDp = 1f
+    private var frameH = 1
 
     private lateinit var borders: Lines
     private lateinit var circle: Lines
+    /** The faint network over the planet: the larger countries' middles, each tied to its nearest two. */
+    private lateinit var web: Lines
+    private var nodes: List<V3> = emptyList()
     private var outlineO: Pair<String, Lines>? = null
     private var outlineD: Pair<String, Lines>? = null
     private var arcLines: Pair<Stage.Arc, Lines>? = null
@@ -80,8 +88,12 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
         GLES30.glUniform1i(planet.u("uMaskD"), 1)
         GLES30.glUniform1i(planet.u("uFlagO"), 2)
         GLES30.glUniform1i(planet.u("uFlagD"), 3)
+        GLES30.glUniform1i(planet.u("uWorld"), 4)
+        GLES30.glUniform1f(planet.u("uFlagW"), FLAG_W)
 
-        buildSphere(96, 64)
+        buildSphere(128, 96)
+        worldMask = buildWorldMask()
+        buildWeb()
         // The quad every line segment is an instance of: x = 0 at the segment's start, 1 at its end; y = the side.
         quadVbo = buffer(floatArrayOf(0f, -1f, 0f, 1f, 1f, -1f, 1f, 1f))
         spriteVao = vao { bind(buffer(floatArrayOf(-1f, -1f, -1f, 1f, 1f, -1f, 1f, 1f)), 0, 2) }
@@ -111,6 +123,8 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
     fun draw(stage: Stage, w: Int, h: Int, dp: Float, light: Boolean, bg: FloatArray) {
         val (view, proj) = stage.camera()
         val vp = Mat.mul(proj, view)
+        frameDp = dp
+        frameH = h
         GLES30.glViewport(0, 0, w, h)
         GLES30.glClearColor(bg[0], bg[1], bg[2], 1f)
         GLES30.glDepthMask(true)
@@ -141,9 +155,15 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
         GLES30.glUniformMatrix4fv(line.u("uVP"), 1, false, vp, 0)
         GLES30.glUniform2f(line.u("uView"), w.toFloat(), h.toFloat())
 
-        // Every border, faint.
-        if (light) drawLines(borders, IDENTITY, 1.0012f, max(1.5f, 0.8f * dp), 0x6B7486, 0.7f)
-        else drawLines(borders, IDENTITY, 1.0012f, max(1.5f, 0.8f * dp), tone.peri, 0.72f)
+        // Every border, barely there: the dots draw the land now, the borders only part it.
+        if (light) drawLines(borders, IDENTITY, 1.0012f, max(1f, 0.6f * dp), 0x6B7486, 0.22f)
+        else drawLines(borders, IDENTITY, 1.0012f, max(1f, 0.6f * dp), tone.peri, 0.16f)
+
+        // The network, from far enough out to read as one; it fades as the camera comes down.
+        val webAlpha = smoothstep(stage.dist, 1.35f, 2.6f)
+        if (webAlpha > 0.01f) {
+            drawLines(web, IDENTITY, 1.012f, max(1f, 0.7f * dp), if (light) 0x4C63B8 else 0xB23440, 0.20f * webAlpha)
+        }
 
         // The orbits, once the camera is far enough out to see them.
         if (stage.far > 0.003f) {
@@ -170,8 +190,10 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
             }
         }
 
-        // The signal's arc.
-        val arc = stage.arc
+        // The signal's arc - not drawn any more (Mirage, 2026-11-13, as on the
+        // desktop): the camera's zoom out and in is the journey. The stage still
+        // keeps the arc for its timing.
+        val arc = if (DRAW_ARC) stage.arc else null
         if (arc != null) {
             val l = arcOf(arc)
             val n = (arc.segments * arc.drawn).toInt()
@@ -190,6 +212,14 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
         GLES30.glUniformMatrix4fv(sprite.u("uV"), 1, false, view, 0)
         GLES30.glUniformMatrix4fv(sprite.u("uP"), 1, false, proj, 0)
         GLES30.glBindVertexArray(spriteVao)
+        // The network's nodes: small glints, sized to the camera's height so they stay points.
+        if (webAlpha > 0.01f) {
+            val size = 0.0065f * stage.dist
+            for ((i, p) in nodes.withIndex()) {
+                val twinkle = 0.55f + 0.45f * sin(i * 1.7f + (android.os.SystemClock.uptimeMillis() % 100_000L) / 900f)
+                dot(p * 1.012f, size, if (light) 0x4C63B8 else 0xF2B8BE, 0.75f * webAlpha * twinkle)
+            }
+        }
         for (o in stage.orbits) {
             val m = Mat.rotationXYZ(o.tilt[0], o.spin, o.tilt[2])
             val c = tone.orbit[o.tone]
@@ -219,6 +249,17 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
         GLES30.glUniform1f(planet.u("uRed"), stage.red)
         fill("O", 0, 2, stage.fillOCode, stage.fillO, stage.landO, stage)
         fill("D", 1, 3, stage.fillDCode, stage.fillD, stage.landD, stage)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE4)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, worldMask)
+        // The dots' pitch: about DOT_PITCH_DP on screen at the middle of the view, in degrees
+        // of the surface under it, as a power-of-two step of MIN_CELL and how far to the next.
+        val visible = 2f * (stage.dist - 1f).coerceAtLeast(0.02f) * kotlin.math.tan(FOV / 2f * D2R) / D2R
+        val cell = (DOT_PITCH_DP * frameDp * visible / max(1, frameH)).coerceIn(MIN_CELL, MAX_CELL)
+        val level = kotlin.math.log2(cell / MIN_CELL)
+        val whole = kotlin.math.floor(level)
+        val f = level - whole
+        GLES30.glUniform1f(planet.u("uCell"), MIN_CELL * Math.pow(2.0, whole.toDouble()).toFloat())
+        GLES30.glUniform1f(planet.u("uCellMix"), f * f * (3f - 2f * f))
         GLES30.glBindVertexArray(sphereVao)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, sphereCount, GLES30.GL_UNSIGNED_SHORT, 0)
         GLES30.glEnable(GLES30.GL_BLEND)
@@ -309,7 +350,8 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
             p.close()
             canvas.drawPath(p, paint)
         }
-        val mask = texture(bmp)
+        // With mip levels, so the country's edge holds still when it is small on screen.
+        val mask = texture(bmp, mipmaps = true)
         bmp.recycle()
         val flag = (if (flagHidden(context, code)) null else mapFlag(code))?.let { bmp -> texture(bmp, mipmaps = true).also { bmp.recycle() } }
             ?: texture(flagBitmap(context, code)?.asAndroidBitmap(), grey = true)
@@ -366,6 +408,104 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         return t[0]
+    }
+
+    /**
+     * The whole world's land as one equirectangular mask, a byte a texel
+     * (GL_R8): every ring filled white on black. Made once per context. A ring
+     * that crosses the antimeridian is kept continuous by unwrapping its
+     * longitudes, and every ring is drawn again a world to either side so the
+     * part that runs off one edge comes back in at the other.
+     */
+    private fun buildWorldMask(): Int {
+        val most = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, most, 0)
+        val w = min(MASK_W, max(2048, most[0]))
+        val h = w / 2
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8)
+        val canvas = Canvas(bmp)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.FILL }
+        for (r in world.rings) {
+            val n = r.size / 2
+            if (n < 3) continue
+            val p = Path()
+            var shift = 0f
+            var prev = r[0]
+            for (k in 0 until n) {
+                var lon = r[k * 2] + shift
+                if (k > 0) {
+                    if (lon - prev > 180f) { shift -= 360f; lon -= 360f }
+                    else if (lon - prev < -180f) { shift += 360f; lon += 360f }
+                }
+                prev = lon
+                val x = (lon + 180f) / 360f * w
+                val y = (90f - r[k * 2 + 1]) / 180f * h
+                if (k == 0) p.moveTo(x, y) else p.lineTo(x, y)
+            }
+            p.close()
+            for (dx in floatArrayOf(0f, w.toFloat(), -w.toFloat())) {
+                canvas.save()
+                canvas.translate(dx, 0f)
+                canvas.drawPath(p, paint)
+                canvas.restore()
+            }
+        }
+        val px = ByteBuffer.allocateDirect(bmp.byteCount).order(ByteOrder.nativeOrder())
+        bmp.copyPixelsToBuffer(px)
+        px.position(0)
+        val rowBytes = bmp.rowBytes
+        bmp.recycle()
+        val t = IntArray(1)
+        GLES30.glGenTextures(1, t, 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE7)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        // A padded row (never, at these widths, but cheap to honour) is skipped over.
+        if (rowBytes != w) GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, rowBytes)
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, w, h, 0,
+            GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, px)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+        // Mip levels (a third more of a byte a texel): the flat land reads the
+        // mask at every fragment, and without them the coasts shimmer with the
+        // whole planet in view.
+        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR_MIPMAP_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_REPEAT)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        return t[0]
+    }
+
+    /**
+     * The network the reference draws over its planet: the middle of every
+     * country big enough to matter, each tied to its two nearest within ~30
+     * degrees, each tie a short great-circle run of segments. Built once.
+     */
+    private fun buildWeb() {
+        val big = world.countries.values
+            .filter { (it.box[2] - it.box[0]) * (it.box[3] - it.box[1]) > 40f }
+            .sortedBy { it.code }
+        val pts = big.map { dirOf(it.mid[0], it.mid[1]) }
+        nodes = pts
+        val out = ArrayList<Float>(pts.size * 2 * WEB_STEPS * 6)
+        val seen = HashSet<Long>()
+        for (i in pts.indices) {
+            val near = pts.indices.filter { it != i }.sortedBy { pts[i].angleTo(pts[it]) }.take(2)
+            for (j in near) {
+                if (pts[i].angleTo(pts[j]) > 0.52f) continue
+                val key = min(i, j).toLong() * 100_000L + max(i, j)
+                if (!seen.add(key)) continue
+                var a = pts[i]
+                for (k in 1..WEB_STEPS) {
+                    val b = pts[i].lerp(pts[j], k.toFloat() / WEB_STEPS).normalized()
+                    out.add(a.x); out.add(a.y); out.add(a.z)
+                    out.add(b.x); out.add(b.y); out.add(b.z)
+                    a = b
+                }
+            }
+        }
+        web = lines(out.toFloatArray())
     }
 
     // -- geometry ------------------------------------------------------------------------------
@@ -539,9 +679,24 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
 
     companion object {
         private const val CIRCLE = 180
+        /** The map flags' width (assets/flags43 are 512 x 384), for the dots' mip level. */
+        private const val FLAG_W = 512f
+        /** The world mask's width at most; its height is half. */
+        /* 2048 across: a quarter of the memory and the time of 4096 when the
+           mask is built, which a weak phone feels on the first frame. */
+        private const val MASK_W = 2048
+        /** How far apart the dots are on screen, in dp, at the middle of the view. */
+        private const val DOT_PITCH_DP = 4.4f
+        /** The finest and the coarsest dot pitch, degrees of the surface. */
+        private const val MIN_CELL = 0.08f
+        private const val MAX_CELL = 3.2f
+        /** Segments in each tie of the network. */
+        private const val WEB_STEPS = 10
         private val IDENTITY = Mat.identity()
         private val RED = floatArrayOf(1f, 0.42f, 0.48f)
-        private val NEON = Tone(0x8AA6FF, 0x1ED760, intArrayOf(0x8AA6FF, 0x62E6F2, 0xCF9BFF))
+        private const val DRAW_ARC = false
+        /* Mirage's dark reds where the Midnight neon was, and the connection in white. */
+        private val NEON = Tone(0xC21C2E, 0xF4F1EF, intArrayOf(0xC21C2E, 0x8E1622, 0xE0606E))
         private val INK = Tone(0x4C63B8, 0x139A48, intArrayOf(0x4C63B8, 0x1E8C98, 0x8A54C4))
 
         private fun chan(hex: Int, channel: Int) = ((hex shr (16 - 8 * channel)) and 0xFF) / 255f

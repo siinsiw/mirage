@@ -270,6 +270,38 @@ fun Root(core: RelayCore) {
             onReconnect = { if (conn.mode == Mode.ON) connect(if (way == Way.SERVER) "auto" else picked) },
         )
 
+        // The card at the top of the server list: where the traffic leaves now, or what is picked.
+        val nowCode = run {
+            val measured = if (conn.mode == Mode.ON) seen?.country?.lowercase().orEmpty() else ""
+            when {
+                measured.length == 2 -> measured
+                way == Way.SERVER || picked == "auto" -> ""
+                else -> countryOfPick(picked).lowercase().takeIf { it.length == 2 } ?: ""
+            }
+        }
+        val nowName = when {
+            conn.mode == Mode.ON && nowCode.isNotEmpty() -> countryName(nowCode)
+            way == Way.SERVER -> "Your server"
+            picked == "auto" -> "Any country"
+            else -> nameOfPick(picked, names, countries.associate { it.code to it.cities })
+        }
+        val nowIp = if (conn.mode == Mode.ON) seen?.ip ?: "checking…"
+            else realIp?.ip?.let { "Your address $it" }.orEmpty()
+        val actNow: () -> Unit = {
+            when (conn.mode) {
+                Mode.BUSY, Mode.ON -> core.disconnect()
+                else -> connect(if (way == Way.SERVER) "auto" else picked)
+            }
+        }
+        val now = PickerNow(
+            mode = conn.mode, code = nowCode, name = nowName, ip = nowIp,
+            down = traffic.downRate, up = traffic.upRate,
+            ping = countries.firstOrNull { it.code.equals(nowCode, ignoreCase = true) }?.ping,
+            canAct = conn.mode == Mode.BUSY || conn.mode == Mode.ON ||
+                (if (way == Way.PROVIDER) hasCredentials && serverCount > 0 else tunnel.ready),
+            onAct = actNow,
+        )
+
         Picker(
             open = over == Over.PICKER,
             m = PickerModel(
@@ -291,6 +323,7 @@ fun Root(core: RelayCore) {
                 onTestAll = { core.quickTest().let { if (!it.ok) Toasts.show(it.text) } },
                 onOpen = { if (core.quickDue()) core.quickTest() },
                 connects = conn.mode != Mode.BUSY,
+                now = now,
             ),
             onClose = { over = Over.NONE },
         )
