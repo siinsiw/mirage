@@ -3158,11 +3158,16 @@ class Api:
                 return self._test_ss(client)
             by_address = tunnel.is_address(client.domain)
             if by_address:
-                # Taken the first time, then required: a server showing
-                # another certificate is refused here, before gost is.
+                # Confirmed the first time (or carried by the key), then
+                # required: a server showing another certificate is refused
+                # here, before gost is.
                 try:
                     client.ensure_cert()
                     client.check_cert()
+                except tunnel.PinUnconfirmed as e:
+                    return {'ok': False, 'error': str(e),
+                            'verdict': 'pin-confirm',
+                            'fingerprint': e.fingerprint}
                 except tunnel.PinChanged as e:
                     return {'ok': False, 'error': str(e), 'verdict': 'pin-changed'}
                 except OSError as e:
