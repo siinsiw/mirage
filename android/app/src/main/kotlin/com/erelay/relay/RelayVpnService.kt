@@ -888,13 +888,16 @@ class RelayVpnService : VpnService() {
                 // first time used to be handed the API password - and every
                 // provider credential the exit search sends - before anything
                 // had checked its certificate; the core now refuses that
-                // outright. So it is tested first, plainly, and its
-                // certificate kept; ServerPin.call below handles the case
-                // where the core still says there is none.
+                // outright. A server whose certificate has not been confirmed
+                // under Settings is stopped here with the instruction, in
+                // full; ServerPin.call below says the same should the core
+                // still find no pin.
                 try {
                     ServerPin.ensure(applicationContext, cfg)
                 } catch (e: Exception) {
-                    fail(a, "$domain did not answer: " + (e.message ?: e.toString()).take(140))
+                    val why = e.message ?: e.toString()
+                    fail(a, if (why == ServerPin.UNCONFIRMED) "$domain: $why."
+                            else "$domain did not answer: " + why.take(140))
                     return
                 }
                 if (!a.current) return

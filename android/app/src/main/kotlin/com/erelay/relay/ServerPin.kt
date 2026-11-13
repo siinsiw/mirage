@@ -28,12 +28,25 @@ object ServerPin {
 
     private val ADDRESS = Regex("""\d{1,3}(\.\d{1,3}){3}""")
 
+    // An IPv6 literal, bracketed or not, with an optional zone. At least two
+    // colons: every IPv6 address has them, and no host name does - which
+    // keeps a name made only of hex letters ("cafe.be") from passing.
+    private val ADDRESS6 = Regex("""\[?[0-9A-Fa-f]*:[0-9A-Fa-f]*:[0-9A-Fa-f:.]*(%[\w.]+)?\]?""")
+
     /** What a server by address with no confirmed certificate is answered with. */
     const val UNCONFIRMED = "its certificate has not been confirmed yet. Under Settings → Connection " +
         "press Test and confirm the certificate it shows, or paste the server's relay:// key"
 
-    /** Reached by an IPv4 address rather than by a name - what needs a kept pin. */
-    fun isAddress(host: String): Boolean = ADDRESS.matches(host.trim())
+    /**
+     * Reached by an address (IPv4 or IPv6) rather than by a name - what needs
+     * a kept pin. The core's own test is net.ParseIP, which takes both; an
+     * IPv6 server this said no to was never shown its certificate, and the
+     * core went on refusing it for having no pin.
+     */
+    fun isAddress(host: String): Boolean {
+        val h = host.trim()
+        return ADDRESS.matches(h) || ADDRESS6.matches(h)
+    }
 
     /** Whether [e] is the core saying "no pin yet - test first". */
     fun isNoPin(e: Throwable): Boolean {

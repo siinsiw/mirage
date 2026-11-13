@@ -33,6 +33,7 @@ func main() {
 	upload := flag.Int("upload", 0, "then POST this many bytes through the tunnel, -runs times, and time it")
 	port := flag.Int("port", 443, "the TLS port the server listens on")
 	runs := flag.Int("runs", 3, "how many uploads")
+	pin := flag.String("pin", "", "for a server by IP: the certificate sha256 the installer printed")
 	flag.Parse()
 
 	if *passwordFile != "" {
@@ -69,7 +70,22 @@ func main() {
 
 	t := core.NewTunnelServer(*domain, *password, edges, core.TunnelMode(*mode))
 	t.Port = *port
+	t.Pin = strings.ToLower(strings.TrimSpace(*pin))
 	defer t.Close()
+
+	// A server by IP is not dialled without a pin. Without one, say what it
+	// shows - the handshake sends nothing - so it can be compared with the
+	// installer's "certificate sha256" line and passed back with -pin.
+	if t.IsAddress() && t.Pin == "" {
+		seen, err := t.PeekPin(ctx, *timeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  pin      %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("  pin      the server shows sha256 %s\n", seen)
+		fmt.Println("  pin      compare it with the installer's \"certificate sha256\" line, then run again with -pin")
+		os.Exit(2)
+	}
 
 	fmt.Printf("  mode     %s\n", *mode)
 	started := time.Now()

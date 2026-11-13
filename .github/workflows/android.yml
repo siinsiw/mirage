@@ -114,25 +114,16 @@ jobs:
             echo "::error::lists/ and mobile/core/lists/ differ - copy the changed .txt across"
           fi
           exit "$status"
-      # Not "the file is exactly what the generator writes", because today it
-      # is not: countries.go also carries the continent tables, which the
-      # generator does not emit yet, and gofmt's blank lines. So the question
-      # asked is the one that matters - is every line the generator writes
-      # from countries.py in the committed file, in order? A country added
-      # or renamed in the Python and not regenerated fails it. Run on a copy,
-      # so the tree is not written to. Once the generator emits the whole
-      # file, this becomes `git diff --exit-code`.
-      - name: countries.go has everything the generator writes
+      # The generator writes the whole file, continent tables and gofmt's
+      # blank lines included, so the committed file must be exactly what it
+      # writes from countries.py. Written to a temporary path (its first
+      # argument), so the tree is not touched.
+      - name: countries.go is what the generator writes
         run: |
           tmp=$(mktemp -d)
-          mkdir -p "$tmp/app" "$tmp/mobile/tools" "$tmp/mobile/core"
-          cp app/countries.py "$tmp/app/"
-          cp mobile/tools/gen-countries.py "$tmp/mobile/tools/"
-          python3 "$tmp/mobile/tools/gen-countries.py"
-          missing=$(diff "$tmp/mobile/core/countries.go" mobile/core/countries.go | grep '^<' || true)
-          if [ -n "$missing" ]; then
-            printf '%s\n' "$missing"
-            echo "::error::mobile/core/countries.go is behind app/countries.py - run python mobile/tools/gen-countries.py and commit the result"
+          python3 mobile/tools/gen-countries.py "$tmp/countries.go"
+          if ! diff -u mobile/core/countries.go "$tmp/countries.go"; then
+            echo "::error::mobile/core/countries.go is not what app/countries.py makes - run python mobile/tools/gen-countries.py and commit the result"
             exit 1
           fi
       - name: vet
