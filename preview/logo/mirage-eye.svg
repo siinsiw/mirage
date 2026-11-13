@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Mirage">
+  <!-- Mirage, the astrolabe eye. Master drawing approved 2026-11-13: the
+       first astrolabe of the six variations, not the rounder one that fills
+       the tile and not the narrow hunter-eye one. Black tile, dark red mark;
+       the eye spans x 22-98 and y 40-80. The iris is an astrolabe: 24 ticks,
+       an inner ring, the pupil cut by a horizon line, a bead at the upper
+       right. The lower lid is the reflection, dashed in a darker red. -->
+  <rect width="120" height="120" rx="26" fill="#0A0909"/>
+  <path d="M22 60 Q60 20 98 60" fill="none" stroke="#A3141F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M22 60 Q60 100 98 60" fill="none" stroke="#6E0D16" stroke-width="3" stroke-linecap="round" stroke-dasharray="1.5 4.5"/>
+  <circle cx="60" cy="60" r="15" fill="none" stroke="#A3141F" stroke-width="3" stroke-dasharray="0.9 3.03"/>
+  <circle cx="60" cy="60" r="11.5" fill="none" stroke="#A3141F" stroke-width="1.4"/>
+  <circle cx="60" cy="60" r="6" fill="#A3141F"/>
+  <rect x="44" y="59.4" width="32" height="1.2" fill="#0A0909"/>
+  <circle cx="70.6" cy="49.4" r="2.4" fill="#A3141F"/>
+</svg>

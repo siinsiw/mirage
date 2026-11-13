@@ -68,7 +68,6 @@ const state = {
   favourites: [],       // picker codes kept at the top of the list
   sortBy: 'ping',       // ping | name | load
   openCities: new Set(),  // countries showing their cities
-  openContinents: new Set(),  // continents opened in the picker this time
   openExits: null,      // which row has its individual exits showing
   exits: {},            // and those exits, once fetched, by that row's code
   sources: null,        // which pools there are, and which one is in use
@@ -379,10 +378,6 @@ function openPicker() {
   $('searchMain').classList.remove('is-typed');
   $('pickAny').hidden = !state.picked || state.picked === 'auto';
   state.cursor = 0;
-  // Every open of the sheet starts with the continents shut: a continent,
-  // then a country, then a server - three short choices instead of one long
-  // scroll.
-  state.openContinents.clear();
   drawList('');
   $('picker').showModal();
   slideSort();
@@ -418,20 +413,6 @@ function openPicker() {
   requestAnimationFrame(sample);
 }
 
-/* The countries are grouped by continent, in this order. A country the
-   catalogue gave no continent to (or one this list has not heard of) goes
-   under "Elsewhere" rather than vanishing. */
-const CONTINENTS = ['Europe', 'Middle East', 'Asia', 'North America',
-  'South America', 'Africa', 'Oceania', 'Antarctica', 'Elsewhere'];
-const continentOf = (c) => (CONTINENTS.includes(c.continent) ? c.continent : 'Elsewhere');
-// Each drawer's mark in the sprite (#i-ct-…), the same drawings as Android's.
-const CONTINENT_MARK = {
-  Europe: 'europe', 'Middle East': 'middle-east', Asia: 'asia',
-  'North America': 'north-america', 'South America': 'south-america',
-  Africa: 'africa', Oceania: 'oceania', Antarctica: 'antarctica',
-  Elsewhere: 'elsewhere', Starred: 'starred',
-};
-
 /* What the list on screen was built from. Nothing about it changes between
    one open and the next unless the query or the chosen country has, so it is
    only built when one of them has. The provider selection belongs in here
@@ -440,7 +421,6 @@ function listKey(q) {
   return `${q}|${state.picked}|${state.countries.length}`
     + `|${(state.providers || []).join(',')}`
     + `|${[...state.openCities].sort().join(',')}`
-    + `|${[...state.openContinents].sort().join(',')}`
     + `|${state.sortBy}|${(state.favourites || []).join(',')}`;
 }
 
@@ -483,16 +463,32 @@ function drawList(query) {
     return;
   }
 
-  /* The groups: starred places first when there are any, then continents in
-     their order. Search runs across all of them and a group with nothing in
-     it is not drawn. */
+  /* The sections, by what is useful rather than by geography - the question
+     here is "where do I connect", and the answer is rarely "which continent":
+       Starred        your own short list, first
+       Fastest now    the few quickest measured round trips (when two or more were timed)
+       All locations  everything else, in the order the sort chose
+       Not answering  the places whose every exit turned the test away, at the foot
+     A search is one list of results. Every section is open; an empty one is
+     not drawn. */
   const groups = [];
-  const starred = found.filter(starredIn);
-  if (starred.length) groups.push(['Starred', starred]);
-  const others = found.filter((c) => !starredIn(c));
-  for (const name of CONTINENTS) {
-    const items = others.filter((c) => continentOf(c) === name);
-    if (items.length) groups.push([name, items]);
+  const deadHere = (c) => !!(c.tested && !c.ok && c.tested >= c.count);
+  if (q) {
+    groups.push(['Results', found, found.length === 1 ? '1 match' : `${found.length} matches`]);
+  } else {
+    const starred = found.filter(starredIn);
+    if (starred.length) groups.push(['Starred', starred, 'Your short list']);
+    const others = found.filter((c) => !starredIn(c));
+    const live = others.filter((c) => !deadHere(c));
+    const quick = live.filter((c) => c.tested && c.ok && c.ping !== null && c.ping !== undefined)
+      .sort((a, b) => a.ping - b.ping);
+    const fastest = quick.length >= 2 ? quick.slice(0, 4) : [];
+    if (fastest.length) groups.push(['Fastest now', fastest, 'The quickest round trips from here, just measured']);
+    const rest = live.filter((c) => !fastest.includes(c));
+    const said = ({ ping: 'Quickest first', load: 'Least busy first', name: 'A to Z' })[state.sortBy || 'ping'] || '';
+    if (rest.length) groups.push([fastest.length || starred.length ? 'All locations' : 'Locations', rest, said]);
+    const dead = others.filter(deadHere).sort((a, b) => a.name.localeCompare(b.name));
+    if (dead.length) groups.push(['Not answering', dead, 'Their exits turned the last test away']);
   }
 
   // Fastest first is only honest about the countries that were timed; within
@@ -501,49 +497,38 @@ function drawList(query) {
   const timed = (c) => (state.freeze ? state.freeze.tested.has(c.code) : !!c.tested);
 
   const jobs = [];
-  for (const [name, items] of groups) {
+  for (const [name, items, note] of groups) {
     const sec = document.createElement('section');
     sec.className = 'grp';
     sec.dataset.group = name;
-    // A continent is a drawer, shut until it is asked for. Starred places are
-    // the short list on purpose and stay open, and so does everything while a
-    // search is typed - a result inside a shut drawer is a result not found.
-    const fixed = !!q || name === 'Starred';
-    const open = fixed || state.openContinents.has(name);
-    const head = document.createElement(fixed ? 'p' : 'button');
+    // A heading, not a control: the title, how many, and why these are together.
+    const head = document.createElement('p');
     head.className = 'gh';
-    if (!fixed) {
-      head.type = 'button';
-      head.dataset.continent = name;
-      head.setAttribute('aria-expanded', String(open));
-    }
-    // The continent's own mark in a well, then its name and how many.
-    const well = document.createElement('span');
-    well.className = 'gh__well';
-    well.setAttribute('aria-hidden', 'true');
-    well.append(icon(`#i-ct-${CONTINENT_MARK[name] || 'elsewhere'}`, 'ico'));
+    head.setAttribute('role', 'heading');
+    head.setAttribute('aria-level', '3');
     const hn = document.createElement('span');
     hn.className = 'gh__name';
     hn.textContent = name;
     const hc = document.createElement('span');
     hc.className = 'gh__n';
     hc.textContent = String(items.length);
-    head.append(well, hn, hc);
-    if (!fixed) {
-      const chev = icon('#i-chev-down', 'ico gh__chev');
-      chev.setAttribute('aria-hidden', 'true');
-      head.append(chev);
+    head.append(hn, hc);
+    if (note) {
+      const hw = document.createElement('span');
+      hw.className = 'gh__note';
+      hw.textContent = note;
+      head.append(hw);
     }
     const body = document.createElement('div');
     body.className = 'grp__in';
     sec.append(head, body);
-    sec.dataset.open = String(open);
+    sec.dataset.open = 'true';
     list.append(sec);
-    if (!open) continue;
 
     let ordered = items;
     let untimedAt = -1;
-    if (byPing) {
+    // Fastest now is already in order of its times; Not answering has none.
+    if (byPing && name !== 'Fastest now' && name !== 'Not answering') {
       const yes = items.filter(timed);
       const no = items.filter((c) => !timed(c))
         .sort((a, b) => a.name.localeCompare(b.name));
@@ -697,6 +682,15 @@ function buildCountry(c) {
     ping.textContent = msSaid(c.ping);
   }
   marks.append(ping);
+  // The reference's small pill at the row's end: the same choice the row
+  // makes, said out loud. The picked row carries the accent instead.
+  const go = document.createElement('span');
+  go.className = 'row__go';
+  go.setAttribute('aria-hidden', 'true');
+  const picked = state.picked === c.code;
+  go.textContent = picked ? (state.mode === 'on' ? 'Connected' : 'Selected') : 'Connect';
+  if (picked) go.dataset.on = '1';
+  marks.append(go);
   row.append(copy, marks);
 
   // A country with cities opens into them; one without opens straight into
@@ -746,9 +740,6 @@ function toggleCities(code) {
   markCursor();
 }
 
-/* Open or shut a continent. The list is drawn again with its countries in
-   (or out), and the drawer's body grows from nothing to its height - or
-   folds away first and is then left out. */
 /* Rows arriving: up from 8px and in, 30 ms apart, the first twelve only -
    past those nobody is watching them land. */
 function enterRows(nodes) {
@@ -760,41 +751,8 @@ function enterRows(nodes) {
       clearProps: 'transform,opacity,visibility' });
 }
 
-function toggleContinent(name) {
-  const opening = !state.openContinents.has(name);
-  const q = $('search').value.trim();
-  const sel = `.grp[data-group="${CSS.escape(name)}"] > .grp__in`;
-  const calm = CALM || !window.gsap;
-  const redraw = () => {
-    // One drawer open at a time: the open one is the sheet's single lit item.
-    if (opening) { state.openContinents.clear(); state.openContinents.add(name); }
-    else state.openContinents.delete(name);
-    $('list').dataset.key = '';
-    drawList(q);
-    const body = $('list').querySelector(sel);
-    if (opening && body) {
-      const head = body.previousElementSibling;
-      if (head) head.scrollIntoView({ block: 'nearest' });
-    }
-    if (opening && body && !calm) {
-      gsap.fromTo(body, { height: 0, opacity: 0 },
-                  { height: 'auto', opacity: 1, duration: 0.3, ease: 'expo.out', clearProps: 'height,opacity' });
-      enterRows(body.querySelectorAll('.row'));
-    }
-    // the cursor stays on the drawer just opened or shut, not back at the top
-    const at = rows().findIndex((r) => r.dataset.continent === name);
-    if (at >= 0) state.cursor = at;
-    markCursor();
-  };
-  const body = $('list').querySelector(sel);
-  if (!opening && body && body.childNodes.length && !calm) {
-    gsap.to(body, { height: 0, opacity: 0, duration: 0.18, ease: 'power2.in', onComplete: redraw });
-  } else redraw();
-}
-
-/* What the arrow keys walk: the drawers' headings as well as the rows, so a
-   continent can be opened from the keyboard too. */
-function rows() { return Array.from($('list').querySelectorAll('.row, .gh[data-continent]')); }
+/* What the arrow keys walk: the rows. */
+function rows() { return Array.from($('list').querySelectorAll('.row')); }
 
 function markCursor() {
   const all = rows();
@@ -2622,7 +2580,6 @@ function paintPrefs(info) {
   sharePane.take(info);
   lanPane.take(info);
   if (info.orbColors) state.orbColors = info.orbColors;
-  if (info.theme) applyTheme(info.theme);
   state.onClose = info.onClose || '';
   paintOnClose();
   if (info.window) paintWindowOptions(info.window);
@@ -3710,8 +3667,6 @@ $('list').addEventListener('click', (e) => {
     toggleCities(open.dataset.expand);
     return;
   }
-  const drawer = e.target.closest('[data-continent]');
-  if (drawer) { toggleContinent(drawer.dataset.continent); return; }
   // An exit row picks that one exit; the row that opens them is not a pick
   // at all and is handled where the opening is.
   const exit = e.target.closest('.exit');
@@ -3728,8 +3683,7 @@ $('picker').addEventListener('keydown', (e) => {
   } else if (e.key === 'Enter') {
     e.preventDefault();
     const r = rows()[state.cursor];
-    if (r && r.dataset.continent) toggleContinent(r.dataset.continent);
-    else if (r) choose(r.dataset.code);
+    if (r) choose(r.dataset.code);
   }
 });
 
@@ -3812,8 +3766,18 @@ const wayMenu = (() => {
   /* The one glow under the chosen row. It is placed, not faded, when the
      list opens, and slides when the choice changes. */
   const glow = list.querySelector('.dd__glow');
+  /* Mirage's home shows the three ways side by side as one switch, never as
+     a menu (dd--seg): the list is always out, the field is not drawn, and
+     the glow slides sideways under the chosen one. */
+  const seg = root.classList.contains('dd--seg');
   function glide(opt, instant) {
     if (!glow || !opt) return;
+    if (seg) {
+      gsap.set(glow, { width: opt.offsetWidth, height: opt.offsetHeight, y: opt.offsetTop, autoAlpha: 1 });
+      if (instant || calm) gsap.set(glow, { x: opt.offsetLeft });
+      else gsap.to(glow, { x: opt.offsetLeft, duration: 0.45, ease: 'power3.out', overwrite: 'auto' });
+      return;
+    }
     gsap.set(glow, { height: opt.offsetHeight, autoAlpha: 1 });
     if (instant || calm) gsap.set(glow, { y: opt.offsetTop });
     else gsap.to(glow, { y: opt.offsetTop, duration: 0.45, ease: 'power3.out', overwrite: 'auto' });
@@ -3901,6 +3865,7 @@ const wayMenu = (() => {
       o.setAttribute('aria-selected', String(o.dataset.way === way));
     }
     if (!swapping) value.textContent = nameOf(way);
+    if (seg) glide(list.querySelector('.dd__opt[aria-selected="true"]:not([hidden])'), true);
   }
 
   function pick(opt) {
@@ -3923,7 +3888,7 @@ const wayMenu = (() => {
       swap(nameOf(way));
       chooseWay(way);
     }
-    gsap.delayedCall(calm ? 0 : 0.3, () => hide(true));
+    if (!seg) gsap.delayedCall(calm ? 0 : 0.3, () => hide(true));
   }
 
   function step(by) {
@@ -3979,6 +3944,18 @@ const wayMenu = (() => {
       hide(false);
     }
   });
+
+  if (seg) {
+    list.hidden = false;
+    list.setAttribute('aria-orientation', 'horizontal');
+    const again = () => glide(list.querySelector('.dd__opt[aria-selected="true"]:not([hidden])'), true);
+    if (window.ResizeObserver) new ResizeObserver(again).observe(list);
+    list.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+    });
+    for (const o of list.querySelectorAll('.dd__opt')) o.tabIndex = 0;
+  }
 
   return { sync, hide, isOpen: () => open };
 })();
@@ -6279,6 +6256,7 @@ async function wsSubmit() {
 
   wsHideCaptcha();
   acctBusy(false);
+  await acctSucceed();
   acctShowForm(false);
   if (r.credentials) {
     said($('acctSaid'), 'Signed in as ' + r.username + '. The proxy credential '
@@ -6649,6 +6627,12 @@ function acctShowForm(on) {
   $('acctTwo').value = '';
   $('acctLabel').value = '';
   said($('acctNewSaid'), '');
+  // The optional name waits behind its link again; nothing is red; the
+  // button and the ring are back from any earlier success.
+  $('acctLabelWrap').hidden = true;
+  $('acctMoreName').hidden = false;
+  for (const f of dlg.querySelectorAll('.ma__field')) f.classList.remove('is-bad');
+  acctUndone();
   // One account per provider: a provider that has its account already
   // gets the sentence saying so instead of the form.
   acctSetProvider(acct.provider);
@@ -6656,6 +6640,8 @@ function acctShowForm(on) {
   $('acctFull').hidden = !taken;
   $('acctForm').hidden = taken;
   if (!dlg.open) dlg.showModal();
+  introPlaceChart();
+  acctMove();
   if (!taken) $('acctUser').focus();
 }
 
@@ -6667,12 +6653,12 @@ function acctTaken(provider) {
 const ACCT_HERO = {
   surfshark: {
     mark: '#i-ss',
-    say: 'The service login from Surfshark’s manual-setup page, not your email.',
+    say: 'Use the service login from Surfshark’s manual-setup page, not your email.',
     user: 'Service username', hint: 'from the manual-setup page', go: 'Save account',
   },
   windscribe: {
     mark: '#i-ws',
-    say: 'Your Windscribe login. A short puzzle comes next, asked once.',
+    say: 'Your Windscribe username and password. A short puzzle comes next, asked once.',
     user: 'Username or email', hint: 'your Windscribe login', go: 'Continue to the puzzle',
   },
 };
@@ -6687,14 +6673,17 @@ function acctSetProvider(which) {
   $('acctHeroName').textContent = `Connect ${name}`;
   $('acctNewSay').textContent = spec.say;
   $('acctSafeTo').textContent = name;
-  $('acctSave').textContent = spec.go;
+  // The label only: the button is also its ring and its light.
+  $('acctSaveLabel').textContent = spec.go;
   // Surfshark's is a service credential off a web page; Windscribe's is the
   // account you log in with. Saying which is the difference between pasting
   // the right thing and being refused with no idea why.
   $('acctUserCap').textContent = spec.user;
   $('acctUser').placeholder = spec.hint;
-  // Two-factor is a login thing, and only one of these is a login.
-  $('acctTwoWrap').hidden = which !== 'windscribe';
+  // Two-factor is a login thing, and only one of these is a login. Even
+  // there most people have it off, so the field waits behind its link.
+  $('acctTwoWrap').hidden = true;
+  $('acctMoreTwo').hidden = which !== 'windscribe';
   said($('acctNewSaid'), '');
 }
 
@@ -6711,8 +6700,13 @@ $('acctSave').addEventListener('click', async () => {
       + 'Remove it first to add a different one.', 'bad');
     return;
   }
-  if (!user) { said($('acctNewSaid'), 'Enter the username.', 'bad'); return; }
-  if (!pass) { said($('acctNewSaid'), 'Enter the password.', 'bad'); return; }
+  if (!user) {
+    acctFieldBad('maUserField');
+    said($('acctNewSaid'), acct.provider === 'surfshark'
+      ? 'Enter the service username.' : 'Enter the username.', 'bad');
+    return;
+  }
+  if (!pass) { acctFieldBad('maPassField'); said($('acctNewSaid'), 'Enter the password.', 'bad'); return; }
   // Said before anything is sent, once per run: what this sign-in is, and
   // what it can cost. The second press is the person deciding to go on.
   if (acct.provider === 'windscribe' && !acct.windscribeNoteSeen) {
@@ -6740,6 +6734,7 @@ $('acctSave').addEventListener('click', async () => {
     }
     if (!r.ok) { said($('acctNewSaid'), r.error, 'bad'); return; }
     $('acctPass').value = '';
+    await acctSucceed();
     acctShowForm(false);
     said($('acctSaid'), `Saved and in use: ${r.label}.`, 'good');
     await acctRefresh();
@@ -6925,6 +6920,114 @@ $('acctPeek').addEventListener('click', () => {
   $('acctPeek').setAttribute('aria-pressed', String(!showing));
   $('acctPeek').setAttribute('aria-label',
     showing ? 'Show the password' : 'Hide the password');
+});
+
+/* -- the add-account page's motion (preview/DECISIONS.md) ---------------
+
+   While the page is up: the ring round the provider's logo turns (90 s),
+   the chart behind it (240 s), and the button's light (3.6 s, three times
+   as fast while it is asking). All transforms on their own layers, all
+   stopped when the page goes, none at all under reduced motion. */
+let acctMotion = [];
+let acctSpin = null;
+
+function acctStill() {
+  acctMotion.forEach((t) => t.kill());
+  acctMotion = [];
+  acctSpin = null;
+}
+
+function acctMove() {
+  acctStill();
+  if (CALM || !window.gsap) return;
+  acctSpin = gsap.to($('maSpin'), { rotation: '+=360', duration: 3.6, ease: 'none', repeat: -1 });
+  acctMotion.push(
+    acctSpin,
+    gsap.to($('maRing'), { rotation: 360, svgOrigin: '42 42', duration: 90, ease: 'none', repeat: -1 }),
+    gsap.to($('maChart'), { rotation: -360, duration: 240, ease: 'none', repeat: -1 }),
+  );
+}
+
+// A close that finds it open again is an old one arriving late.
+$('acctDlg').addEventListener('close', () => {
+  if (!$('acctDlg').open) acctStill();
+});
+
+/* The button while busy() holds it: the light runs three times as fast and
+   it says what it is doing. Watched rather than set beside each busy() call,
+   so none of the sign-in paths has to know about it. */
+new MutationObserver(() => {
+  const on = $('acctSave').dataset.busy === '1';
+  if (acctSpin && window.gsap) gsap.to(acctSpin, { timeScale: on ? 3.2 : 1, duration: 0.4 });
+  if (!$('acctSave').classList.contains('is-done')) {
+    $('acctSaveLabel').textContent = on ? 'Signing in…' : ACCT_HERO[acct.provider].go;
+  }
+}).observe($('acctSave'), { attributes: true, attributeFilter: ['data-busy'] });
+
+/* A field with something missing: its rim goes red and it gives a short
+   shake. Typing in it takes the red away again. */
+function acctFieldBad(id) {
+  const field = $(id);
+  field.classList.add('is-bad');
+  const box = field.querySelector('.ma__box');
+  if (!CALM && window.gsap) {
+    gsap.fromTo(box, { x: 0 }, { x: 6, duration: 0.06, yoyo: true, repeat: 5, ease: 'power1.inOut', clearProps: 'x' });
+  }
+  field.querySelector('input').focus();
+}
+
+/* Signed in: the button goes red with a tick and the red ring closes round
+   the provider's logo; then the page goes and setup takes over. */
+function acctSucceed() {
+  const go = $('acctSave');
+  go.classList.add('is-done');
+  $('acctSaveLabel').textContent = 'Signed in';
+  $('acctSaveIcon').setAttribute('href', '#i-check');
+  if (CALM || !window.gsap) {
+    $('maDone').style.strokeDashoffset = '0';
+    return new Promise((ok) => setTimeout(ok, 400));
+  }
+  return new Promise((ok) => {
+    gsap.to($('maDone'), { strokeDashoffset: 0, duration: 0.8, ease: 'power3.inOut' });
+    setTimeout(ok, 850);
+  });
+}
+
+function acctUndone() {
+  $('acctSave').classList.remove('is-done');
+  $('acctSaveIcon').setAttribute('href', '#i-arrow');
+  if (window.gsap) gsap.killTweensOf($('maDone'));
+  $('maDone').style.strokeDashoffset = '';
+}
+
+/* A field taking focus: the rim's light runs round it once. The rim itself
+   stays brighter while the field has focus (CSS, :focus-within). */
+for (const field of $('acctDlg').querySelectorAll('.ma__field')) {
+  const input = field.querySelector('input');
+  const light = field.querySelector('.ma__light');
+  let pass = null;
+  input.addEventListener('focus', () => {
+    if (CALM || !window.gsap) return;
+    if (pass) pass.kill();
+    gsap.set(light, { opacity: 1, rotation: -60 });
+    pass = gsap.to(light, {
+      rotation: 300, duration: 1, ease: 'power2.inOut',
+      onComplete: () => gsap.to(light, { opacity: 0, duration: 0.3 }),
+    });
+  });
+  input.addEventListener('input', () => field.classList.remove('is-bad'));
+}
+
+/* The optional fields, each behind its link: opened on request, focused. */
+$('acctMoreName').addEventListener('click', () => {
+  $('acctLabelWrap').hidden = false;
+  $('acctMoreName').hidden = true;
+  $('acctLabel').focus();
+});
+$('acctMoreTwo').addEventListener('click', () => {
+  $('acctTwoWrap').hidden = false;
+  $('acctMoreTwo').hidden = true;
+  $('acctTwo').focus();
 });
 
 /* ------------------------------------------------ settings, as a stack */
@@ -8381,54 +8484,302 @@ $('srcBrowse').addEventListener('click', async (e) => {
 
 /* ------------------------------------------------------------ first run */
 
-/* The intro: four slides, the first time this copy opens. Resolves when it
-   is finished with, by Skip or Get started, and says so to Python so it is
-   never shown again. */
+/* The intro: four steps, the first time this copy opens (preview/DECISIONS.md).
+   The logo, the name and the button stay put; the title and the sentence
+   under it change, carved out and back in. Resolves when it is finished
+   with, by Skip or Get started, and says so to Python so it is never shown
+   again.
+
+   Everything that moves is a transform or an opacity on a layer of its own,
+   and every loop is listed in introMotion so it can be stopped the moment
+   the intro goes away. Under reduced motion nothing moves at all. */
+let introMotion = [];   // the loops and the entrance, while the intro is up
+let introSpin = null;   // the button's travelling light, sped up on hover
+let introRun = 0;       // which opening of the intro is current (see 'close')
+
+function introStill() {
+  introMotion.forEach((t) => t.kill());
+  introMotion = [];
+  introSpin = null;
+}
+
+/* The star chart turns about the eye's centre, wherever the layout puts it -
+   the big eye in the intro, the small one in the welcome. */
+function firstPlaceChart(dlgId, chartId, eye) {
+  const dlg = $(dlgId);
+  if (!dlg.open) return;
+  const d = dlg.getBoundingClientRect();
+  const l = eye.getBoundingClientRect();
+  $(chartId).style.top = `${l.top - d.top + l.height / 2}px`;
+}
+
+function introPlaceChart() {
+  firstPlaceChart('introDlg', 'miChart', $('miLogo'));
+  firstPlaceChart('welcomeDlg', 'mwChart', document.querySelector('.mw__eye'));
+  firstPlaceChart('acctDlg', 'maChart', $('maSeal'));
+  firstPlaceChart('setupDlg', 'msChart', $('msHero'));
+}
+
+/* One line, always: a long title is set smaller rather than wrapped. */
+function fitOneLine(el, from = 20, least = 14) {
+  let size = from;
+  el.style.fontSize = `${size}px`;
+  while (el.scrollWidth > el.clientWidth && size > least) {
+    size -= 0.5;
+    el.style.fontSize = `${size}px`;
+  }
+}
+
+/* Each word in a slot of its own, so it can sink into it and rise out. */
+function introWords(el, text) {
+  el.textContent = '';
+  text.split(/\s+/).forEach((w, i) => {
+    if (i) el.append(' ');
+    const slot = document.createElement('span');
+    slot.className = 'mi__w';
+    const word = document.createElement('span');
+    word.className = 'mi__wi';
+    word.textContent = w;
+    slot.append(word);
+    el.append(slot);
+  });
+}
+
+/* The entrance, about two seconds: the eye opens from the middle, the
+   astrolabe ring turns into place and the bead finds its spot, the pupil
+   drops in; then the name rises with its reflection, then the step and the
+   button. Afterwards three slow loops: the tick ring (90 s a turn), the
+   reflection swaying, the star chart (240 s a turn). */
+function introEnter() {
+  if (!window.gsap) return;
+  const lids = [$('miLidL'), $('miLidR')];
+  const inner = $('miInner');
+  const letters = [...$('miName').children];
+  const parts = [$('miTitle'), $('miSay')];
+  const foot = document.querySelector('.mi__foot');
+  const e = {
+    low: $('miLowRect'), ticks: $('miTicks'), pupil: $('miPupil'), cut: $('miCut'),
+    beadG: $('miBeadG'), bead: $('miBead'), echo: $('miEcho'), chart: $('miChart'),
+  };
+  const all = [...lids, inner, ...letters, ...parts, foot, ...Object.values(e)];
+  gsap.killTweensOf(all);
+  if (CALM) {
+    gsap.set(all, { clearProps: 'all' });
+    return;
+  }
+  for (const p of [...lids, inner]) {
+    const length = p.getTotalLength();
+    p.style.strokeDasharray = `${length} ${length}`;
+    p.style.strokeDashoffset = length;
+  }
+  gsap.set(e.low, { scaleX: 0, transformOrigin: '50% 50%' });
+  gsap.set(e.ticks, { rotation: -120, autoAlpha: 0, transformOrigin: '50% 50%' });
+  gsap.set(e.pupil, { scale: 0, transformOrigin: '50% 50%' });
+  gsap.set(e.cut, { scaleX: 0, transformOrigin: '0% 50%' });
+  gsap.set(e.beadG, { rotation: 200, svgOrigin: '60 60' });
+  gsap.set(e.bead, { autoAlpha: 0 });
+  gsap.set(letters, { y: 18, autoAlpha: 0 });
+  gsap.set(e.echo, { autoAlpha: 0, skewX: 0, scaleX: 1 });
+  gsap.set(parts, { autoAlpha: 0, y: 8 });
+  gsap.set(foot, { autoAlpha: 0, y: 10 });
+  const tl = gsap.timeline({ defaults: { ease: 'expo.out' } })
+    .to(lids, { strokeDashoffset: 0, duration: 1 }, 0)
+    .to(e.low, { scaleX: 1, duration: 1.1, ease: 'power3.out' }, 0.25)
+    .to(e.ticks, { rotation: 0, autoAlpha: 1, duration: 1.4 }, 0.35)
+    .to(inner, { strokeDashoffset: 0, duration: 0.9 }, 0.5)
+    .to(e.beadG, { rotation: 0, duration: 1.2, ease: 'power3.inOut' }, 0.6)
+    .to(e.bead, { autoAlpha: 1, duration: 0.3 }, 0.6)
+    .to(e.pupil, { scale: 1, duration: 0.7, ease: 'back.out(2.2)' }, 0.75)
+    .to(e.cut, { scaleX: 1, duration: 0.45, ease: 'power2.out' }, 1)
+    .to(letters, { y: 0, autoAlpha: 1, duration: 0.9, stagger: 0.06, ease: 'power3.out' }, 1.05)
+    .to(e.echo, { autoAlpha: 1, duration: 1.2, ease: 'sine.out' }, 1.35)
+    .to(parts, { y: 0, autoAlpha: 1, duration: 0.7, stagger: 0.08, ease: 'power2.out' }, 1.5)
+    .to(foot, { autoAlpha: 1, y: 0, duration: 0.6, ease: 'power2.out' }, 1.75)
+    .add(() => {
+      introMotion.push(
+        gsap.to(e.ticks, { rotation: '+=360', duration: 90, ease: 'none', repeat: -1 }),
+        gsap.to(e.echo, { skewX: 1.4, scaleX: 1.012, duration: 2.4, ease: 'sine.inOut', yoyo: true, repeat: -1 }),
+        gsap.to(e.chart, { rotation: -360, duration: 240, ease: 'none', repeat: -1 }),
+      );
+    });
+  introSpin = gsap.to($('miSpin'), { rotation: '+=360', duration: 3.6, ease: 'none', repeat: -1 });
+  introMotion.push(tl, introSpin);
+}
+
 function runIntro() {
   return new Promise((done) => {
     const dlg = $('introDlg');
-    const slides = [...dlg.querySelectorAll('.intro__slide')];
-    const dots = [...$('introDots').children];
+    const copy = [...$('introCopy').content.querySelectorAll('section')].map((s) => [
+      s.querySelector('h2').textContent.trim(),
+      s.querySelector('p').textContent.trim().replace(/\s+/g, ' '),
+    ]);
+    const title = $('miTitle');
+    const say = $('miSay');
+    const ticks = [...$('introDots').children];
     let at = 0;
+    let busy = false;
+    let over = false;
+    const fit = () => fitOneLine(title);
+    const paint = () => {
+      introWords(title, copy[at][0]);
+      introWords(say, copy[at][1]);
+      fit();
+      ticks.forEach((t, i) => t.classList.toggle('is-here', i <= at));
+      $('introNextLabel').textContent = at === copy.length - 1 ? 'Get started' : 'Next';
+    };
+    const words = () => $('miStage').querySelectorAll('.mi__wi');
+    // The carving: a chisel line runs left to right while the words sink
+    // into their slots, last word first; then it draws back and the next
+    // step's words rise out of theirs. About a second.
     const go = (to) => {
+      if (busy) return;
       at = to;
-      slides.forEach((s, i) => {
-        s.classList.toggle('is-here', i === at);
-        s.classList.toggle('is-gone', i < at);
-      });
-      const here = slides[at];
-      if (here && window.gsap && !CALM) {
-        gsap.fromTo(here, { opacity: 0, x: 24 },
-                    { opacity: 1, x: 0, duration: 0.333, ease: 'expo.out', clearProps: 'opacity,transform' });
-      }
-      dots.forEach((d, i) => d.classList.toggle('is-here', i === at));
-      $('introNext').textContent = at === slides.length - 1 ? 'Get started' : 'Next';
+      if (CALM || !window.gsap) { paint(); return; }
+      busy = true;
+      const chisel = $('miChisel');
+      gsap.timeline()
+        .set(chisel, { transformOrigin: 'left center', scaleX: 0 })
+        .to(chisel, { scaleX: 1, duration: 0.38, ease: 'power2.inOut' }, 0)
+        .to(words(), { yPercent: 115, duration: 0.28, stagger: { each: 0.01, from: 'end' }, ease: 'power2.in' }, 0)
+        .add(() => {
+          paint();
+          const fresh = words();
+          gsap.set(fresh, { yPercent: 115 });
+          gsap.timeline({ onComplete: () => { busy = false; } })
+            .set(chisel, { transformOrigin: 'right center' })
+            .to(chisel, { scaleX: 0, duration: 0.4, ease: 'power2.inOut' })
+            .to(fresh, { yPercent: 0, duration: 0.5, stagger: 0.022, ease: 'power3.out' }, '<');
+        });
     };
     const finish = () => {
+      if (over) return;
+      over = true;
+      introStill();
       window.pywebview.api.markIntroSeen();
       shut(dlg);
       done();
     };
-    $('introNext').onclick = () => (at < slides.length - 1 ? go(at + 1) : finish());
+    $('introNext').onclick = () => (at < copy.length - 1 ? go(at + 1) : finish());
     $('introSkip').onclick = finish;
     dlg.addEventListener('cancel', (e) => { e.preventDefault(); finish(); }, { once: true });
-    // However it goes away, the rest of boot goes on.
-    dlg.addEventListener('close', () => done(), { once: true });
-    go(0);
+    // However it goes away, the loops stop and the rest of boot goes on.
+    // 'close' arrives as a task of its own, so when the intro is shut and
+    // opened again straight away, that close lands while the dialog is open
+    // once more - and reaches this opening's listener as well as the old
+    // one. A close that finds the dialog open is ignored by both.
+    const run = ++introRun;
+    const closed = () => {
+      if (dlg.open) return;
+      dlg.removeEventListener('close', closed);
+      if (run === introRun) introStill();
+      done();
+    };
+    dlg.addEventListener('close', closed);
+    introStill();
+    paint();
     dlg.showModal();
+    introPlaceChart();
+    // The name waits for its own face (local, 15 KB) rather than flashing a
+    // fallback serif and then changing.
+    const face = document.fonts && document.fonts.load
+      ? document.fonts.load('500 30px "Cinzel Mirage"') : Promise.resolve();
+    face.catch(() => {}).then(() => {
+      if (!dlg.open || over) return;
+      fit();
+      introEnter();
+    });
   });
 }
 
+(function () {
+  const go = $('introNext');
+  go.addEventListener('mouseenter', () => { if (introSpin) gsap.to(introSpin, { timeScale: 2.6, duration: 0.4 }); });
+  go.addEventListener('mouseleave', () => { if (introSpin) gsap.to(introSpin, { timeScale: 1, duration: 0.6 }); });
+  window.addEventListener('resize', introPlaceChart);
+})();
+
 /* The welcome: nothing to connect with, so ask how it will connect. Each
-   answer goes straight to the place that sets it up. */
+   answer goes straight to the place that sets it up.
+
+   It arrives the way the intro leaves: the eye settles in from a little
+   larger and lower, as if the intro's had shrunk to the top, and blinks
+   once; then the title, then the choices one by one. About a second. The
+   chart and the tick ring keep turning as they did in the intro; both stop
+   when the welcome goes. Under reduced motion nothing moves. */
+let welcomeMotion = [];
+
+function welcomeStill() {
+  welcomeMotion.forEach((t) => t.kill());
+  welcomeMotion = [];
+}
+
+function welcomeEnter() {
+  if (!window.gsap) return;
+  const dlg = $('welcomeDlg');
+  const lock = $('mwLock');
+  const lid = $('mwLid');
+  const text = [$('mwTitle'), dlg.querySelector('.mw__say')];
+  const rows = [...dlg.querySelectorAll('.mw__group, .mw__row')];
+  welcomeStill();
+  gsap.killTweensOf([lock, lid, ...text, ...rows]);
+  if (CALM) {
+    gsap.set([lock, lid, ...text, ...rows], { clearProps: 'all' });
+    return;
+  }
+  const tl = gsap.timeline({ defaults: { ease: 'power3.out' } })
+    .fromTo(lock, { autoAlpha: 0, scale: 1.25, y: 30 }, { autoAlpha: 1, scale: 1, y: 0, duration: 0.8, ease: 'expo.out' })
+    .fromTo(lid, { scaleY: 1 }, { scaleY: 0.15, duration: 0.12, ease: 'power2.in', transformOrigin: '50% 60%', yoyo: true, repeat: 1 }, 0.75)
+    .fromTo(text, { autoAlpha: 0, y: 10 }, { autoAlpha: 1, y: 0, duration: 0.6, stagger: 0.08 }, 0.35)
+    .fromTo(rows, { autoAlpha: 0, y: 14 }, { autoAlpha: 1, y: 0, duration: 0.55, stagger: 0.06 }, 0.55);
+  welcomeMotion.push(
+    tl,
+    gsap.to($('mwChart'), { rotation: -360, duration: 240, ease: 'none', repeat: -1 }),
+    gsap.to($('mwTicks'), { rotation: 360, svgOrigin: '60 60', duration: 90, ease: 'none', repeat: -1 }),
+  );
+}
+
 function openWelcome() {
   const dlg = $('welcomeDlg');
-  if (!dlg.open) dlg.showModal();
+  if (dlg.open) return;
+  dlg.showModal();
+  fitOneLine($('mwTitle'));
+  introPlaceChart();
+  welcomeEnter();
 }
 
 // Not dismissed with Escape: behind it is a Connect button with nothing to
 // connect through. It goes when there is something - an account, a server.
 $('welcomeDlg').addEventListener('cancel', (e) => e.preventDefault());
+
+// A close that finds it open again is an old one arriving late (see the
+// intro's 'close'); only a real close stops the motion.
+$('welcomeDlg').addEventListener('close', () => {
+  if (!$('welcomeDlg').open) welcomeStill();
+});
+
+/* A choice under the pointer, or reached by keyboard: the bead's light runs
+   once round its rim and the chevron leans the way it leads. A mouse click
+   gives focus too, but only focus that shows (keyboard) starts the run. */
+for (const row of $('welcomeDlg').querySelectorAll('.mw__row')) {
+  const light = row.querySelector('.mw__light');
+  const chev = row.querySelector('.mw__chev');
+  let pass = null;
+  const on = () => {
+    if (CALM || !window.gsap) return;
+    gsap.to(chev, { x: 4, duration: 0.35, ease: 'power3.out' });
+    if (pass) pass.kill();
+    gsap.set(light, { opacity: 1, rotation: -60 });
+    pass = gsap.to(light, {
+      rotation: 300, duration: 1.1, ease: 'power2.inOut',
+      onComplete: () => gsap.to(light, { opacity: 0, duration: 0.3 }),
+    });
+  };
+  const off = () => { if (window.gsap) gsap.to(chev, { x: 0, duration: 0.4, ease: 'power3.out' }); };
+  row.addEventListener('mouseenter', on);
+  row.addEventListener('mouseleave', off);
+  row.addEventListener('focus', () => { if (row.matches(':focus-visible')) on(); });
+  row.addEventListener('blur', off);
+}
 
 for (const b of $('welcomeDlg').querySelectorAll('[data-provider]')) {
   b.addEventListener('click', () => {
@@ -8454,17 +8805,95 @@ const setup = { provider: null, finish: null, lastPin: 0, watch: null };
 // per address, so three silent minutes is a run that is not coming back.
 const SETUP_STALL_MS = 180000;
 
+/* Each step's mark, all four kinds drawn once; the row's data-at decides
+   which one shows (CSS). The "now" mark has a bead of its own running round
+   it while the eye searches. */
+(function () {
+  const marks = {
+    done: '<circle cx="9.5" cy="9.5" r="9" fill="#8E1422"/><path d="M5.6 9.8l2.6 2.5 5.2-5.4" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+    now: '<circle cx="9.5" cy="9.5" r="8.4" fill="#0E0B0C" stroke="#C21C2E" stroke-width="1.3"/><g class="ms__orb"><circle cx="9.5" cy="1.1" r="1.9" fill="#FFD7DC"/></g><circle cx="9.5" cy="9.5" r="2.6" fill="#C21C2E"/>',
+    todo: '<circle cx="9.5" cy="9.5" r="8.4" fill="#0B0909" stroke="#3A2A2D" stroke-width="1.3"/>',
+    fail: '<circle cx="9.5" cy="9.5" r="9" fill="#5E0A14" stroke="#E03445" stroke-width="1"/><path d="M6.5 6.5l6 6M12.5 6.5l-6 6" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>',
+  };
+  for (const mk of $('setupDlg').querySelectorAll('.ms__mk')) {
+    mk.innerHTML = Object.entries(marks).map(([kind, body]) =>
+      `<svg class="ms__m ms__m--${kind}" viewBox="0 0 19 19">${body}</svg>`).join('');
+  }
+})();
+
+/* While it searches: the eye's tick ring turns fast (12 s), its bead runs
+   round (2.4 s), the current step's bead runs round its mark (1.4 s). The
+   chart and the retry button's light turn the whole time the sheet is up.
+   Searching stops: the bead settles back where the logo keeps it. */
+let setupMotion = [];   // the searching
+let setupAround = [];   // the chart and the button light, while open
+
+function setupStill() {
+  setupMotion.forEach((t) => t.kill());
+  setupMotion = [];
+}
+
+function setupScan(on) {
+  setupStill();
+  if (CALM || !window.gsap) return;
+  const bead = $('msBead');
+  if (on) {
+    setupMotion.push(
+      gsap.to($('msTicks'), { rotation: '+=360', svgOrigin: '60 60', duration: 12, ease: 'none', repeat: -1 }),
+      gsap.to(bead, { rotation: '+=360', svgOrigin: '60 60', duration: 2.4, ease: 'none', repeat: -1 }),
+      gsap.to($('setupDlg').querySelectorAll('.ms__orb'), { rotation: '+=360', svgOrigin: '9.5 9.5', duration: 1.4, ease: 'none', repeat: -1 }),
+    );
+    return;
+  }
+  const turned = gsap.getProperty(bead, 'rotation') % 360;
+  if (turned) gsap.to(bead, { rotation: `+=${360 - turned}`, svgOrigin: '60 60', duration: 0.9, ease: 'power3.out' });
+}
+
+function setupAroundStart() {
+  setupAround.forEach((t) => t.kill());
+  setupAround = [];
+  if (CALM || !window.gsap) return;
+  setupAround.push(
+    gsap.to($('msChart'), { rotation: -360, duration: 240, ease: 'none', repeat: -1 }),
+    gsap.to($('msSpin'), { rotation: '+=360', duration: 3.6, ease: 'none', repeat: -1 }),
+  );
+}
+
+// A close that finds it open again is an old one arriving late.
+$('setupDlg').addEventListener('close', () => {
+  if ($('setupDlg').open) return;
+  setupStill();
+  setupAround.forEach((t) => t.kill());
+  setupAround = [];
+});
+
+/* The bar is a scale on a layer of its own - never its width. */
+function setupProgress(fraction) {
+  $('setupBar').style.transform = `scaleX(${Math.max(0.02, Math.min(1, fraction))})`;
+}
+
+function setupRing(closed) {
+  const ring = $('msDone');
+  if (window.gsap) gsap.killTweensOf(ring);
+  if (!closed) { ring.style.strokeDashoffset = ''; return; }
+  if (CALM || !window.gsap) { ring.style.strokeDashoffset = '0'; return; }
+  gsap.to(ring, { strokeDashoffset: 0, duration: 0.9, ease: 'power3.inOut' });
+}
+
 function setupAt(step, at) {
-  const row = $('setupDlg').querySelector(`.steps__row[data-step="${step}"]`);
+  const row = $('setupDlg').querySelector(`.ms__row[data-step="${step}"]`);
   row.dataset.at = at;
 }
 
 function setupFail(why) {
   $('setupTitle').textContent = 'Setup did not finish';
+  $('setupSay').textContent = 'Nothing is lost: the account is saved, and this can run again.';
   $('setupError').textContent = why || 'Something went wrong.';
   $('setupError').hidden = false;
   $('setupAgain').hidden = false;
-  $('setupDlg').querySelector('.logo-mark').classList.remove('logo-mark--spin');
+  // The step that was under way is the one that broke.
+  for (const row of $('setupDlg').querySelectorAll('.ms__row[data-at="now"]')) row.dataset.at = 'fail';
+  setupScan(false);
   setup.finish = null;
   // Written down on the Python side: the sheet shows this sentence once,
   // and a setup that fails and then works on "Try again" otherwise leaves
@@ -8500,17 +8929,24 @@ async function prepareServers(provider) {
   const name = provider === 'windscribe' ? 'Windscribe' : 'Surfshark';
   setup.provider = provider;
   $('setupTitle').textContent = 'Getting your servers ready';
+  $('setupSay').textContent = 'Once for each account. After this, Mirage connects in a second.';
   $('setupSigned').textContent = `Signed in to ${name}`;
   $('setupServers').textContent = `Getting ${name}'s server list`;
   $('setupError').hidden = true;
   $('setupAgain').hidden = true;
   $('setupDetail').textContent = '';
-  $('setupBar').style.width = '2%';
-  dlg.querySelector('.logo-mark').classList.add('logo-mark--spin');
+  setupProgress(0);
+  setupRing(false);
+  setupAt('signed', 'done');
   setupAt('servers', 'now');
   setupAt('pinning', 'todo');
   shut($('welcomeDlg'));
-  if (!dlg.open) dlg.showModal();
+  if (!dlg.open) {
+    dlg.showModal();
+    setupAroundStart();
+  }
+  introPlaceChart();
+  setupScan(true);
 
   // Every step is a call into Python, and an exception there rejects the
   // promise rather than returning {ok: false}. Uncaught, that left the sheet
@@ -8522,7 +8958,9 @@ async function prepareServers(provider) {
       : window.pywebview.api.surfsharkServers());
     if (!got || !got.ok) { setupFail(got && got.error); return false; }
     setupAt('servers', 'done');
+    $('setupServers').textContent = `Got ${name}'s server list`;
     setupAt('pinning', 'now');
+    setupScan(true);   // the new "now" mark gets its bead
 
     const aimed = await window.pywebview.api.pinForProvider(provider);
     if (!aimed || !aimed.ok) { setupFail(aimed && aimed.error); return false; }
@@ -8551,8 +8989,11 @@ async function prepareServers(provider) {
   if (!p.written) { setupFail('No server answered. Try again in a moment.'); return false; }
   setupAt('pinning', 'done');
   $('setupTitle').textContent = 'Ready';
+  $('setupSay').textContent = 'Mirage connects through whichever server answers first.';
   $('setupDetail').textContent = `${p.written} servers pinned`;
-  dlg.querySelector('.logo-mark').classList.remove('logo-mark--spin');
+  setupProgress(1);
+  setupScan(false);
+  setupRing(true);
   if (state.mode === 'off') {
     setStatus('Disconnected', 'off', '', '');
     setHint(`${state.countries.length} countries ready.`);
@@ -8570,7 +9011,7 @@ window.onPin = (p) => {
   if (setup.finish && p) {
     setup.lastPin = Date.now();
     if (p.phase === 'result' && p.total) {
-      $('setupBar').style.width = `${Math.max(2, Math.round((p.done / p.total) * 100))}%`;
+      setupProgress(p.done / p.total);
       $('setupDetail').textContent = `${p.done} of ${p.total}`;
     } else if (p.phase === 'finished') {
       const finish = setup.finish;
@@ -8590,78 +9031,6 @@ function providersWithoutServers(info) {
   return Object.keys(ps).filter((k) => ps[k].account && !ps[k].servers);
 }
 
-
-/* ---------------------------------------------------------------- themes */
-
-/* Three themes, with the page and surface colour each swatch draws. A copy
-   that saved one of the older names opens in Graphite, or White if it was a
-   light one. */
-const THEMES = [
-  ['graphite', 'Graphite', '#0a0a0c', '#101013'],
-  ['white', 'White', '#f6f6f7', '#ffffff'],
-  ['black', 'Black', '#060607', '#101013'],
-];
-
-/* Moves the theme list's one glow to the chosen row; set once the list is
-   built (below). */
-// (var, not let: boot() may paint a theme before this line has run)
-var themeGlider = null;
-function glideTheme(instant) { if (themeGlider) themeGlider(instant); }
-
-function applyTheme(key) {
-  const k = String(key || '').toLowerCase();
-  const theme = k === 'white' || k === 'light' ? 'white' : k === 'black' ? 'black' : 'graphite';
-  state.theme = theme;
-  if (theme === 'graphite') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = theme;
-  // For the next start, so it opens in this theme rather than changing to it.
-  try { localStorage.setItem('relay.theme', theme); } catch (e) { /* private window */ }
-  for (const b of document.querySelectorAll('.theme')) {
-    b.setAttribute('aria-checked', String(b.dataset.theme === theme));
-  }
-  glideTheme(false);
-  // The map watches data-theme itself (ink lines and a pale planet on White).
-}
-
-(function () {
-  const box = $('themes');
-  for (const [key, name, page, card] of THEMES) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'theme';
-    b.dataset.theme = key;
-    b.setAttribute('role', 'radio');
-    b.setAttribute('aria-checked', 'false');
-    b.style.setProperty('--page', page);
-    b.style.setProperty('--card', card);
-    const pic = document.createElement('span');
-    pic.className = 'theme__page';
-    pic.append(document.createElement('i'), document.createElement('b'));
-    const label = document.createElement('span');
-    label.textContent = name;
-    b.append(pic, label);
-    b.addEventListener('click', () => {
-      applyTheme(key);
-      window.pywebview.api.setTheme(key);
-    });
-    box.appendChild(b);
-  }
-  // The chosen row sits on one glow that slides between the three. Placed
-  // without motion whenever the list itself appears (the Look screen is
-  // display:none until it is opened, and nothing can be measured until then).
-  const glow = document.createElement('i');
-  glow.className = 'themes__glow';
-  glow.setAttribute('aria-hidden', 'true');
-  box.prepend(glow);
-  themeGlider = (instant) => {
-    const b = box.querySelector('.theme[aria-checked="true"]');
-    if (!b || !b.offsetHeight || !window.gsap) return;
-    gsap.set(glow, { height: b.offsetHeight, autoAlpha: 1 });
-    if (instant || CALM) gsap.set(glow, { y: b.offsetTop });
-    else gsap.to(glow, { y: b.offsetTop, duration: 0.45, ease: 'power3.out', overwrite: 'auto' });
-  };
-  if (window.ResizeObserver) new ResizeObserver(() => glideTheme(true)).observe(box);
-})();
 
 /* Segmented controls. Each has one sliding piece, and it goes where the
    pressed option is - whoever pressed it, a click, the tray or a reply from

@@ -212,9 +212,10 @@ fun Modifier.slateSeg(seg: Seg, radius: Dp = Shape.card, lit: Float = 0f, barY: 
                 }
             }
         }
+        val face = surfaceBrush()
         onDrawWithContent {
             halo(lit, shapeRect)
-            drawPath(outline, Tone.surface)
+            drawPath(outline, face)
             drawPath(edge, Tone.stroke, style = Stroke(w))
             activeFace(lit, outline, edge)
             drawContent()
@@ -300,16 +301,22 @@ private val GRAIN: ImageBitmap by lazy {
 fun Modifier.nightPage(): Modifier = drawWithCache {
     val bg = Tone.bg
     val light = Tone.light
+    // Midnight's light is cool: a blue-white cone from the top, and the page
+    // deepening a shade towards its foot.
+    val navy = Tone.palette == com.erelay.relay.ui.theme.Palette.MIDNIGHT
+    val beam = if (navy) Color(0xFFB9CCFF) else Color.White
     val cone = Brush.radialGradient(
-        0f to Color.White.copy(alpha = if (light) 0.75f else 0.055f),
-        0.55f to Color.White.copy(alpha = if (light) 0.25f else 0.018f),
+        0f to beam.copy(alpha = if (light) 0.75f else if (navy) 0.075f else 0.055f),
+        0.55f to beam.copy(alpha = if (light) 0.25f else if (navy) 0.025f else 0.018f),
         1f to Color.Transparent,
         center = Offset(size.width / 2f, -size.height * 0.08f),
         radius = maxOf(size.width, size.height) * 0.75f,
     )
+    val foot = Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color(0xFF050A14).copy(alpha = if (navy) 0.6f else 0f))
     val grain = ShaderBrush(ImageShader(GRAIN, TileMode.Repeated, TileMode.Repeated))
     onDrawBehind {
         drawRect(bg)
+        if (navy) drawRect(foot)
         drawRect(cone)
         drawRect(grain, alpha = if (light) 0.035f else 0.03f)
     }

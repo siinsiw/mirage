@@ -1,0 +1,532 @@
+/* ============================================================================
+   Midnight - the redesign, laid over app.css (loaded after it).
+
+   The page is near-black, the way a music player's is (#121212 over #000);
+   cards are a neutral grey a step up, lit a touch along their top; glass
+   over the planet is that grey at half strength with a real blur. One run of colour is allowed as chrome - cobalt
+   to violet - and only on the one primary thing of a view (the selected sort,
+   the picked row's pill, a primary button). Green is the connection's alone.
+
+   Home is the reference's column: the time the tunnel has been up, big; the
+   shield line; the power disc in its rings; the state word and the address;
+   then the dotted planet, and the server card at the foot.
+   ========================================================================= */
+
+/* ------------------------------------------------------------------ tokens */
+
+/* One theme: Midnight's surfaces on a black page, taken a shade darker and
+   toward dark red (2026-11-13: Mirage's black and red). */
+:root {
+  --void: #000000;
+  --bg: #070304;
+  --surface: #181213;
+  --surface-2: #231A1B;
+  --stroke: rgba(255, 255, 255, 0.08);
+  --stroke-strong: rgba(255, 255, 255, 0.14);
+  --text: #FFFFFF;
+  --text-2: #ADA4A4;
+  --text-3: #857B7B;
+  --off: #857B7B;
+  /* Mirage keeps to black, red and white (2026-11-13): connected and "good"
+     are white, working is a pale red, failing a brighter red. */
+  --ok: #F4F1EF;
+  --good: #F4F1EF;
+  --pulse: #F4F1EF;
+  --work: #F0A8B0;
+  --fail: #FF6B7A;
+  --halo: rgba(244, 241, 239, 0.35);
+  --pulse-fill: rgba(244, 241, 239, 0.12);
+  --glass: rgba(24, 14, 16, 0.62);
+  --glass-edge: rgba(255, 255, 255, 0.10);
+  --glass-top: rgba(255, 255, 255, 0.2);
+  --glass-solid: #181213;
+  --sheet-glass: rgba(7, 3, 4, 0.92);
+  --vignette: rgba(0, 0, 0, 0.68);
+  --deep: 7 3 4;
+}
+
+:root {
+  /* the accent: Mirage's dark red where Midnight had cobalt to violet */
+  --accent-a: #8E1622;
+  --accent-b: #C21C2E;
+  --accent: linear-gradient(90deg, var(--accent-a), var(--accent-b));
+  --accent-mid: #A3141F;
+  --accent-glow: 0 6px 22px -6px rgba(194, 28, 46, 0.6);
+  --card-face: linear-gradient(180deg, color-mix(in srgb, var(--surface), #fff 4.5%), var(--surface));
+  --focus: var(--accent-mid);
+}
+
+/* the page: black, a faint dark-red light from above, pure black at the foot */
+:root body::before {
+  background:
+    radial-gradient(60% 45% at 50% -8%, rgba(140, 16, 28, 0.16), transparent 70%),
+    linear-gradient(to bottom, transparent 55%, rgba(0, 0, 0, 0.7));
+}
+
+/* --------------------------------------------------------------- the home */
+
+.hero { grid-template-rows: auto minmax(120px, 1fr) auto; }
+
+/* the planet rises out of the page: the page darkens over its top and foot */
+.hero::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(to bottom,
+    color-mix(in srgb, var(--bg), transparent 4%) 0%,
+    color-mix(in srgb, var(--bg), transparent 18%) 40%,
+    color-mix(in srgb, var(--bg), transparent 55%) 52%,
+    transparent 62%, transparent 80%,
+    color-mix(in srgb, var(--bg), transparent 12%) 100%);
+}
+
+/* the words over the planet keep a soft dark shadow under them */
+.head .status, .head .status__host, .head .status__where, .secure {
+  text-shadow: 0 2px 14px color-mix(in srgb, var(--bg), transparent 15%);
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding-top: clamp(8px, 3vh, 32px);
+  text-shadow: none;
+}
+
+.head__more, .head .clock { display: none !important; }
+
+.bigclock {
+  margin: 0;
+  display: flex;
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(42px, 6.4vh, 58px);
+  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  overflow: hidden;
+  transition: color 500ms var(--decel);
+}
+
+.bigclock[data-on='false'] { color: color-mix(in srgb, var(--text-3), transparent 45%); }
+
+.bigclock__d, .bigclock__sep { display: inline-block; }
+
+.bigclock__sep { margin: 0 0.02em; transform: translateY(-0.06em); opacity: 0.75; }
+
+.secure {
+  margin: 4px 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  line-height: 18px;
+  color: var(--text-3);
+  transition: color 400ms var(--decel);
+}
+
+.secure .ico { width: 15px; height: 15px; }
+
+.secure[data-state='on'] { color: var(--ok); }
+.secure[data-state='busy'] { color: var(--work); }
+.secure[data-state='fail'] { color: var(--fail); }
+
+/* the disc: two faint rings, the raised face, the mark in the state's colour */
+.power {
+  --size: clamp(150px, 21vh, 208px);
+  position: relative;
+  width: var(--size);
+  height: var(--size);
+  margin: clamp(10px, 2.4vh, 22px) 0 clamp(4px, 1.4vh, 14px);
+  border: 0;
+  padding: 0;
+  background: none;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.power:disabled { cursor: default; }
+
+.power__ring, .power__wave i, .power__arc {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.power__ring--a { inset: 0; border: 1px solid rgb(var(--wash) / 0.05); }
+
+.power__ring--b { inset: 12%; border: 1px solid rgb(var(--wash) / 0.08); }
+
+.power__wave i {
+  inset: 25%;
+  border: 1.5px solid var(--ok);
+  opacity: 0;
+}
+
+.power[data-mode='on']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--ok), transparent 76%), transparent);
+}
+
+.power__arc {
+  inset: 19%;
+  opacity: 0;
+  transition: opacity 300ms;
+  background: conic-gradient(from 0deg, transparent 0deg, var(--accent-a) 200deg, var(--accent-b) 300deg, transparent 300deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+}
+
+.power[data-mode='busy'] .power__arc { opacity: 1; }
+
+.power__disc {
+  position: absolute;
+  inset: 25%;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 26%, #4A4A4A, #232323 70%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 14px 30px -6px rgba(0, 0, 0, 0.6);
+}
+
+.power[data-mode='on'] .power__disc {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 0 0 1px color-mix(in srgb, var(--ok), transparent 60%),
+    0 14px 30px -6px rgba(0, 0, 0, 0.6);
+}
+
+.power__ico { width: 38%; height: 38%; color: var(--text); transition: color 450ms var(--decel); }
+
+.power[data-mode='on'] .power__ico { color: var(--ok); }
+.power[data-mode='busy'] .power__ico { color: var(--work); }
+.power[data-mode='fail'] .power__ico { color: var(--fail); }
+.power:disabled .power__ico { opacity: 0.45; }
+
+.power:focus-visible { outline: 2px solid var(--accent-mid); outline-offset: 4px; }
+
+/* the state word and the address under it */
+.head .status-line { justify-content: center; gap: 10px; }
+
+.head .status { font-size: clamp(22px, 3vh, 28px); line-height: 1.2; text-shadow: none; }
+
+.head .status__host {
+  margin: 2px 0 0;
+  font-size: 15px;
+  line-height: 20px;
+  color: var(--text);
+  text-shadow: none;
+}
+
+.head .status__where { margin: 0; font-size: 12.5px; color: var(--text-3); text-shadow: none; }
+
+/* -------------------------------------------------------------- the band */
+
+/* the throughput line lives in the tip now */
+.mid .flux { display: none; }
+
+.pin {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--ok), transparent 75%), 0 0 18px var(--ok);
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.tip {
+  position: absolute;
+  left: calc(50% + 18px);
+  bottom: calc(50% + 14px);
+  max-width: min(240px, calc(50% - 24px));
+  padding: 11px 14px;
+  border-radius: 18px;
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  border-top-color: var(--glass-top);
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.6);
+  transform-origin: 0 100%;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.tip p { margin: 0; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+
+.tip p + p { margin-top: 5px; }
+
+.tip__name { font-size: 15px; font-weight: 600; color: var(--text); }
+
+.tip__flag {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  background: var(--surface-2) center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.15);
+}
+
+.tip__ip { font-size: 13px; color: var(--text); }
+
+.tip__rates { font-size: 12px; color: var(--text-2); }
+
+.tip .ico { width: 14px; height: 14px; flex: none; color: var(--text-2); }
+
+/* --------------------------------------------------------------- the foot */
+
+/* the foot is no longer a panel: the server card is the glass */
+.hero__foot {
+  margin: 0;
+  padding: 0 0 10px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  backdrop-filter: none;
+}
+
+.hero__foot .ips, .hero__foot .details { display: none !important; }
+
+.hero__foot .where {
+  width: 100%;
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 12px 16px 12px 12px;
+  border-radius: 28px;
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  border-top-color: var(--glass-top);
+  backdrop-filter: blur(24px) saturate(140%);
+  box-shadow: 0 18px 44px -20px rgba(0, 0, 0, 0.7);
+  text-align: left;
+  transition: transform 160ms var(--decel), background 160ms;
+}
+
+.hero__foot .where:hover:not(:disabled) { background: color-mix(in srgb, var(--glass), #fff 4%); }
+
+.hero__foot .where:active:not(:disabled) { transform: scale(0.985); }
+
+/* the flag as a glass bead */
+.hero__foot .where__flag {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background-color: var(--surface-2);
+  background-size: cover;
+  background-position: center;
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.12);
+  overflow: hidden;
+}
+
+.hero__foot .where__flag::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 55%, rgba(0, 0, 0, 0.22));
+}
+
+.where__globe { width: 24px; height: 24px; color: var(--text); }
+
+.where[data-flag='1'] .where__globe { display: none; }
+
+.where__text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+
+.hero__foot .where__label {
+  font-size: 19px;
+  line-height: 25px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.where__sub {
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hero__foot .where__chev { width: 20px; height: 20px; flex: none; color: var(--text-2); }
+
+/* the way out, under the card, small: the disc is the action now */
+.card {
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  backdrop-filter: none;
+}
+
+.card .go { display: none; }
+
+.card .dd__field {
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--glass), transparent 20%);
+  border-color: var(--glass-edge);
+  backdrop-filter: blur(16px);
+}
+
+.hint { text-align: center; }
+
+/* ---------------------------------------------------------------- sheets */
+
+.sheet { background: var(--sheet-glass, var(--bg)); }
+
+.sheet__top { text-align: center; }
+
+/* the list: sections by use - bare on the page, no card round each */
+.grp, .grp[data-open='true'] {
+  margin-bottom: 6px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  overflow: visible;
+}
+
+.grp__in { padding: 0; }
+
+.gh, .grp[data-open='true'] > .gh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-height: 0;
+  padding: 16px 6px 8px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--sheet-glass, var(--bg));
+}
+
+.grp__in > .group { border-bottom: 1px solid var(--stroke); }
+
+.grp__in > .group:last-child { border-bottom: 0; }
+
+/* the search: the accent ring when focused */
+.find:focus-within { box-shadow: inset 0 0 0 1.5px var(--accent-mid); }
+
+/* the chosen sort sits on the accent run */
+#sortBy .pair__opt[aria-selected='true'] { background: var(--accent); color: #fff; box-shadow: var(--accent-glow); }
+
+/* rows: room for the name, the place line cut rather than run under the pill */
+.row {
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
+  min-height: 66px;
+  column-gap: 12px;
+  padding: 10px 4px 10px 6px;
+}
+
+.row--city { grid-template-columns: minmax(0, 1fr) auto auto; min-height: 48px; padding-left: 58px; }
+
+.row__count { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+.row__meta { overflow: hidden; }
+
+.row__marks { gap: 8px; min-width: 0; }
+
+/* the quick test waits under the pointer; the star and the opener stay */
+.row:not(:hover):not(.is-cursor) .rowtest { display: none; }
+
+.gh__name { font-size: 18px; line-height: 24px; font-weight: 500; color: var(--text); }
+
+.gh__n { font-family: var(--font-mono); font-size: 12px; color: var(--text-3); }
+
+.gh__note { flex-basis: 100%; font-size: 12.5px; line-height: 17px; color: var(--text-3); }
+
+/* rows: a round glossy flag, the name, a small pill at the end */
+.row .flag {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background-size: cover;
+  background-position: center;
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.12);
+  position: relative;
+}
+
+.row .flag::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.26), transparent 55%, rgba(0, 0, 0, 0.2));
+}
+
+.row__name { font-size: 15.5px; }
+
+.row__go {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  margin-left: 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  background: rgb(var(--wash) / 0.07);
+  white-space: nowrap;
+  transition: background 160ms, transform 160ms var(--decel);
+}
+
+.row:hover .row__go { background: rgb(var(--wash) / 0.12); }
+
+.row:active .row__go { transform: scale(0.96); }
+
+.row__go[data-on='1'] { color: #fff; background: var(--accent); box-shadow: var(--accent-glow); }
+
+.row__marks { display: inline-flex; align-items: center; }
+
+/* the chosen sort sits on the accent run */
+.pair--sort .pair__opt[aria-selected='true'] { color: #fff; }
+
+.pair--sort .pair__glow, .pair .pair__glow { background: var(--accent) !important; }
+
+/* the primary button of a view */
+.btn.addacct__go, .btn--take:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: var(--accent-glow);
+  border-color: transparent;
+}
+
+/* switches and ticks take the accent; green stays the connection's */
+input[type='checkbox']:checked { accent-color: var(--accent-mid); }
+
+/* settings menu rows sit on slate cards */
+.menu { background: var(--card-face); border: 1px solid var(--stroke); border-radius: 24px; overflow: hidden; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bigclock, .secure, .power__ico, .power__arc, .hero__foot .where, .row__go { transition: none; }
+}
+
+/* the picked row's edge bar: the accent, not the connection's green */
+.row.is-picked::before,
+.group.is-in:not(.is-open) > .row::before { background: var(--accent-mid); }
