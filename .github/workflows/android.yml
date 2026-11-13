@@ -228,7 +228,11 @@ jobs:
           ( umask 077; printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/relay-release.p12" )
 
       # The unit tests run on both paths: a release is the build that most
-      # needs them, and it used to be the one that skipped them.
+      # needs them, and it used to be the one that skipped them. They are the
+      # debug variant's tests on both: this project generates unit-test tasks
+      # for the debug build type only, and ':app:testReleaseUnitTest' does not
+      # exist - which failed the first release (android-v0.3.0) after the
+      # signing key had already been read correctly.
       #
       # Two steps rather than one with an `if` inside it, so that the signing
       # environment exists only where a release is being signed.
@@ -240,7 +244,7 @@ jobs:
           RELAY_KEYSTORE_PASSWORD: ${{ secrets.RELAY_KEYSTORE_PASSWORD }}
           RELAY_KEY_ALIAS: relay
           RELAY_REQUIRE_SIGNING: 'true'
-        run: ./gradlew --no-daemon :app:testReleaseUnitTest :app:assembleRelease
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease
 
       - name: build the debug APK
         if: ${{ !inputs.release }}
