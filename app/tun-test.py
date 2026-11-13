@@ -173,6 +173,12 @@ def test_the_firewall_hold_puts_back_what_it_found():
     assert k.count('-RemotePort 53') == 2
     # Put back: only a value the firewall knows, else NotConfigured, and
     # the rules go by their group.
+    # A block that fails halfway is undone, key and all: the key is what
+    # firewall_held() reads, and it must never say "held" when nothing is.
+    block = k[k.index('function Block-RelayOutbound'):
+              k.index('function Unblock-RelayOutbound')]
+    failed = block[block.index('} catch {', block.index('New-Item -Path')):]
+    assert failed.index('Unblock-RelayOutbound') < failed.index('return')
     unblock = k[k.index('function Unblock-RelayOutbound'):]
     assert "-notin 'Allow', 'Block', 'NotConfigured'" in unblock
     assert 'Remove-NetFirewallRule -Group $RelayKillGroup' in unblock
