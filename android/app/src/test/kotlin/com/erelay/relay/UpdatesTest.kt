@@ -55,6 +55,24 @@ class UpdatesTest {
     }
 
     @Test
+    fun onlyAndroidReleasesAreRead() {
+        val list = """[
+            {"tag_name":"desktop-v9.0.0"},
+            {"tag_name":"android-v0.10.0","draft":true},
+            {"tag_name":"android-v0.9.5","prerelease":true},
+            {"tag_name":"android-v0.4.1"},
+            {"tag_name":"android-v0.4.0"},
+            {"tag_name":"android-vnext"}
+        ]"""
+        assertEquals("android-v0.4.1", Updates.newestAndroidTag(list))
+        assertEquals("android-v0.10.0",
+            Updates.newestAndroidTag("""[{"tag_name":"android-v0.9.0"},{"tag_name":"android-v0.10.0"}]"""))
+        assertEquals("", Updates.newestAndroidTag("""[{"tag_name":"desktop-v1.0"}]"""))
+        assertEquals("", Updates.newestAndroidTag("""{"message":"Not Found"}"""))
+        assertEquals("", Updates.newestAndroidTag("not json"))
+    }
+
+    @Test
     fun whatIsSaidNamesBothVersions() {
         val newer = Updates.Found("0.3.0", "v0.4.0", newer = true).text
         assertTrue(newer.contains("v0.4.0") && newer.contains("0.3.0"))

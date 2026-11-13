@@ -6,14 +6,25 @@ import (
 	"time"
 )
 
-func TestReleaseTag(t *testing.T) {
-	got, err := releaseTag([]byte(`{"url":"https://api.github.com/x","tag_name":" v0.4.1 ","name":"Relay 0.4.1","assets":[]}`))
-	if err != nil || got != "v0.4.1" {
-		t.Fatalf("releaseTag = %q, %v", got, err)
+func TestNewestAndroidTag(t *testing.T) {
+	list := `[
+		{"tag_name":"desktop-v9.0.0"},
+		{"tag_name":"android-v0.10.0","draft":true},
+		{"tag_name":"android-v0.9.5","prerelease":true},
+		{"tag_name":" android-v0.4.1 "},
+		{"tag_name":"android-v0.4.0"},
+		{"tag_name":"android-vnext"}
+	]`
+	got, err := newestAndroidTag([]byte(list))
+	if err != nil || got != "android-v0.4.1" {
+		t.Fatalf("newestAndroidTag = %q, %v; want android-v0.4.1 (Windows, drafts and pre-releases left out)", got, err)
 	}
-	for _, bad := range []string{`{}`, `{"tag_name":"  "}`, `{"message":"Not Found"}`, `not json`, ``} {
-		if got, err := releaseTag([]byte(bad)); err == nil {
-			t.Fatalf("releaseTag(%q) = %q, want an error", bad, got)
+	if got, err := newestAndroidTag([]byte(`[{"tag_name":"android-v0.9.0"},{"tag_name":"android-v0.10.0"}]`)); err != nil || got != "android-v0.10.0" {
+		t.Fatalf("ten after nine: got %q, %v", got, err)
+	}
+	for _, bad := range []string{`[]`, `[{"tag_name":"desktop-v1.0"}]`, `{"message":"Not Found"}`, `not json`, ``} {
+		if got, err := newestAndroidTag([]byte(bad)); err == nil {
+			t.Fatalf("newestAndroidTag(%q) = %q, want an error", bad, got)
 		}
 	}
 }

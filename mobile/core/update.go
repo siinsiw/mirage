@@ -8,14 +8,21 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// ReleasesLatestURL is where GitHub says which release is the newest.
-const ReleasesLatestURL = "https://api.github.com/repos/siinsiw/ovpn-pin/releases/latest"
+// ReleasesURL is GitHub's list of this repository's releases, newest first.
+// The list and not releases/latest: Windows is released from the same
+// repository (desktop-v* tags), and "the newest release" may well be one of
+// those - a version number the Android app has nothing to compare with.
+const ReleasesURL = "https://api.github.com/repos/siinsiw/ovpn-pin/releases?per_page=30"
 
-// LatestRelease is the tag of the newest published release, asked through w -
+// AndroidTagPrefix is how the Android app's own release tags begin.
+const AndroidTagPrefix = "android-v"
+
+// LatestRelease is the tag of the newest published Android release, asked through w -
 // the tunnel that is up - rather than past it: "is there a newer version" is
 // a question the line underneath has no need to see being asked. Nothing is
 // sent but the request itself; nothing is downloaded or installed.
@@ -46,7 +53,7 @@ func LatestRelease(ctx context.Context, w Way, timeout time.Duration) (string, e
 		},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ReleasesLatestURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ReleasesURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -65,20 +72,67 @@ func LatestRelease(ctx context.Context, w Way, timeout time.Duration) (string, e
 	if err != nil {
 		return "", err
 	}
-	return releaseTag(body)
+	return newestAndroidTag(body)
 }
 
-// releaseTag reads tag_name out of GitHub's answer for one release.
-func releaseTag(body []byte) (string, error) {
-	var r struct {
-		Tag string `json:"tag_name"`
+// newestAndroidTag is the highest android-v* tag among the published (not
+// draft, not pre-release) releases in GitHub's list.
+func newestAndroidTag(body []byte) (string, error) {
+	var list []struct {
+		Tag        string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
 	}
-	if err := json.Unmarshal(body, &r); err != nil {
+	if err := json.Unmarshal(body, &list); err != nil {
 		return "", err
 	}
-	tag := strings.TrimSpace(r.Tag)
-	if tag == "" {
-		return "", errors.New("the release has no tag")
+	best, bestV := "", []int(nil)
+	for _, r := range list {
+		tag := strings.TrimSpace(r.Tag)
+		if r.Draft || r.Prerelease || !strings.HasPrefix(tag, AndroidTagPrefix) {
+			continue
+		}
+		v := versionNumbers(strings.TrimPrefix(tag, AndroidTagPrefix))
+		if v == nil {
+			continue
+		}
+		if bestV == nil || laterVersion(v, bestV) {
+			best, bestV = tag, v
+		}
 	}
-	return tag, nil
+	if best == "" {
+		return "", errors.New("GitHub lists no Android release")
+	}
+	return best, nil
+}
+
+// versionNumbers is "1.2.3" as [1 2 3]; nil when it is not dotted numbers.
+func versionNumbers(s string) []int {
+	parts := strings.Split(s, ".")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return nil
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// laterVersion: a after b, number by number, a missing number counting as 0.
+func laterVersion(a, b []int) bool {
+	for i := 0; i < len(a) || i < len(b); i++ {
+		x, y := 0, 0
+		if i < len(a) {
+			x = a[i]
+		}
+		if i < len(b) {
+			y = b[i]
+		}
+		if x != y {
+			return x > y
+		}
+	}
+	return false
 }

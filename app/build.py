@@ -55,6 +55,10 @@ WORK = os.path.join(BUILD_ROOT, 'build')
 NAME = 'Relay'
 STARTERS = os.path.join(HERE, 'public-starters.json')
 
+# Modules in app/ that are for development only and are kept out of the exe
+# (see the --exclude-module arguments in build()).
+DEV_ONLY = ('uidrive', 'uilayout', 'uiperf', 'make_icon', 'make_world')
+
 # The stash the run in progress is holding, so the failure path at the
 # bottom of this file can hand it back. Module scope because main() is
 # where it is taken and __main__ is where a crash is caught.
@@ -569,6 +573,14 @@ def main():
         # which is exactly how the first build shipped.
         '--hidden-import', 'pystray',
         '--hidden-import', 'pystray._win32',
+        # Development tools that sit beside the runtime modules and would be
+        # swept in through main.py's imports: the drivers that press the
+        # window's buttons and move .ovpn files about (--ui-drive), lay it
+        # out and time it (--ui-layout, --ui-perf), and the scripts that make
+        # the icon and the world data at build time. None of them belongs in
+        # what people download. main.py says so if one of those flags is
+        # given to a built copy.
+        *[arg for module in DEV_ONLY for arg in ('--exclude-module', module)],
         os.path.join(HERE, 'main.py'),
     ]
 

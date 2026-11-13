@@ -22,14 +22,23 @@ import relay.Relay
  * plain request from here would go by the bare line. With no tunnel, or when
  * the exit would not carry it, it is asked directly.
  *
- * Not wired to a button yet - see [check].
+ * Pressed from Settings → About ("Check for a newer version", ui/Prefs.kt).
  */
 object Updates {
 
-    const val LATEST = "https://api.github.com/repos/siinsiw/ovpn-pin/releases/latest"
+    /**
+     * The list of releases, newest first - not releases/latest: Windows is
+     * released from the same repository (desktop-v* tags), and the newest
+     * release may well be one of those, a number this app has nothing to
+     * compare with. Only android-v* tags are read ([newestAndroidTag]).
+     */
+    const val RELEASES = "https://api.github.com/repos/siinsiw/ovpn-pin/releases?per_page=30"
+
+    /** How this app's own release tags begin. */
+    const val TAG_PREFIX = "android-v"
 
     /** Where a person goes to get it. */
-    const val PAGE = "https://github.com/siinsiw/ovpn-pin/releases/latest"
+    const val PAGE = "https://github.com/siinsiw/ovpn-pin/releases"
 
     /** What one check found. */
     data class Found(val current: String, val latest: String, val newer: Boolean) {
@@ -71,6 +80,24 @@ object Updates {
         ""
     }
 
+    /**
+     * The newest android-v* tag in GitHub's list of releases, drafts and
+     * pre-releases left out; "" when there is none or the answer is not a
+     * list.
+     */
+    internal fun newestAndroidTag(json: String): String {
+        val list = try { org.json.JSONArray(json) } catch (e: Exception) { return "" }
+        var best = ""
+        for (i in 0 until list.length()) {
+            val r = list.optJSONObject(i) ?: continue
+            if (r.optBoolean("draft") || r.optBoolean("prerelease")) continue
+            val tag = r.optString("tag_name").trim()
+            if (!tag.startsWith(TAG_PREFIX) || numbers(tag.removePrefix(TAG_PREFIX)) == null) continue
+            if (best.isEmpty() || isNewer(tag, best)) best = tag
+        }
+        return best
+    }
+
     /** This build's version, as the manifest has it. */
     fun current(ctx: Context): String = try {
         ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName.orEmpty()
@@ -80,17 +107,14 @@ object Updates {
 
     /**
      * Ask once. Throws when GitHub could not be asked or did not answer with
-     * a release - the message is fit to show.
-     *
-     * Nothing calls this yet: the button belongs in Settings (ui/Prefs.kt),
-     * which is being redesigned on another branch. It needs only
-     * `scope.launch { said = try { Updates.check(context).text } catch (e: Exception) { e.message } }`.
+     * a release - the message is fit to show. Called from the About screen's
+     * button, on its coroutine scope.
      */
     suspend fun check(ctx: Context): Found = withContext(Dispatchers.IO) {
         val tag = throughTunnel() ?: direct()
-        if (tag.isEmpty()) throw IOException("GitHub's answer named no release.")
+        if (tag.isEmpty()) throw IOException("GitHub lists no Android release yet.")
         val now = current(ctx)
-        Found(now, tag, isNewer(tag, now))
+        Found(now, tag.removePrefix(TAG_PREFIX), isNewer(tag, now))
     }
 
     /** The tag asked through the running tunnel; null when there is none or it did not carry the question. */
@@ -104,7 +128,7 @@ object Updates {
     }
 
     private fun direct(): String {
-        val c = URL(LATEST).openConnection() as HttpURLConnection
+        val c = URL(RELEASES).openConnection() as HttpURLConnection
         try {
             c.connectTimeout = 10000
             c.readTimeout = 10000
@@ -114,9 +138,9 @@ object Updates {
             c.setRequestProperty("Accept", "application/vnd.github+json")
             val code = c.responseCode
             if (code != 200) throw IOException("GitHub answered $code.")
-            // One release's description: tens of kilobytes. Not read past a megabyte.
+            // Thirty releases' descriptions: well under a megabyte, and not read past one.
             val body = c.inputStream.use { it.readNBytesCapped(1 shl 20) }
-            return tagOf(String(body, Charsets.UTF_8))
+            return newestAndroidTag(String(body, Charsets.UTF_8))
         } finally {
             c.disconnect()
         }

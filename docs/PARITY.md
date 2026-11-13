@@ -46,7 +46,7 @@ changes a feature updates its row.
 | Long addresses shrink to fit | yes | yes | |
 | Live connection timer | yes | yes | Android: in the notification too |
 | Version in About | yes | yes | Windows: Settings → About this copy |
-| Check for a newer version, only when pressed | yes | part | Windows: About this copy → Check (desktop-v* releases); Android: the check exists in data/Updates.kt, no button yet |
+| Check for a newer version, only when pressed | yes | yes | Windows: About this copy → Check (desktop-v* releases); Android: Settings → About → Check for a newer version (android-v* releases) |
 | Kill switch holds when the tunnel program itself dies | yes | n/a | Windows: Windows Firewall blocks all but Relay, sing-box, gost and the LAN until reconnect, Disconnect or reopening Relay; Android: Android's own always-on VPN / block-without-VPN settings |
 | Note before the Windscribe sign-in (extension-style login, account risk) | yes | yes | once per run on Windows, once ever on Android |
 | Neutral flag for Iran as a setting | no | yes | Android: Settings; the Lion and Sun stays the default |
