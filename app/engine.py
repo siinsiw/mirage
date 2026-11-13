@@ -1427,7 +1427,11 @@ class Engine:
         """Whether a switch should keep the machine pointed at the port while
         the worker behind it is replaced: the kill switch is on, and the
         machine is pointed at us now."""
-        return bool(self.kill_switch and self.engaged())
+        # The firewall's hold counts: it is the kill switch still at work
+        # after the adapter went, and lifting it before the next worker is
+        # up would put the seconds in between on the bare line.
+        return bool(self.kill_switch
+                    and (self.engaged() or self.tun.held_by_firewall()))
 
     def engaged(self):
         """Whether Windows is pointed at this port, either way."""
@@ -1441,7 +1445,10 @@ class Engine:
         """The kill switch at work: Windows pointed at a port with no worker
         behind it, on purpose, so nothing goes out until a reconnect or a
         Disconnect. What the window shows instead of "Disconnected"."""
-        return bool(self.kill_switch and not self.running() and self.engaged())
+        if self.running():
+            return False
+        return bool((self.kill_switch and self.engaged())
+                    or self.tun.held_by_firewall())
 
     def connect(self, country, progress, provider=None, only=None,
                 city=None):
@@ -1615,6 +1622,12 @@ class Engine:
             if progress:
                 progress({'phase': 'routing'})
             self.sysproxy.engage('127.0.0.1', self.port)
+            # A firewall hold from an adapter that died (tun.KILL_PS) let this
+            # worker out - it is one of the programs it allows - but nothing
+            # else. With the proxy setting carrying traffic again it has done
+            # its job; no adapter is coming to lift it, so it is lifted here.
+            if self.tun.held_by_firewall():
+                self.tun.release_firewall()
 
     def hand_split(self, adapter=None):
         """Give the split rules to whichever is deciding: the worker, by its
@@ -1633,6 +1646,11 @@ class Engine:
             self.tun.stop()
         if self.sysproxy.engaged_for(self.port):
             self.sysproxy.restore()
+        # And the kill switch's firewall hold, left when sing-box went by
+        # itself (tun.KILL_PS). Disconnect and quitting are the "let go" it
+        # waits for; one UAC prompt from an unelevated window.
+        if self.tun.held_by_firewall():
+            self.tun.release_firewall()
         # Whatever still reaches the worker now - a program pointed at the
         # port by hand - is the worker's to decide again.
         self.hand_split(adapter=False)
@@ -1935,7 +1953,9 @@ class Engine:
                'routeWith': self.route_with,
                'tun': adapter,
                # Pointed at a port nobody answers, on purpose (kill switch).
-               'blocked': bool(self.kill_switch and not rec and engaged),
+               # Or held by the firewall, once the adapter itself is gone.
+               'blocked': bool(not rec and ((self.kill_switch and engaged)
+                                            or self.tun.held_by_firewall())),
                'killSwitch': self.kill_switch,
                'owed_restore': bool(self.sysproxy.stashed())}
         if rec:

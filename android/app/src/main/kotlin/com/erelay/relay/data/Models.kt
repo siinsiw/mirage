@@ -175,7 +175,7 @@ data class TunnelPlan(
     val hasPassword: Boolean = false,
     val hasApiPassword: Boolean = false,
     val edges: List<String> = emptyList(),
-    /** The certificate a server reached by IP serves, SHA-256 hex; learnt on the first Test. */
+    /** The certificate a server reached by IP serves, SHA-256 hex; from its key, or confirmed on Test. */
     val pin: String = "",
     /** "ss" straight to the address over Shadowsocks, "ws" the WebSocket. */
     val transport: String = "ws",

@@ -88,6 +88,7 @@ import com.erelay.relay.ui.theme.script
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -119,18 +120,42 @@ class PickerModel(
      * later - while a connect is already under way. The touch says which.
      */
     val connects: Boolean = true,
+    /** Where the tunnel is now, for the card at the top of the list; null draws no card. */
+    val now: PickerNow? = null,
+)
+
+/**
+ * The server the screen opens on - the reference's top card: where the
+ * traffic leaves now (or what is picked, before), the address, the traffic
+ * either way, the ping, and the one action - slide to disconnect, or connect.
+ */
+class PickerNow(
+    val mode: com.erelay.relay.data.Mode,
+    /** Two letters, or empty for "any" or your own server. */
+    val code: String,
+    val name: String,
+    val ip: String,
+    /** Bytes a second, down and up. */
+    val down: Long,
+    val up: Long,
+    val ping: Int?,
+    val canAct: Boolean,
+    val onAct: () -> Unit,
 )
 
 /** A row chosen: the firmer confirm when it connects, a tick when it only remembers. */
 private fun Haptics.chose(connects: Boolean) = if (connects) confirm() else select()
 
-// -- continents -------------------------------------------------------------------------
+// -- sections -----------------------------------------------------------------------------
 
-/** The order the groups are listed in; the core's CountriesJSON carries the same names. */
-private val CONTINENTS = listOf("Europe", "Middle East", "Asia", "North America", "South America",
-    "Africa", "Oceania", "Antarctica", "Elsewhere")
+/**
+ * One section of the list: a title, a line under it that says why these are
+ * together, and the countries in it as codes. Every country is in one section only.
+ */
+private class Shelf(val key: String, val title: String, val note: String, val codes: List<String>)
 
-private const val STARRED = "Starred"
+/** How many countries "Fastest now" holds: a short answer, not a second list. */
+private const val FASTEST = 4
 
 // -- search and order -------------------------------------------------------------------
 
@@ -176,20 +201,47 @@ private fun inGroup(sort: Sort): Comparator<Country> = compareBy<Country> { it.b
     })
 
 /**
- * The groups of the list, as codes: Starred first when there is any, then
- * the continents in their order, each sorted within itself; a search keeps
- * the groups and orders each by how well it matched. Empty groups are left out.
+ * The list, by what is useful rather than by geography - the question on
+ * this screen is "where do I connect", and the answer is rarely "which
+ * continent":
+ *
+ *   Starred        the user's own short list, first
+ *   Fastest now    the few with the quickest measured round trip - the
+ *                  answer to that question for whoever has none in mind
+ *   All locations  everything else, in the order the chips at the top chose
+ *   Not answering  the places known dead, at the foot, out of the way
+ *
+ * A search is one list of results, best match first. Empty sections are left out.
  */
-private fun laidOut(countries: List<Country>, q: String, sort: Sort, favourites: Set<String>): List<Pair<String, List<String>>> {
-    val hits = countries.mapNotNull { c -> score(c, q)?.let { c to it } }.toMap()
-    fun order(list: List<Country>) =
-        if (q.isEmpty()) list.sortedWith(inGroup(sort))
-        else list.sortedWith(compareBy<Country>({ hits[it] ?: 0 }, { it.name }))
-    val starred = hits.keys.filter { it.starredIn(favourites) }
-    val rest = hits.keys.filterNot { it.starredIn(favourites) }.groupBy { it.continent }
+private fun laidOut(countries: List<Country>, q: String, sort: Sort, favourites: Set<String>): List<Shelf> {
+    if (q.isNotEmpty()) {
+        val hits = countries.mapNotNull { c -> score(c, q)?.let { c to it } }
+        if (hits.isEmpty()) return emptyList()
+        val n = hits.size
+        return listOf(Shelf("results", "Results", if (n == 1) "1 match" else "$n matches",
+            hits.sortedWith(compareBy<Pair<Country, Int>>({ it.second }, { it.first.blocked }, { it.first.name }))
+                .map { it.first.code }))
+    }
+    val starred = countries.filter { it.starredIn(favourites) }.sortedWith(inGroup(sort))
+    val dead = countries.filter { it.blocked && !it.starredIn(favourites) }.sortedBy { it.name }
+    val open = countries.filter { !it.blocked && !it.starredIn(favourites) }
+    val timed = open.filter { it.tested > 0 && it.ping != null }.sortedBy { it.ping }
+    // Only worth a section when there is something to compare.
+    val fastest = if (timed.size >= 2) timed.take(FASTEST) else emptyList()
+    val fastCodes = fastest.map { it.code }.toSet()
+    val rest = open.filter { it.code !in fastCodes }.sortedWith(inGroup(sort))
     return buildList {
-        if (starred.isNotEmpty()) add(STARRED to order(starred).map { it.code })
-        for (name in CONTINENTS) rest[name]?.let { add(name to order(it).map { c -> c.code }) }
+        if (starred.isNotEmpty()) add(Shelf("starred", "Starred", "Your short list", starred.map { it.code }))
+        if (fastest.isNotEmpty()) add(Shelf("fastest", "Fastest now", "The quickest round trips from here, just measured",
+            fastest.map { it.code }))
+        if (rest.isNotEmpty()) add(Shelf("all", if (fastest.isEmpty() && starred.isEmpty()) "Locations" else "All locations",
+            when (sort) {
+                Sort.PING -> "Quickest first"
+                Sort.LOAD -> "Least busy first"
+                Sort.NAME -> "A to Z"
+            }, rest.map { it.code }))
+        if (dead.isNotEmpty()) add(Shelf("dead", "Not answering", "Their servers did not reply to the last test",
+            dead.map { it.code }))
     }
 }
 
@@ -223,7 +275,7 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
         if (!open) query = "" else m.onOpen()
     }
 
-    Sheet(open, "Choose a location", onClose, scroll = false) {
+    Sheet(open, "Server", onClose, scroll = false) {
         val q = query.trim().lowercase()
         // The order is laid out once - on opening, on a new sort or search -
         // and not again when results arrive, so a row never moves out from
@@ -233,11 +285,6 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
         }
         val byCode = remember(m.countries) { m.countries.associateBy { it.code } }
         val expanded = remember { mutableStateMapOf<String, Boolean>() }
-        // Continents are drawers, all shut each time the sheet opens: a
-        // continent, then a country, then a server - three short choices
-        // instead of one long scroll. One open at a time: the open drawer is
-        // the screen's one active item, and only one thing glows.
-        var drawer by remember(open) { mutableStateOf<String?>(null) }
         // Rows that have made their entrance this time the sheet is open, so
         // one scrolled back into view does not make it again.
         val entered = remember(open) { mutableSetOf<String>() }
@@ -335,40 +382,37 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
                 else tween<androidx.compose.ui.unit.IntOffset>(Shape.DRAWER_OPEN_MS, easing = Shape.expoOut)
             LazyColumn(Modifier.fillMaxWidth().weight(1f), state = list,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = Space.x4)) {
+                // The server in use, on top, scrolling away with the list; not while a search is typed.
+                m.now?.let { now ->
+                    if (q.isEmpty()) item(key = "now", contentType = "now") { NowCard(now) }
+                }
                 if (groups.isEmpty()) {
                     item(key = "none") {
                         Text("No country matches “$query”. Try a city or a two-letter code, or clear the search.",
                             style = Type.body, modifier = Modifier.fillMaxWidth().padding(vertical = Space.x6))
                     }
                 }
-                for ((name, codes) in groups) {
-                    // Starred is the short list on purpose and stays open, and so
-                    // does everything while a search is typed: a result inside a
-                    // shut drawer is a result not found.
-                    val fixed = q.isNotEmpty() || name == STARRED
-                    val shown = fixed || drawer == name
-                    item(key = "gap-$name", contentType = "gap") { Spacer(Modifier.height(Space.x2)) }
-                    stickyHeader(key = "group-$name", contentType = "header") {
-                        DrawerHead(name, codes.size, if (fixed) null else shown, shown) {
-                            drawer = if (shown) null else name
-                        }
+                // Every section open, every row on the page: one list to scroll,
+                // its headings stuck to the top while their rows pass under.
+                var order = 0
+                for (shelf in groups) {
+                    item(key = "gap-${shelf.key}", contentType = "gap") { Spacer(Modifier.height(Space.x3)) }
+                    stickyHeader(key = "group-${shelf.key}", contentType = "header") {
+                        ShelfHead(shelf.title, shelf.note, shelf.codes.size)
                     }
-                    if (shown) {
-                        itemsIndexed(codes, key = { _, c -> c }, contentType = { _, _ -> "country" }) { i, code ->
-                            Box(Modifier.animateItem(fadeInSpec = rowIn, placementSpec = rowMove, fadeOutSpec = rowOut)
-                                .slateSeg(Seg.BODY)) {
-                                byCode[code]?.let { c ->
-                                    // The first twelve rows of a drawer come in one after another;
-                                    // decided once, so a later recomposition does not cut it short.
-                                    val stagger = remember { if (!reduced && i < 12 && code !in entered) i else -1 }
-                                    SideEffect { entered += code }
-                                    Entrance(stagger) { CountryItem(c, m, expanded, first = i == 0) }
-                                }
+                    val base = order
+                    order += shelf.codes.size
+                    itemsIndexed(shelf.codes, key = { _, c -> c }, contentType = { _, _ -> "country" }) { i, code ->
+                        // Bare rows on the page with hairlines between, as the reference's list is.
+                        Box(Modifier.animateItem(fadeInSpec = rowIn, placementSpec = rowMove, fadeOutSpec = rowOut)) {
+                            byCode[code]?.let { c ->
+                                // The first rows on screen come in one after another, down
+                                // the whole list rather than per section; decided once, so a
+                                // later recomposition does not cut it short.
+                                val stagger = remember { if (!reduced && base + i < 12 && code !in entered) base + i else -1 }
+                                SideEffect { entered += code }
+                                Entrance(stagger) { CountryItem(c, m, expanded, first = i == 0) }
                             }
-                        }
-                        item(key = "foot-$name", contentType = "foot") {
-                            Box(Modifier.animateItem(fadeInSpec = rowIn, placementSpec = rowMove, fadeOutSpec = rowOut)
-                                .fillMaxWidth().height(Shape.card).slateSeg(Seg.FOOT))
                         }
                     }
                 }
@@ -379,57 +423,26 @@ fun Picker(open: Boolean, m: PickerModel, onClose: () -> Unit) {
 }
 
 /**
- * A continent drawer's head (DESIGN-NIGHT 9): a Slate card holding the
- * continent's mark in a Raised Slate well, the name, an outlined count and the
- * chevron. While the drawer is open its rows hang below in the same card, and
- * the head is the screen's one active item: the Pulse edge and fill, the
- * halo, the edge bar, the mark in Pulse.
- *
- * [open] is null for a heading that is not a drawer (Starred, or any group
- * while a search is typed): no chevron, and no glow, though its rows still
- * hang below it ([shown]). Otherwise the whole card opens and shuts it.
- * Sticky: rows slide beneath it.
+ * A section's heading, the reference's "Free server" / "Premium server": the
+ * title in 18sp on the bare page, its count in mono beside it, and one quiet
+ * line under it saying why these are together. Sticky, with the page drawn
+ * behind it so rows passing under do not show through. Not a control.
  */
 @Composable
-private fun DrawerHead(name: String, n: Int, open: Boolean?, shown: Boolean, onToggle: () -> Unit) {
-    val haptics = rememberHaptics()
-    val reduced = rememberReducedMotion()
-    val active = open == true
-    val lit by animateFloatAsState(if (active) 1f else 0f,
-        tween(if (reduced) 0 else 450, easing = Shape.power3Out), label = "lit")
-    val seg = if (shown) Seg.HEAD else Seg.WHOLE
-    Box(
+private fun ShelfHead(title: String, note: String, n: Int) {
+    Column(
         Modifier.fillMaxWidth()
-            // Behind the head's round top corners, the page: a row passing
-            // under the stuck head does not show at its corners.
-            .then(if (shown) Modifier.drawBehind { drawRect(Tone.bg) } else Modifier)
-            .slateSeg(seg, lit = lit)
-            .then(if (open == null) Modifier
-                else Modifier.press(shape = RoundedCornerShape(Shape.card), feel = null) { haptics.tick(); onToggle() })
-            .semantics { if (open != null) stateDescription = if (open) "Open" else "Shut" },
+            .drawBehind { drawRect(Tone.bg) }
+            .semantics { heading() }
+            .padding(start = Space.x1, end = Space.x1, top = Space.x2, bottom = Space.x2),
     ) {
-        Row(
-            Modifier.fillMaxWidth().heightIn(min = 64.dp)
-                .padding(start = Space.x3, end = Space.x2, top = Space.x3, bottom = Space.x3),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            val markTint = androidx.compose.ui.graphics.lerp(Tone.text2, Tone.pulse, lit)
-            IconWell(ContinentMark.of(name), tint = markTint)
-            Spacer(Modifier.width(Space.x3))
-            Text(name, style = Type.strong, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, style = Type.subtitle.copy(fontSize = 18.sp, lineHeight = 24.sp), maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             Spacer(Modifier.width(Space.x2))
-            CountBadge(n.toString(), active = active)
-            Spacer(Modifier.weight(1f))
-            if (open != null) {
-                val turn by animateFloatAsState(if (open) 180f else 0f,
-                    tween(if (reduced) 0 else Shape.DRAWER_OPEN_MS, easing = Shape.expoOut), label = "chev")
-                Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-                    Icon(Glyph.chevDown, null, Modifier.size(20.dp).graphicsLayer { rotationZ = turn },
-                        tint = if (open) Tone.text else Tone.text3)
-                }
-            }
+            Text("$n", style = Type.mono.copy(color = Tone.text3), maxLines = 1)
         }
+        if (note.isNotEmpty()) Text(note, style = Type.caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -451,6 +464,79 @@ private fun Entrance(order: Int, content: @Composable () -> Unit) {
         alpha = p.value
         translationY = (1f - p.value) * 8.dp.toPx()
     }) { content() }
+}
+
+// -- the server in use --------------------------------------------------------------------
+
+/** Bytes a second as the reference writes speed: megabits, one decimal under ten. */
+private fun speedOf(caption: String, bps: Long, on: Boolean): Stat {
+    if (!on) return Stat(caption, "—", "")
+    val mbps = bps * 8.0 / 1_000_000.0
+    val v = when {
+        mbps >= 10 -> "%.0f".format(mbps)
+        mbps >= 0.05 -> "%.1f".format(mbps)
+        else -> "0"
+    }
+    return Stat(caption, v, "mbps")
+}
+
+/**
+ * The reference's top card: the flag as a bead, the country big, the
+ * address under it; download, ping and upload in a strip; then the action -
+ * a track to slide for Disconnect (or Cancel), so a brush of the thumb never
+ * drops the tunnel, or the accent button for Connect.
+ */
+@Composable
+private fun NowCard(n: PickerNow) {
+    val shape = RoundedCornerShape(Shape.card)
+    val on = n.mode == com.erelay.relay.data.Mode.ON
+    val busy = n.mode == com.erelay.relay.data.Mode.BUSY
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = Space.x1, bottom = Space.x4)
+            .clip(shape)
+            .background(surfaceBrush())
+            .border(1.dp, Tone.stroke, shape)
+            .padding(start = Space.x5, end = Space.x5, top = Space.x5, bottom = Space.x4),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (n.code.isNotEmpty()) FlagDisc(n.code, 56.dp)
+            else IconWell(Glyph.globe, size = 56.dp, tint = Tone.text)
+            Spacer(Modifier.width(Space.x4))
+            Column(Modifier.weight(1f)) {
+                Text(n.name, style = Type.title.copy(fontSize = 24.sp, lineHeight = 30.sp).script(n.name),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (n.ip.isNotEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Glyph.globe, null, Modifier.size(14.dp), tint = Tone.text2)
+                        Spacer(Modifier.width(6.dp))
+                        Text(n.ip, style = Type.mono.copy(fontSize = 13.sp, color = Tone.text2), maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(Space.x4))
+        StatStrip(
+            down = speedOf("Download", n.down, on),
+            ping = if (n.ping != null && n.ping > 0) Stat("Ping", n.ping.toString(), "ms") else Stat("Ping", "—", ""),
+            up = speedOf("Upload", n.up, on),
+            pingLevel = barsFor(n.ping),
+        )
+        Spacer(Modifier.height(Space.x4))
+        // One press either way: the accent pill to connect; a ghost pill with
+        // its edge to disconnect or cancel, so stopping never looks like the primary.
+        Btn(
+            when {
+                on -> "Disconnect"
+                busy -> "Cancel"
+                else -> "Connect"
+            },
+            n.onAct, Modifier.fillMaxWidth().heightIn(min = 56.dp), enabled = n.canAct,
+            strong = !on && !busy, icon = Glyph.power,
+        )
+    }
 }
 
 // -- rows -------------------------------------------------------------------------------
@@ -480,33 +566,59 @@ private fun CountryItem(c: Country, m: PickerModel, expanded: MutableMap<String,
     val p2p = c.cities.any { it.p2p == true }
 
     Column(Modifier.fillMaxWidth().alpha(if (c.blocked) 0.6f else 1f)) {
-        if (!first) Hair()
+        if (!first) Hair(Space.x1)
+        // The reference's row: a round glossy flag, the name over a "N servers"
+        // line, and a small Connect pill at the end. The whole row still
+        // chooses; the pill is the same choice said out loud.
         ListItem(
             modifier = Modifier
-                .pickedBar(picked)
                 // No haptic of its own: the caller's says whether this connects.
                 .press(feel = null) { haptics.chose(m.connects); m.onChoose(c.code) },
             colors = rowColors(),
-            leadingContent = { Flag(c.code, 28.dp) },
+            leadingContent = { FlagDisc(c.code, 44.dp) },
             headlineContent = {
-                Text(c.name, style = Type.strong, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(c.name, style = Type.strong.copy(fontSize = 17.sp, lineHeight = 22.sp).script(c.name),
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
             },
             supportingContent = {
                 val places = if (c.cities.size > 1) "${c.cities.size} cities"
                     else c.cities.firstOrNull()?.name?.takeIf { it.isNotEmpty() }
-                val line = listOfNotNull(places, "${c.count} relay${if (c.count == 1) "" else "s"}")
+                val line = listOfNotNull("${c.count} server${if (c.count == 1) "" else "s"}", places)
                     .joinToString("  ·  ")
                 Column {
-                    Text(line, style = Type.caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    // The line under the name opens the country's cities and servers.
+                    Row(
+                        Modifier.then(if (expandable) Modifier.press(shape = RoundedCornerShape(Shape.control)) {
+                            haptics.tick(); expanded[c.code] = !open
+                        } else Modifier).padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(line, style = Type.caption, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false))
+                        if (expandable) {
+                            val turn by animateFloatAsState(if (open) 180f else 0f,
+                                tween(Shape.DRAWER_OPEN_MS, easing = Shape.expoOut), label = "rowChev")
+                            Icon(Glyph.chevDown, if (open) "Hide servers" else "Show servers",
+                                Modifier.padding(start = 2.dp).size(14.dp).graphicsLayer { rotationZ = turn },
+                                tint = Tone.text3)
+                        }
+                    }
                     ProviderLine(c.by, c.byTested, c.byOk, tenG, p2p,
-                        extra = if (narrow) { { PingText(c.ping, c.blocked, reach.takeIf { testing }) } } else null)
+                        extra = { PingText(c.ping, c.blocked, reach.takeIf { testing }) })
                 }
             },
             trailingContent = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (!narrow) PingText(c.ping, c.blocked, reach.takeIf { testing })
                     Star(starred) { m.onStar(c.code) }
-                    if (expandable) Chevron(open) { expanded[c.code] = !open }
+                    ConnectPill(
+                        text = when {
+                            picked && m.now?.mode == com.erelay.relay.data.Mode.ON -> "Connected"
+                            picked -> "Selected"
+                            else -> "Connect"
+                        },
+                        current = picked,
+                        onClick = { haptics.chose(m.connects); m.onChoose(c.code) },
+                    )
                 }
             },
         )
@@ -586,7 +698,7 @@ private fun Star(starred: Boolean, onClick: () -> Unit) {
     val haptics = rememberHaptics()
     IconToggleButton(checked = starred, onCheckedChange = { haptics.toggle(it); onClick() }) {
         Icon(Glyph.star, if (starred) "Unstar" else "Star",
-            Modifier.size(20.dp), tint = if (starred) Tone.pulse else Tone.text3)
+            Modifier.size(20.dp), tint = if (starred) Tone.work else Tone.text3)
     }
 }
 

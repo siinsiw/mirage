@@ -316,7 +316,10 @@ usage() {
         unambiguous - \`ovpn connect uk-lon\`. Ambiguous is refused, not guessed.
         No name at all lists what is there, with the last sweep's verdict beside
         each. Probes the address first and only reaches for the proxy if it has
-        to, then switches the system proxy off once the tunnel is up.
+        to, then switches the system proxy off once the tunnel is up. DNS is
+        sent through the tunnel and a kill switch goes up with it, both by
+        default: --no-set-dns and --no-kill-switch (or OVPN_SET_DNS=0 and
+        OVPN_KILL_SWITCH=0 in .env) turn them off.
 
     ovpn <name>
         Same thing. Any word that is not a command below is taken as a config
@@ -327,7 +330,8 @@ usage() {
         that one. Not the same as stop-then-connect typed quickly.
 
     ovpn stop
-        Tunnel down, system proxy back to what it was, kill switch removed.
+        Tunnel down, system proxy back to what it was, kill switch removed,
+        DNS back to what it was.
 
     ovpn status
         What is up, which device it is on, and - by asking Cloudflare - where

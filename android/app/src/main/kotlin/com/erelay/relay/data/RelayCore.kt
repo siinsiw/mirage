@@ -1168,6 +1168,19 @@ class RelayCore(private val app: Application) {
                 ?.let { Keys.serverPasswordProblem(it, "The key's API password") }
             ?: ss?.let { Keys.serverPasswordProblem(it.optString("password"), "The key's Shadowsocks password") }
             )?.let { return@withContext Said.no(it) }
+        // Which way in a key with Shadowsocks starts on. Measured 2026-11-12
+        // from a phone on a mobile line in Iran: Shadowsocks to a server
+        // abroad connected and then carried nothing (the filter drops a
+        // fully encrypted stream to a foreign address), while to a server in
+        // Iran it is domestic traffic and the quickest way in. So Shadowsocks
+        // only for a server in Iran; the WebSocket, which is TLS like any
+        // site, for one abroad - and for one that could not be placed, since
+        // the WebSocket works from anywhere and Shadowsocks only from here.
+        val ssFirst = ss != null && try {
+            Relay.serverInIran(key.optString("host"), 4000L)
+        } catch (e: Exception) {
+            false
+        }
         val stale = key.optString("host") != prefs.getString(Keys.TUNNEL_DOMAIN, "") ||
             exportId != prefs.getString(Keys.TUNNEL_EXPORT_ID, "") ||
             key.optInt("port", 443) != prefs.getInt(Keys.TUNNEL_PORT, 443)
@@ -1196,7 +1209,7 @@ class RelayCore(private val app: Application) {
                 putString(Keys.TUNNEL_SS_METHOD, ss.optString("method"))
                 putInt(Keys.TUNNEL_SS_PORT, ss.optInt("port"))
                 putInt(Keys.TUNNEL_SS_EXIT_PORT, ss.optInt("exitPort"))
-                putString(Keys.TUNNEL_TRANSPORT, "ss")
+                putString(Keys.TUNNEL_TRANSPORT, if (ssFirst) "ss" else "ws")
             } else {
                 remove(Keys.TUNNEL_SS_METHOD)
                 remove(Keys.TUNNEL_SS_PORT); remove(Keys.TUNNEL_SS_EXIT_PORT)
@@ -1207,7 +1220,8 @@ class RelayCore(private val app: Application) {
         _tunnel.value = readTunnel()
         _export.update { readExport(it) }
         Said(true, "Set up for ${key.optString("host")}" +
-            (if (ss != null) ", over Shadowsocks" else "") + ". Press Test to check it carries.")
+            (if (ssFirst) ", over Shadowsocks" else if (ss != null) ", over the WebSocket" else "") +
+            ". Press Test to check it carries.")
     }
 
     /** Shadowsocks or the WebSocket, for a server whose key offered both. */
@@ -1636,6 +1650,11 @@ class RelayCore(private val app: Application) {
                     (e.message ?: e.toString()).take(140))
             }
         }
+        // A server typed in by address, with no key and so no pin: nothing is
+        // sent to it until its certificate has been shown and confirmed.
+        if (cfg.pin.isEmpty() && ServerPin.isAddress(domain)) {
+            firstContact(cfg)?.let { return@withContext it }
+        }
         try {
             ask(cfg)
         } catch (first: Exception) {
@@ -1659,14 +1678,45 @@ class RelayCore(private val app: Application) {
 
     private fun ask(cfg: relay.ServerConfig): Said {
         val seen = JSONObject(Relay.testServer(cfg, 20000L))
-        // A server by address: its certificate, kept the first time it is
-        // seen and required from then on.
-        val pin = seen.optString("pin")
-        if (pin.isNotEmpty() && cfg.pin.isEmpty()) {
-            prefs.edit().putString(Keys.TUNNEL_PIN, pin).apply()
-            _tunnel.value = readTunnel()
-        }
         return Said(true, "Carrying traffic - it comes out at ${seen.optString("ip")}.")
+    }
+
+    /**
+     * The first Test of a server by address that came without a key.
+     *
+     * Its certificate used to be kept the moment it was first seen, and the
+     * tunnel password sent after it - so whatever answered on that address
+     * the first time was the server from then on. Now the first Test only
+     * looks: a bare handshake that sends no password, and the SHA-256 it was
+     * shown comes back in the answer, to be compared with the "certificate
+     * sha256" line the installer printed. A second Test that is shown the
+     * same certificate is the confirmation, and keeps it as the pin; a
+     * different one starts over. The core dials no address without a pin,
+     * so there is no way round this by connecting instead.
+     *
+     * Null when the certificate is now confirmed and on [cfg], and the Test
+     * goes on; otherwise what to say, with nothing sent.
+     */
+    private fun firstContact(cfg: relay.ServerConfig): Said? {
+        val shown = try {
+            Relay.serverFingerprint(cfg, 15000L).trim().lowercase()
+        } catch (e: Exception) {
+            return Said.no("${cfg.domain} did not show a certificate: " +
+                (e.message ?: e.toString()).take(140))
+        }
+        if (shown.isEmpty()) return null
+        val waiting = "${cfg.domain}:${cfg.port} $shown"
+        if (prefs.getString(Keys.TUNNEL_PIN_SHOWN, "") == waiting) {
+            prefs.edit().putString(Keys.TUNNEL_PIN, shown).remove(Keys.TUNNEL_PIN_SHOWN).apply()
+            cfg.pin = shown
+            _tunnel.value = readTunnel()
+            return null
+        }
+        prefs.edit().putString(Keys.TUNNEL_PIN_SHOWN, waiting).apply()
+        return Said.no("Not trusted yet, and nothing was sent. ${cfg.domain} shows the certificate " +
+            "sha256 $shown - compare it with the \"certificate sha256\" line the installer printed. " +
+            "If it is the same, press Test again to trust it; pasting the server's relay:// key " +
+            "does the same without comparing.")
     }
 
     /**
@@ -1918,15 +1968,17 @@ class RelayCore(private val app: Application) {
         }
 
         // The server's certificate before its API: a server by address whose
-        // pin is not kept yet is tested first, plainly, and the pin kept -
-        // the core refuses every API call until then (see ServerPin). Every
-        // call below also goes through ServerPin.call, which does this again
-        // and retries once should the core still say there is no pin.
+        // certificate has not been confirmed (Test, under Settings) is not
+        // sent anything - the core refuses every API call until then (see
+        // ServerPin). Every call below also goes through ServerPin.call,
+        // which says the same should the core still find no pin.
         if (picks.isNotEmpty()) {
             try {
                 ServerPin.ensure(app, cfg)
             } catch (e: Exception) {
-                return Said.no("$domain did not answer a test: ${(e.message ?: e.toString()).take(160)}. " +
+                val why = e.message ?: e.toString()
+                return if (why == ServerPin.UNCONFIRMED) Said.no("$domain: $why.")
+                else Said.no("$domain did not answer a test: ${why.take(160)}. " +
                     "Press Test under Settings → Connection, then try again.")
             }
             _tunnel.value = readTunnel()

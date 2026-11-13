@@ -5,7 +5,7 @@
    ========================================================================= */
 
 :root {
-  /* Graphite, the default. */
+  /* Base tokens; midnight.css sets the one theme on top of these. */
   --void: #060607;
   --bg: #0A0A0C;            /* Night */
   --surface: #101013;       /* Slate Card */
@@ -79,47 +79,6 @@
   --ease: cubic-bezier(0, 0, 0, 1);
   --shade: 1;
   --deep: 10 10 12;
-}
-
-:root[data-theme='white'] {
-  --void: #ECECEF;
-  --bg: #F6F6F7;
-  --surface: #FFFFFF;
-  --surface-2: #ECECEF;
-  --stroke: rgba(0, 0, 0, 0.07);
-  --stroke-strong: rgba(0, 0, 0, 0.12);
-  --text: #16171A;
-  --text-2: #555862;
-  --text-3: #7A7D86;
-  --off: #6E717A;
-  --work: #B7791F;
-  --ok: #1F8A4C;
-  --good: #139A48;
-  --serious: #C2602A;
-  --fail: #D1434F;
-  --pulse: #139A48;
-  --halo: rgba(19, 154, 72, 0);
-  --pulse-fill: rgba(19, 154, 72, 0.14);
-  --periwinkle: #4F6FD9;
-  --aqua: #1798A6;
-  --orchid: #9A5FD6;
-  --on-state: #FFFFFF;
-  --glass-solid: #FFFFFF;
-  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.12);
-  --vignette: rgba(0, 0, 0, 0.16);
-  --scrim: rgba(0, 0, 0, 0.32);
-  --wash: 0 0 0;
-  --shade: 0.25;
-  --deep: 255 255 255;
-  color-scheme: light;
-}
-
-/* Black: the same Night palette on the Void page - the surfaces stay Slate
-   Card and Raised Slate, only the page underneath them goes down a step. */
-:root[data-theme='black'] {
-  --bg: #060607;            /* Void */
-  --deep: 6 6 7;
-  --on-state: #060607;
 }
 
 /* The state, and what it is called in each. Not the hero's own attribute: the
@@ -4341,50 +4300,6 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 .steps__bar i { display: block; height: 100%; width: 2%; background: var(--ok); transition: width 300ms ease; }
 
-/* ---------------------------------------------------------------- themes */
-
-/* The Android app's nine palettes. Midnight is :root above. Each dark one
-   moves the page, its surfaces and its light; White turns the page over -
-   dark text, dark hairlines, the state colours a step deeper so mint and
-   amber still read on paper. */
-
-/* The theme picker: each theme as a little page of itself - its background,
-   a card on it, and a dot of mint - so the choice is seen, not read. */
-
-.themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
-
-.theme {
-  display: flex; flex-direction: column; gap: 6px; padding: 6px;
-  border: 1px solid var(--border); border-radius: var(--r-ctl);
-  background: transparent; color: var(--text-muted); font: inherit; font-size: 12px;
-  cursor: pointer; text-align: left;
-}
-
-.theme:hover { border-color: rgb(var(--wash) / 0.28); }
-
-.theme[aria-checked='true'] { border-color: var(--ok); color: var(--text); box-shadow: 0 0 0 1px var(--ok); }
-
-.theme__page {
-  position: relative; height: 34px; border-radius: var(--r-ctl); overflow: hidden;
-  background: var(--page);
-  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.08);
-}
-
-.theme__page i {
-  position: absolute; left: 6px; right: 14px; bottom: 6px; height: 12px;
-  border-radius: var(--r-ctl); background: var(--card);
-}
-
-.theme__page b {
-  position: absolute; right: 6px; top: 6px; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--ok);
-}
-
-:root[data-theme='white'] .sheet__list::-webkit-scrollbar-thumb,
-:root[data-theme='white'] .sheet__body::-webkit-scrollbar-thumb {
-  border-color: var(--surface); background: #c9ccd4;
-}
-
 /* The window's own buttons along the top of every sheet. */
 
 .winbar {
@@ -4550,8 +4465,6 @@ body {
   isolation: isolate;
 }
 
-
-:root[data-theme='white'] .backdrop { --flag-o: 0.2; }
 
 .head {
   position: relative;
@@ -5415,8 +5328,6 @@ button.gh:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; 
   --seg-on: color-mix(in srgb, var(--surface-2), var(--text) 12%);
 }
 
-:root[data-theme='white'] { --seg-on: #FFFFFF; }
-
 /* ---------------------------------------------------------------- sheets */
 
 .sheet__top { min-height: 56px; padding: 12px 16px 8px; }
@@ -5927,17 +5838,6 @@ button.gh:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; 
 
 .steps__bar i { transition: width var(--t-panel) var(--decel); }
 
-/* ------------------------------------------------------------------ look */
-
-.themes { gap: 8px; margin-top: 4px; }
-
-.theme { padding: 8px; border-radius: var(--r-ctl); background: var(--surface); box-shadow: none; color: var(--text-2); }
-
-.theme:hover { border-color: var(--stroke-strong); }
-
-.theme[aria-checked='true'] { border-color: var(--text); box-shadow: none; color: var(--text); font-weight: 600; }
-
-.theme__page b { display: none; }
 
 /* -------------------------------------------------------------------- log */
 
@@ -6243,13 +6143,6 @@ button.gh:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; 
   --type-shadow: 0 2px 16px rgba(0, 0, 0, 0.75);
 }
 
-:root[data-theme='white'] {
-  --glass: rgba(255, 255, 255, 0.62);
-  --glass-edge: rgba(0, 0, 0, 0.08);
-  --glass-top: rgba(255, 255, 255, 0.9);
-  --type-shadow: 0 1px 12px rgba(255, 255, 255, 0.85);
-}
-
 .backdrop { display: none; }
 
 /* the cone from above, behind the planet; the grain over it, under the app */
@@ -6402,21 +6295,13 @@ body::after {
   --brand: var(--periwinkle);
 }
 
-:root[data-theme='black'] { --sheet-glass: rgba(6, 6, 7, 0.82); }
-
-:root[data-theme='white'] {
-  --sheet-glass: rgba(246, 246, 247, 0.88);
-  --pop-glass: rgba(255, 255, 255, 0.62);
-  --halo-ring: 0 0 0 0 transparent;   /* glow off on white: bar + fill only */
-}
-
 /* Persian is set in Estedad with room for its marks. */
 :lang(fa), [dir='rtl'] { font-family: 'Estedad Relay', var(--font-ui); line-height: 1.9; }
 
 :focus-visible { outline-color: var(--focus); }
 
 .go:focus-visible, .row:focus-visible, button.gh:focus-visible,
-.globe-hit:focus-visible, .menu__row:focus-visible, .theme:focus-visible,
+.globe-hit:focus-visible, .menu__row:focus-visible,
 .dd__opt:focus-visible { outline: 2px solid var(--focus); }
 
 /* ------------------------------------------------------------ the mark */
@@ -6465,8 +6350,6 @@ body::after {
   background: var(--halo);
   opacity: 0;
 }
-
-:root[data-theme='white'] .live__halo { background: var(--pulse-fill); }
 
 .where { border-radius: var(--r-pill); padding: 4px 12px 4px 8px; }
 
@@ -6564,7 +6447,7 @@ body::after {
 
 .dd__opt .dd__check { display: none; }
 
-.dd__glow, .themes__glow {
+.dd__glow {
   position: absolute;
   z-index: 0;
   top: 0;
@@ -6581,7 +6464,7 @@ body::after {
 
 .dd__glow { left: 6px; right: 6px; height: 0; border-radius: var(--r-ctl); --glow-base: var(--glass-solid); }
 
-.dd__glow::before, .themes__glow::before {
+.dd__glow::before {
   content: '';
   position: absolute;
   left: -1px;
@@ -6596,7 +6479,7 @@ body::after {
 /* ------------------------------------------------------------ cards */
 
 .cards, .kv, .split, .folds, .pane__aside, .prov, .choice, .qr, .runs,
-.menu, .expander__sum, .addacct__full, .themes {
+.menu, .expander__sum, .addacct__full {
   border-radius: var(--r-card);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--edge);
@@ -6846,43 +6729,6 @@ body::after {
 #sortBy .pair__opt[aria-selected='true'] { background: var(--surface-2); box-shadow: none; font-weight: 500; }
 
 .listhead { height: 34px; padding: 0 10px 0 14px; border-radius: var(--r-pill); box-shadow: inset 0 0 0 1px var(--edge); }
-
-/* ------------------------------------------------------------ the theme list
-
-   Three themes as three rows, not three equal tiles; the chosen one sits on
-   the shared glow, which slides. */
-.themes {
-  position: relative;
-  grid-template-columns: 1fr;
-  gap: 0;
-  padding: 4px;
-  margin-top: 4px;
-}
-
-.theme {
-  position: relative;
-  z-index: 1;
-  flex-direction: row;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 16px 10px 12px;
-  border: 0;
-  border-radius: var(--r-sheet);
-  background: none;
-  box-shadow: none;
-  font-size: 14px;
-  color: var(--text-2);
-}
-
-.theme:hover { color: var(--text); background: rgb(var(--wash) / 0.03); }
-
-.theme[aria-checked='true'] { color: var(--text); font-weight: 500; border: 0; box-shadow: none; background: none; }
-
-.theme__page { flex: none; width: 44px; height: 30px; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--edge); }
-
-.theme__page i { left: 6px; right: 12px; bottom: 6px; height: 10px; border-radius: 5px; }
-
-.themes__glow { left: 4px; right: 4px; height: 50px; border-radius: var(--r-sheet); }
 
 /* ------------------------------------------------------- the location list */
 

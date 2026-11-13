@@ -1,0 +1,538 @@
+<title>Relay Review Desk</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: a light table. The real 400 × 740 window sits on the desk in the
+   middle; the index of its sections runs down the start side (right, RTL),
+   and what the chosen section is, and where it lives in code, down the end
+   side. Narrow screens stack the three. */
+@font-face { font-family: "Estedad Relay"; src: url("app/fonts/Estedad-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Geist Relay"; src: url("app/fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Geist Mono Relay"; src: url("app/fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+
+:root {
+  --desk: #E3E5E8;
+  --panel: #F6F6F7;
+  --sunk: #ECEDEF;
+  --ink: #0B0C0E;
+  --ink-2: #4C4F57;
+  --ink-3: #767983;
+  --line: rgba(11, 12, 14, 0.10);
+  --accent: #139A48;
+  --accent-soft: rgba(19, 154, 72, 0.12);
+  --frame-shadow: 0 34px 70px -28px rgba(12, 14, 20, 0.45), 0 0 0 1px rgba(12, 14, 20, 0.10);
+  --fa: "Estedad Relay", Tahoma, system-ui, sans-serif;
+  --latin: "Geist Relay", "Segoe UI", system-ui, sans-serif;
+  --mono: "Geist Mono Relay", "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --desk: #050506;
+    --panel: #0E0E11;
+    --sunk: #16161A;
+    --ink: #F4F4F6;
+    --ink-2: #A3A3AB;
+    --ink-3: #6F6F79;
+    --line: rgba(255, 255, 255, 0.08);
+    --accent: #1ED760;
+    --accent-soft: rgba(30, 215, 96, 0.12);
+    --frame-shadow: 0 34px 90px -24px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.09);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --desk: #050506;
+  --panel: #0E0E11;
+  --sunk: #16161A;
+  --ink: #F4F4F6;
+  --ink-2: #A3A3AB;
+  --ink-3: #6F6F79;
+  --line: rgba(255, 255, 255, 0.08);
+  --accent: #1ED760;
+  --accent-soft: rgba(30, 215, 96, 0.12);
+  --frame-shadow: 0 34px 90px -24px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.09);
+  color-scheme: dark;
+}
+
+html, body { height: 100%; }
+body {
+  background: var(--desk);
+  color: var(--ink);
+  font-family: var(--fa);
+  direction: rtl;
+}
+* { box-sizing: border-box; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mono, code { font-family: var(--mono); font-size: 0.8125rem; direction: ltr; unicode-bidi: isolate; }
+.latin { font-family: var(--latin); direction: ltr; unicode-bidi: isolate; }
+
+.desk {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 17rem minmax(0, 1fr) 21rem;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "top top top" "index stage notes";
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 16px;
+  column-gap: 16px;
+}
+
+/* ---------------------------------------------------------------- top */
+.top {
+  grid-area: top;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  padding-block: 14px;
+}
+.brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.brand__name { font-family: var(--latin); font-weight: 650; font-size: 1.25rem; letter-spacing: -0.01em; }
+.brand__what { font-weight: 600; font-size: 1rem; }
+.brand__note { color: var(--ink-3); font-size: 0.8125rem; }
+.top__tools { margin-inline-start: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.seg {
+  display: inline-flex; padding: 3px; gap: 2px;
+  background: var(--sunk); border-radius: 999px; border: 1px solid var(--line);
+}
+.seg__label { color: var(--ink-3); font-size: 0.8125rem; }
+.seg button {
+  border: 0; background: transparent; cursor: pointer;
+  padding: 5px 12px; border-radius: 999px; font-family: var(--latin); font-size: 0.8125rem; color: var(--ink-2);
+}
+.seg button[aria-checked="true"] { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+.quiet {
+  border: 1px solid var(--line); background: var(--panel); cursor: pointer;
+  border-radius: 999px; padding: 5px 14px; font-size: 0.8125rem; color: var(--ink-2);
+}
+.quiet:hover, .seg button:hover { color: var(--ink); }
+.live { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 0.8125rem; }
+.live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.live[data-flash="1"]::before { animation: blink 0.6s ease 2; }
+@keyframes blink { 50% { opacity: 0.2; } }
+
+/* -------------------------------------------------------------- index */
+.index {
+  grid-area: index;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-block: 4px 24px;
+  padding-inline-end: 4px;
+}
+.group + .group { margin-top: 18px; }
+.group__name {
+  font-size: 0.75rem; color: var(--ink-3); font-weight: 600;
+  padding-inline: 10px; margin: 0 0 6px;
+}
+.item {
+  width: 100%; display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: center;
+  column-gap: 10px; text-align: start;
+  border: 0; background: transparent; cursor: pointer;
+  padding: 7px 10px; border-radius: 10px;
+}
+.item:hover { background: var(--sunk); }
+.item__dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; }
+.item__fa { font-size: 0.9375rem; line-height: 1.5; }
+.item__en { grid-column: 2; font-family: var(--latin); font-size: 0.75rem; color: var(--ink-3); direction: ltr; text-align: end; justify-self: start; }
+.item[aria-current="true"] { background: var(--accent-soft); }
+.item[aria-current="true"] .item__dot { background: var(--accent); }
+.item[aria-current="true"] .item__fa { font-weight: 650; }
+
+/* -------------------------------------------------------------- stage */
+.stage {
+  grid-area: stage;
+  min-height: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px;
+}
+.frame {
+  direction: ltr;
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--frame-shadow);
+  background: #0A0A0C;
+  flex: none;
+}
+.frame iframe {
+  position: absolute; inset: 0 auto auto 0;
+  width: 400px; height: 740px; border: 0;
+  transform-origin: 0 0;
+  background: #0A0A0C;
+}
+.frame__wait {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  color: #8A8A94; font-size: 0.875rem; direction: rtl; pointer-events: none;
+  background: #0A0A0C; transition: opacity 250ms ease;
+}
+.frame[data-ready="1"] .frame__wait { opacity: 0; }
+.measure { display: flex; gap: 14px; align-items: center; color: var(--ink-3); font-size: 0.75rem; }
+
+/* -------------------------------------------------------------- notes */
+.notes {
+  grid-area: notes;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 22px 22px 20px;
+  display: flex; flex-direction: column; gap: 18px;
+  align-self: start;
+  max-height: 100%;
+}
+.notes__group { color: var(--ink-3); font-size: 0.8125rem; margin: 0; }
+.notes__title { font-size: 1.75rem; line-height: 1.3; font-weight: 750; margin: 2px 0 0; text-wrap: balance; }
+.notes__en { color: var(--ink-2); font-family: var(--latin); font-size: 0.875rem; direction: ltr; text-align: end; margin: 4px 0 0; }
+.notes__desc { font-size: 0.9375rem; line-height: 1.85; margin: 0; color: var(--ink); max-width: 36em; }
+.where { display: grid; gap: 10px; margin: 0; }
+.where__row { display: grid; gap: 6px; }
+.where dt { font-size: 0.75rem; color: var(--ink-3); font-weight: 600; }
+.where dd { margin: 0; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; direction: ltr; }
+.where code {
+  background: var(--sunk); border: 1px solid var(--line); border-radius: 7px;
+  padding: 2px 7px; font-size: 0.75rem; color: var(--ink-2); word-break: break-all;
+}
+.notes__key { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink-3); font-size: 0.75rem; border-top: 1px solid var(--line); padding-top: 14px; }
+.steps { display: flex; gap: 8px; }
+.steps button {
+  flex: 1; border: 1px solid var(--line); background: var(--sunk); cursor: pointer;
+  border-radius: 12px; padding: 9px 12px; font-size: 0.875rem; color: var(--ink-2);
+}
+.steps button:hover:not(:disabled) { color: var(--ink); border-color: color-mix(in srgb, var(--ink), transparent 80%); }
+.steps button:disabled { opacity: 0.4; cursor: default; }
+
+/* ------------------------------------------------- narrower desks */
+@media (max-width: 1180px) {
+  .desk {
+    height: auto; min-height: 100%;
+    grid-template-columns: 15.5rem minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    grid-template-areas: "top top" "index stage" "index notes";
+    row-gap: 16px;
+  }
+  .index { position: sticky; top: env(safe-area-inset-top, 0px); max-height: 100vh; align-self: start; }
+  .notes { max-height: none; align-self: stretch; }
+}
+@media (max-width: 760px) {
+  .desk {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "top" "index" "stage" "notes";
+  }
+  .index {
+    position: static; max-height: none; overflow-x: auto; overflow-y: hidden;
+    display: flex; gap: 6px; padding-block: 2px 8px; scrollbar-width: thin;
+  }
+  .group { display: contents; }
+  .group__name { display: none; }
+  .item {
+    width: auto; flex: none; display: flex; gap: 6px; white-space: nowrap;
+    border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 12px;
+  }
+  .item__en { display: none; }
+  .brand { flex-wrap: wrap; row-gap: 2px; }
+  .notes__title { font-size: 1.5rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .frame__wait { transition: none; }
+  .live[data-flash="1"]::before { animation: none; }
+}
+</style>
+
+<div class="desk">
+  <header class="top">
+    <div class="brand">
+      <span class="brand__name latin">Relay</span>
+      <span class="brand__what">میز بازبینی</span>
+      <span class="brand__note">خودِ رابط ویندوز با دادهٔ نمونه؛ اتصال و همهٔ دکمه‌ها فقط شبیه‌سازی‌اند و روی سیستم اجرا نمی‌شوند</span>
+    </div>
+    <div class="top__tools">
+      <span class="live" id="live" hidden title="هر تغییری در فایل‌های اپ، چند لحظه بعد خودش اینجا دیده می‌شود">زنده</span>
+      <button type="button" class="quiet" id="reload">از اول</button>
+    </div>
+  </header>
+
+  <nav class="index" id="index" aria-label="بخش‌های اپ"></nav>
+
+  <main class="stage" id="stage">
+    <div class="frame" id="frame" data-ready="0">
+      <iframe id="app" src="app/index.html" title="پنجرهٔ Relay"></iframe>
+      <div class="frame__wait" id="wait">پنجره دارد بالا می‌آید…</div>
+    </div>
+    <div class="measure mono" aria-hidden="true"><span id="size">400 × 740</span><span id="scale"></span></div>
+  </main>
+
+  <aside class="notes" id="notes" aria-live="polite">
+    <div>
+      <p class="notes__group" id="nGroup"></p>
+      <h1 class="notes__title" id="nTitle"></h1>
+      <p class="notes__en" id="nEn"></p>
+    </div>
+    <p class="notes__desc" id="nDesc"></p>
+    <dl class="where">
+      <div class="where__row"><dt>ویندوز</dt><dd id="nWin"></dd></div>
+      <div class="where__row" id="nDroidRow"><dt>اندروید</dt><dd id="nDroid"></dd></div>
+    </dl>
+    <div class="steps">
+      <button type="button" id="prev">بخش قبل</button>
+      <button type="button" id="next">بخش بعد</button>
+    </div>
+    <div class="notes__key"><span>نام این بخش برای گفت‌وگو</span><code id="nKey"></code></div>
+  </aside>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  const DROID = 'android/…/relay/ui/';
+  const GROUPS = [
+    ['home', 'صفحهٔ اصلی'],
+    ['sheets', 'برگه‌های روی صفحهٔ اصلی'],
+    ['prefs', 'تنظیمات'],
+    ['first', 'اولین اجرا'],
+    ['forms', 'فرم‌ها و پرسش‌ها'],
+  ];
+
+  const SECTIONS = [
+    { id: 'home-off', group: 'home', fa: 'قطع', en: 'Disconnected',
+      desc: 'صفحهٔ اصلی وقتی وصل نیست: نقشهٔ کره با نشانی واقعی شما، کارت مکان خروج، فهرست «مسیر خروج» و دکمهٔ بزرگ اتصال. کلیک روی کره هم وصل می‌کند و نگه‌داشتنش اتصال را از نو می‌سازد.',
+      win: ['index.html #hero', 'index.html #card', 'app.js render()', 'atlas.js'], droid: ['Home.kt', '../orb/GlobeView.kt'] },
+    { id: 'home-connecting', group: 'home', fa: 'در حال اتصال', en: 'Connecting',
+      desc: 'مرحله‌های اتصال یکی‌یکی نشان داده می‌شوند: پیدا کردن سرور، باز کردن اتصال، هدایت ویندوز و بررسی. در این پیش‌نمایش روی مرحلهٔ آخر نگه داشته شده تا بشود با حوصله نگاهش کرد.',
+      win: ['app.js window.onProgress', 'app.js STAGES'], droid: ['Home.kt'] },
+    { id: 'home-on', group: 'home', fa: 'وصل', en: 'Connected',
+      desc: 'نشانی‌ای که سایت‌ها می‌بینند، پرچم کشور خروج که کم‌رنگ پشت صفحه می‌نشیند، زمان‌سنج اتصال و شمارندهٔ ترافیک که هر ثانیه جلو می‌رود.',
+      win: ['app.js window.onConnected', 'app.js window.onTraffic'], droid: ['Home.kt', 'Flux.kt'] },
+    { id: 'home-blocked', group: 'home', fa: 'اینترنت بسته شد', en: 'Blocked',
+      desc: 'وقتی «قطع اینترنت هنگام افتادن اتصال» روشن است و اتصال می‌افتد: پیام قرمز و دو راه، دوباره وصل شدن یا برگرداندن ویندوز به حالت عادی.',
+      win: ['app.js showBlocked()', 'index.html #blocked'], droid: ['Home.kt'] },
+    { id: 'home-failed', group: 'home', fa: 'وصل نشد', en: 'Not connected',
+      desc: 'هیچ سروری جواب نداد. علت به زبان ساده زیر دکمه نوشته می‌شود و دکمه برای تلاش دوباره آماده است.',
+      win: ['app.js window.onFailedPlain'], droid: ['Home.kt'] },
+
+    { id: 'picker', group: 'sheets', fa: 'انتخاب مکان خروج', en: 'Exit location',
+      desc: 'کشورها به ترتیب سرعت و دسته‌بندی‌شده بر اساس قاره، ستاره‌دارها در بالا، شهرها داخل کارت هر کشور، و کشورهایی که جواب نداده‌اند با علامت قرمز. جست‌وجو اشتباه تایپی را هم می‌فهمد.',
+      win: ['index.html #picker', 'app.js openPicker()', 'app.js drawList()'], droid: ['Picker.kt'] },
+    { id: 'source', group: 'sheets', fa: 'منبع سرورها', en: 'Connect through',
+      desc: 'از کدام مجموعه سرور وصل شود: همه، پین‌شده، تأییدشده، ستاره‌دار، یا سرورهایی که برای ورود به یک سایت خاص سنجیده شده‌اند.',
+      win: ['index.html #srcDlg', 'app.js openSource()'], droid: ['Picker.kt'] },
+    { id: 'dropped', group: 'sheets', fa: 'سرورهای ازکارافتاده', en: 'Dead exits',
+      desc: 'سرورهایی که در آخرین سنجش جواب ندادند، با علت هرکدام، و امکان کنار گذاشتنشان یا برگرداندن آن‌هایی که قبلاً کنار رفته‌اند.',
+      win: ['index.html #dropDlg', 'app.js openDrop()'], droid: [] },
+    { id: 'log', group: 'sheets', fa: 'چه چیزی از اتصال رد می‌شود', en: 'Log',
+      desc: 'فهرست زندهٔ سایت‌ها و برنامه‌هایی که از اتصال استفاده می‌کنند، با حجم دانلود و آپلود هرکدام. برای همین اینجا اول وصل می‌شود و بعد باز می‌شود.',
+      win: ['index.html #log', 'app.js log.show()'], droid: ['Log.kt'] },
+
+    { id: 'prefs-menu', group: 'prefs', fa: 'فهرست تنظیمات', en: 'Settings',
+      desc: 'ورودی همهٔ تنظیمات؛ هر ردیف با یک توضیح کوتاه به صفحهٔ خودش می‌رود.',
+      win: ['index.html #prefs', 'index.html #prefsMenu', 'app.js showScreen()'], droid: ['Prefs.kt'] },
+    { id: 'prefs-accounts', group: 'prefs', fa: 'حساب‌ها', en: 'Accounts',
+      desc: 'برای هر سرویس (Surfshark و Windscribe) یک کارت: وضعیت ورود، تعداد سرورهای آماده و دکمه‌های گرفتن و پین کردن سرورها. اینکه از کدام سرویس وصل شود هم همین‌جا انتخاب می‌شود.',
+      win: ['index.html #prefAccounts', 'app.js acctRefresh()', 'app.js paintUse()'], droid: ['Accounts.kt'] },
+    { id: 'prefs-connection', group: 'prefs', fa: 'اتصال', en: 'Connection',
+      desc: 'مسیر ترافیک (تنظیم پراکسی ویندوز یا آداپتور تونل)، قطع اینترنت هنگام افتادن اتصال، تونل جداگانه برای سایت‌ها و برنامه‌ها، پورت، اشتراک روی وای‌فای و سرور شخصی.',
+      win: ['index.html data-screen="connection"', 'index.html #prefSplit', 'index.html #prefTunnel', 'index.html #prefLan'], droid: ['Prefs.kt', 'Split.kt'] },
+    { id: 'prefs-share', group: 'prefs', fa: 'دستگاه‌های دیگر', en: 'Other devices',
+      desc: 'ساختن لینک VLESS و VMess و کد QR برای گوشی و دستگاه‌های دیگر، از راه سرور شخصی و برای چند مکان.',
+      win: ['index.html #prefShare', 'app.js sharePane'], droid: ['Share.kt'] },
+    { id: 'prefs-servers', group: 'prefs', fa: 'سرورها', en: 'Servers',
+      desc: 'پین کردن کانفیگ‌ها به IP واقعی، زمان‌سنجی سریع، و سنجش کامل با تنظیم مسیر، دامنه و سایت‌هایی که باید باز شوند.',
+      win: ['index.html #prefPin', 'index.html #prefQuick', 'index.html #prefSweep'], droid: ['Prefs.kt'] },
+    { id: 'prefs-window', group: 'prefs', fa: 'پنجره', en: 'Window',
+      desc: 'همیشه روی بقیه، قفل جای پنجره، اجرا همراه ویندوز و اینکه دکمهٔ بستن به سینی برود یا خارج شود. فقط در نسخهٔ ویندوز.',
+      win: ['index.html data-screen="window"', 'app.js paintWindowOptions()'], droid: [] },
+    { id: 'prefs-about', group: 'prefs', fa: 'درباره', en: 'About',
+      desc: 'نسخه، پورت و پوشه‌ای که حساب‌ها و تنظیمات در آن نگه داشته می‌شوند.',
+      win: ['index.html data-screen="about-this-copy"'], droid: ['Prefs.kt'] },
+
+    { id: 'intro', group: 'first', fa: 'معرفی', en: 'Intro',
+      desc: 'چهار مرحلهٔ اولین اجرا با طراحی Mirage: چشم اسطرلاب که باز می‌شود، نام MIRAGE با بازتاب سرابی، نقشهٔ ستاره‌ای در پس‌زمینه و دکمهٔ مهرهٔ گردان. بین مراحل، متن با حرکت «کتیبه» عوض می‌شود. «Skip» یا «Get started» آن را برای همیشه می‌بندد.',
+      win: ['index.html #introDlg', 'intro.css', 'app.js runIntro()', 'app.js introEnter()'], droid: ['Intro.kt', 'Logo.kt'] },
+    { id: 'welcome', group: 'first', fa: 'خوش‌آمد', en: 'Welcome',
+      desc: 'وقتی هنوز نه حسابی هست و نه سروری. با طراحی Mirage: همان نقشهٔ ستاره‌ای معرفی دور لوگوی کوچک، تیتر تک‌خطی و سه گزینهٔ هم‌وزن (Surfshark، Windscribe، سرور شخصی) به سبک «سنگ سیاه با لبهٔ نور».',
+      win: ['index.html #welcomeDlg', 'intro.css', 'app.js openWelcome()', 'app.js welcomeEnter()'], droid: ['Welcome.kt'] },
+    { id: 'setup', group: 'first', fa: 'آماده‌سازی سرورها', en: 'Getting your servers ready',
+      desc: 'بلافاصله بعد از ورود: گرفتن فهرست سرورها و پین کردنشان، با طراحی Mirage: چشم اسطرلاب در حال جست‌وجو، سه مرحلهٔ حکاکی‌شده و خط‌کش پیشرفت. در این پیش‌نمایش حدود سیزده ثانیه طول می‌کشد و بعد خودش بسته می‌شود. در اپ واقعی اولین بار خطا می‌دهد (ایراد شناخته‌شده).',
+      win: ['index.html #setupDlg', 'intro.css', 'app.js prepareServers()', 'app.js setupScan()'], droid: ['Welcome.kt'] },
+
+    { id: 'account-add', group: 'forms', fa: 'افزودن حساب', en: 'Add an account',
+      desc: 'فرم ورود به سرویس با طراحی Mirage: لوگوی سرویس در حلقهٔ اسطرلاب، فیلدهای سنگ سیاه با نور لبه، و دکمهٔ مهرهٔ گردان. برای Surfshark رمز صفحهٔ تنظیم دستی لازم است، نه ایمیل. در پیش‌نمایش چیزی فرستاده نمی‌شود و ورود همیشه رد می‌شود.',
+      win: ['index.html #acctDlg', 'intro.css', 'app.js acctShowForm()', 'app.js acctSucceed()'], droid: ['Accounts.kt'] },
+    { id: 'captcha', group: 'forms', fa: 'پازل Windscribe', en: 'Puzzle',
+      desc: 'پازل کشویی که Windscribe موقع ورود می‌خواهد و روی فرم افزودن حساب باز می‌شود. تصویرهایش اینجا نمونه‌اند.',
+      win: ['index.html #wsCapDlg', 'app.js wsShowCaptcha()'], droid: ['Accounts.kt'] },
+    { id: 'ask-close', group: 'forms', fa: 'پرسش هنگام بستن', en: 'Close Relay?',
+      desc: 'وقتی پنجره بسته می‌شود: برود توی سینی و اتصال بماند، یا کامل خارج شود؛ با گزینهٔ به‌خاطر سپردن جواب.',
+      win: ['index.html #askClose', 'app.js askClose()'], droid: [] },
+  ];
+
+  const $ = (id) => document.getElementById(id);
+  const byId = Object.fromEntries(SECTIONS.map((s) => [s.id, s]));
+  const groupName = Object.fromEntries(GROUPS);
+  const frame = $('frame');
+  const app = $('app');
+
+  /* ------------------------------------------------------------ index */
+  const items = {};
+  for (const [key, name] of GROUPS) {
+    const g = document.createElement('section');
+    g.className = 'group';
+    const h = document.createElement('h2');
+    h.className = 'group__name';
+    h.textContent = name;
+    g.append(h);
+    for (const s of SECTIONS.filter((x) => x.group === key)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'item';
+      b.id = `go-${s.id}`;
+      b.setAttribute('aria-current', 'false');
+      const dot = document.createElement('span');
+      dot.className = 'item__dot';
+      const fa = document.createElement('span');
+      fa.className = 'item__fa';
+      fa.textContent = s.fa;
+      const en = document.createElement('span');
+      en.className = 'item__en';
+      en.textContent = s.en;
+      b.append(dot, fa, en);
+      b.addEventListener('click', () => {
+        if (fromHash() === s.id) go(s.id); else location.hash = s.id;
+      });
+      items[s.id] = b;
+      g.append(b);
+    }
+    $('index').append(g);
+  }
+
+  /* ------------------------------------------------------------ notes */
+  function chips(box, list, prefix) {
+    box.replaceChildren();
+    for (const t of list) {
+      const c = document.createElement('code');
+      c.textContent = prefix + t;
+      box.append(c);
+    }
+  }
+
+  function paintNotes(s) {
+    $('nGroup').textContent = groupName[s.group];
+    $('nTitle').textContent = s.fa;
+    $('nEn').textContent = s.en;
+    $('nDesc').textContent = s.desc;
+    chips($('nWin'), s.win, 'app/ui/');
+    $('nDroidRow').hidden = !s.droid.length;
+    chips($('nDroid'), s.droid, DROID);
+    $('nKey').textContent = s.id;
+    const i = SECTIONS.indexOf(s);
+    $('prev').disabled = i <= 0;
+    $('next').disabled = i >= SECTIONS.length - 1;
+    for (const [id, b] of Object.entries(items)) {
+      b.setAttribute('aria-current', String(id === s.id));
+    }
+    items[s.id].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    document.title = `${s.en} · Relay Review Desk`;
+  }
+
+  $('prev').addEventListener('click', () => step(-1));
+  $('next').addEventListener('click', () => step(1));
+  function step(d) {
+    const i = SECTIONS.indexOf(byId[current]) + d;
+    if (SECTIONS[i]) location.hash = SECTIONS[i].id;
+  }
+
+  /* ------------------------------------------------- talking to the app */
+  let ready = false;
+  let current = null;
+
+  function send(msg) {
+    try { app.contentWindow.postMessage(Object.assign({ relay: 'go' }, msg), '*'); } catch (_) { /* not up */ }
+  }
+
+  function go(id) {
+    const s = byId[id] || SECTIONS[0];
+    current = s.id;
+    paintNotes(s);
+    if (ready) send({ to: s.id });
+  }
+
+  window.addEventListener('message', (e) => {
+    if (e.source !== app.contentWindow || !e.data) return;
+    if (e.data.relay === 'ready') {
+      ready = true;
+      frame.dataset.ready = '1';
+      send({ to: current });
+    }
+  });
+
+  app.addEventListener('load', () => { ready = false; });
+
+  function reloadApp() {
+    ready = false;
+    frame.dataset.ready = '0';
+    app.contentWindow.location.reload();
+  }
+  $('reload').addEventListener('click', reloadApp);
+
+  /* Live: the local server says when a file changed. An edit to the app
+     reloads only the window and comes back to the same section; an edit to
+     this page reloads the page. Only where that server is behind it. */
+  let seen = null;
+  async function watch() {
+    try {
+      const r = await fetch('/__live', { cache: 'no-store' });
+      if (r.ok) {
+        const now = await r.json();
+        $('live').hidden = false;
+        if (seen && now.desk !== seen.desk) { location.reload(); return; }
+        if (seen && now.app !== seen.app) {
+          reloadApp();
+          $('live').dataset.flash = '0';
+          void $('live').offsetWidth;
+          $('live').dataset.flash = '1';
+        }
+        seen = now;
+      }
+    } catch (_) {
+      $('live').hidden = true;
+    }
+    setTimeout(watch, 1000);
+  }
+  if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) watch();
+
+  const fromHash = () => decodeURIComponent(location.hash.slice(1));
+  window.addEventListener('hashchange', () => go(fromHash()));
+
+  document.addEventListener('keydown', (e) => {
+    if (e.target.closest && e.target.closest('input, textarea')) return;
+    if (e.key === 'ArrowDown' || e.key === 'PageDown') { e.preventDefault(); step(1); }
+    if (e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); step(-1); }
+  });
+
+  /* ------------------------------------------------------- fit the frame */
+  const W = 400, H = 740;
+  function fit() {
+    const stage = $('stage');
+    const narrow = window.matchMedia('(max-width: 1180px)').matches;
+    const room = stage.clientWidth;
+    let k = Math.min(1, room / W);
+    if (!narrow) {
+      const tall = stage.clientHeight - 32;
+      k = Math.min(k, tall / H);
+    } else {
+      k = Math.min(k, Math.max(0.6, (window.innerHeight - 40) / H));
+    }
+    k = Math.max(0.4, k);
+    frame.style.width = `${Math.round(W * k)}px`;
+    frame.style.height = `${Math.round(H * k)}px`;
+    app.style.transform = k === 1 ? '' : `scale(${k})`;
+    $('scale').textContent = k === 1 ? '' : `${Math.round(k * 100)}٪`;
+  }
+  new ResizeObserver(fit).observe($('stage'));
+  window.addEventListener('resize', fit);
+  fit();
+
+  go(fromHash());
+})();
+</script>

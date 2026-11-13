@@ -1,0 +1,15 @@
+# The workflows name every action by commit, with the tag beside it in a
+# comment - a tag can be moved to different code, a commit cannot. That makes
+# them go stale by design, so this opens a pull request when a newer release
+# exists, rewriting both the commit and the comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ['*']

@@ -3,7 +3,7 @@
     "universal-icons": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "mcp-universal-icons"],
+      "args": ["-y", "mcp-universal-icons@1.1.0"],
       "env": {}
     }
   }

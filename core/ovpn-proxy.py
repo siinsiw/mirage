@@ -185,13 +185,82 @@ def talk_on(stream):
     C = _colours(stream)
 
 
+# What a failure line would otherwise carry: the name or address of the site
+# being opened when the connection failed. Kept, those lines add up to a
+# list of sites visited, with times, on a disk that can be looked through -
+# so they are written as <host>, and the file is capped. Set OVPN_LOG_HOSTS=1
+# to keep the names while chasing a fault on your own machine.
+#
+# The lines that name this app's own exit (START, STOP, MOVED) keep it: that
+# is the provider's server, not anything that was browsed.
+LOG_HOSTS = os.environ.get('OVPN_LOG_HOSTS') == '1'
+LOG_CAP = 256 * 1024
+LOG_KEEPS_NAMES = frozenset(('START', 'STOP', 'MOVED'))
+_HOSTLIKE = re.compile(
+    r'(?<![\w.-])(?:'
+    r'(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}'   # a name
+    r'|\d{1,3}(?:\.\d{1,3}){3}'                                  # IPv4
+    r'|\[[0-9a-f:.]+\]'                                          # [IPv6]
+    r')(?![\w-])', re.IGNORECASE)
+_old_log_scrubbed = False
+
+
+def scrub_hosts(msg):
+    """msg with every host name and address replaced by <host>."""
+    return _HOSTLIKE.sub('<host>', msg)
+
+
+def _scrub_old_log():
+    """Once per run: a log written by an older copy, before names were left
+    out, has them taken out now rather than kept until it is rotated away."""
+    global _old_log_scrubbed
+    _old_log_scrubbed = True
+    if LOG_HOSTS:
+        return
+    try:
+        with open(LOG_PATH, encoding='utf-8', errors='replace') as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return
+    out, changed = [], False
+    for line in lines:
+        parts = line.split(None, 3)
+        if len(parts) == 4 and parts[2] not in LOG_KEEPS_NAMES:
+            clean = scrub_hosts(parts[3])
+            if clean != parts[3]:
+                changed = True
+                line = line[:len(line) - len(parts[3])] + clean
+        out.append(line)
+    if changed:
+        try:
+            tmp = f'{LOG_PATH}.{os.getpid()}'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(out) + '\n')
+            os.replace(tmp, LOG_PATH)
+        except OSError:
+            pass
+
+
 def log(level, msg):
     """Every warning and failure also goes to .state/proxy.log, because the
     interesting ones happen while a browser is using this and the terminal
     has scrolled. Best effort - a proxy that cannot write its log should
-    still proxy."""
+    still proxy.
+
+    Without the names of what was being opened (see LOG_HOSTS), and never
+    past LOG_CAP: the file is moved to proxy.log.1 and started again, so at
+    most two of them are ever on disk."""
     try:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        if not _old_log_scrubbed:
+            _scrub_old_log()
+        if not LOG_HOSTS and level not in LOG_KEEPS_NAMES:
+            msg = scrub_hosts(str(msg))
+        try:
+            if os.path.getsize(LOG_PATH) > LOG_CAP:
+                os.replace(LOG_PATH, LOG_PATH + '.1')
+        except OSError:
+            pass
         stamp = time.strftime('%Y-%m-%d %H:%M:%S')
         with open(LOG_PATH, 'a', encoding='utf-8') as f:
             f.write(f'{stamp}  {level:<5} {msg}\n')

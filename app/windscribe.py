@@ -109,6 +109,15 @@ META_PATH = os.path.join(paths.STATE_DIR, 'windscribe-meta.json')
 # answer has to travel with the file rather than with the folder.
 MARK = '.ws.'
 
+# What the published list may put into a file name and a config line. The
+# list is fetched over a line that is known to tamper, and a name that is not
+# a plain DNS name - "..\", a line break - would write outside the folder or
+# add a directive of its own. Surfshark's names are held to a pattern of
+# their own for the same reason (surfshark.NAME).
+HOSTNAME = re.compile(r'^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+                      r'(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$')
+COUNTRY = re.compile(r'^[a-z]{2}$')
+
 TIMEOUT = 30
 
 # The two error codes worth telling apart from every other failure, because
@@ -682,8 +691,8 @@ def servers(timeout=TIMEOUT):
 
     entries = []
     for country in body.get('data') or []:
-        code = (country.get('country_code') or '').lower()
-        if len(code) != 2:
+        code = str(country.get('country_code') or '').lower()
+        if not COUNTRY.match(code):
             continue
         for group in country.get('groups') or []:
             entries.append((code, country, group,
@@ -693,8 +702,12 @@ def servers(timeout=TIMEOUT):
     out = []
     for code, country, group, city in entries:
         for host in group.get('hosts') or []:
-            hostname = host.get('hostname')
-            if not hostname:
+            hostname = str(host.get('hostname') or '').strip().lower()
+            # Into a file name and a config line, so a name only: anything
+            # else - a separator, a "..", a line break that would add a
+            # directive of its own - is a list that cannot be trusted with
+            # either, and the entry is dropped.
+            if not HOSTNAME.match(hostname):
                 continue
             out.append({'country': code, 'city': city,
                         'code': codes[(code, city)],
@@ -786,6 +799,12 @@ def write_configs(dest=None, free_only=False, per_city=None):
         os.replace(tmp, META_PATH)
     except OSError:
         pass
+
+    # Nothing written, and nothing there from before: the next step would
+    # only say "Nothing waiting in ..." without the reason, so this says it.
+    if fleet and not written and not any(
+            f.endswith('.ovpn') for f in os.listdir(dest)):
+        raise OSError(f'none of the {len(fleet)} configs could be written')
 
     return {'folder': dest, 'written': len(written),
             'countries': len({s['country'] for s in fleet}),

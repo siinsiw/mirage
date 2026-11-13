@@ -29,12 +29,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.erelay.relay.Accounts
 import com.erelay.relay.data.Account
@@ -67,7 +70,7 @@ private enum class Screen(val title: String, val note: String, val head: String 
     LAN("Share this connection", "Let devices on the same Wi-Fi use it", head = "Share this connection"),
     SHARE("Configs for other devices", "Links and QR codes", head = "Other devices"),
     SERVERS("Servers", "Finding, pinning and timing them"),
-    LOOK("Look and feel", "Theme, haptics, the orb"),
+    LOOK("Look and feel", "Haptics, the orb, motion"),
     ABOUT("About", "Version and where things are kept"),
 }
 
@@ -124,7 +127,7 @@ fun Prefs(
         onBack = if (screen == Screen.MENU) null else ({ screen = Screen.MENU }),
     ) {
         when (screen) {
-            Screen.MENU -> Menu { screen = it }
+            Screen.MENU -> Menu(accounts.count { it.signedIn }, serverCount, countryCount) { screen = it }
             Screen.ACCOUNTS -> AccountsScreen(core, accounts, cards, pinRun, onAddAccount, notice)
             Screen.CONNECTION -> Connection(core, tunnel, allowLan)
             // Its own screen rather than a third pane under Connection: the
@@ -143,8 +146,54 @@ fun Prefs(
     }
 }
 
+/**
+ * The top of Settings: who this is, at a glance - the mark, the name, the
+ * tunnel's state as a dot and a word, and what the app has to work with.
+ */
 @Composable
-private fun Menu(go: (Screen) -> Unit) {
+private fun Identity(signedIn: Int, servers: Int, countries: Int) {
+    val shape = RoundedCornerShape(Shape.card)
+    val mode = Tone.mode
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = Space.x2)
+            .clip(shape)
+            .background(surfaceBrush())
+            .border(1.dp, Tone.stroke, shape)
+            .padding(Space.x4),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(52.dp).clip(CircleShape).background(Tone.surface2), contentAlignment = Alignment.Center) {
+            RelayMark(Modifier.size(28.dp))
+        }
+        Spacer(Modifier.width(Space.x4))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Relay", style = Type.title.copy(fontSize = 20.sp, lineHeight = 26.sp))
+                Spacer(Modifier.width(Space.x2))
+                if (mode == Mode.ON) LiveDot(size = 7.dp) else
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(Tone.stateOf(mode)))
+                Spacer(Modifier.width(6.dp))
+                Text(when (mode) {
+                    Mode.ON -> "Connected"
+                    Mode.BUSY -> "Connecting"
+                    Mode.FAIL -> "Not connected"
+                    Mode.OFF -> "Off"
+                }, style = Type.caption.copy(color = if (mode == Mode.OFF) Tone.text3 else Tone.stateOf(mode)), maxLines = 1)
+            }
+            val line = listOf(
+                when (signedIn) { 0 -> "No account yet"; 1 -> "1 account"; else -> "$signedIn accounts" },
+                if (servers > 0) "$servers servers in $countries countries" else "no servers yet",
+            ).joinToString("  ·  ")
+            Text(line, style = Type.caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun Menu(signedIn: Int, servers: Int, countries: Int, go: (Screen) -> Unit) {
+    Identity(signedIn, servers, countries)
     Section("Connect") {
         Group {
             NavRow(Screen.ACCOUNTS.title, Screen.ACCOUNTS.note, { go(Screen.ACCOUNTS) }, Glyph.key)
@@ -165,7 +214,7 @@ private fun Menu(go: (Screen) -> Unit) {
         Group {
             NavRow(Screen.SERVERS.title, Screen.SERVERS.note, { go(Screen.SERVERS) }, Glyph.folder)
             Sep()
-            NavRow(Screen.LOOK.title, Screen.LOOK.note, { go(Screen.LOOK) }, Glyph.layers)
+            NavRow(Screen.LOOK.title, Screen.LOOK.note, { go(Screen.LOOK) }, Glyph.palette)
             Sep()
             NavRow(Screen.ABOUT.title, Screen.ABOUT.note, { go(Screen.ABOUT) }, Glyph.info)
         }
@@ -366,6 +415,7 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
     var password by remember { mutableStateOf("") }
     var api by remember { mutableStateOf("") }
     var said by remember { mutableStateOf<Said?>(null) }
+    var modeSaid by remember { mutableStateOf<Said?>(null) }
     var busy by remember { mutableStateOf(false) }
     var key by remember { mutableStateOf("") }
 
@@ -402,11 +452,17 @@ private fun Connection(core: RelayCore, tunnel: TunnelPlan, allowLan: Boolean) {
                 Spacer(Modifier.height(Space.x3))
                 Segment(listOf("ss", "ws"), tunnel.transport,
                     { if (it == "ss") "Shadowsocks" else "WebSocket" },
-                    { t -> scope.launch { said = core.setTunnelTransport(t) } }, enabled = !busy)
+                    { t -> scope.launch { modeSaid = core.setTunnelTransport(t) } }, enabled = !busy)
                 if (tunnel.transport == "ss") {
                     Text("Straight to ${tunnel.domain}:${tunnel.ssPort}, and :${tunnel.ssPort + 1} " +
-                        "for server + exit.", style = Type.mono, modifier = Modifier.padding(top = Space.x2))
+                        "for server + exit. Best for a server in Iran; from Iran to a server " +
+                        "abroad it connects and then carries nothing - use the WebSocket there.",
+                        style = Type.mono, modifier = Modifier.padding(top = Space.x2))
                 }
+                // Right under the switch, not at the foot of the next section:
+                // a refusal said out of sight looked like a switch that did
+                // nothing.
+                modeSaid?.let { SaidLine(it.text, bad = !it.ok) }
             }
         }
     }
@@ -967,30 +1023,7 @@ private fun Progress(done: Int, total: Int) {
 
 @Composable
 private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.data.Feel) -> Unit) {
-    val chosen = Palette.of(feel.theme)
-    Section("Theme",
-        help = "The page and every surface on it. Text and the status colours stay the same " +
-            "in all of them. Black is the deepest: on an OLED screen its page is all but off, which " +
-            "saves battery on a phone that keeps a tunnel up all evening.") {
-        // Three across; two rows when a narrow phone or a large font would cut a name.
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val scale = LocalDensity.current.fontScale.coerceAtLeast(1f)
-            val across = if (maxWidth >= 88.dp * scale * 3 + 16.dp) 3 else 2
-            Column {
-                for (row in Palette.entries.chunked(across)) {
-                    Row(Modifier.fillMaxWidth().padding(vertical = Space.x1),
-                        horizontalArrangement = Arrangement.spacedBy(Space.x2)) {
-                        for (p in row) Swatch(p, p == chosen, Modifier.weight(1f)) {
-                            onFeel(feel.copy(theme = p.key))
-                        }
-                        // A short last row keeps its swatches the size of the rest.
-                        repeat(across - row.size) { Spacer(Modifier.weight(1f)) }
-                    }
-                }
-            }
-        }
-    }
-
+    // No theme to pick any more: Mirage has the one, black (2026-11-13).
     Section("Touch") {
         Group {
             SwitchRow("Haptic feedback",
@@ -1013,6 +1046,13 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
             SwitchRow("Show the traffic meter",
                 "The live wave of what is going up and down while connected.",
                 feel.meter, { onFeel(feel.copy(meter = it)) })
+        }
+    }
+
+    // Not motion: what is drawn for one country, in the lists and on the map.
+    Section("Flags") {
+        Group {
+            IranFlagRow()
         }
     }
 
@@ -1052,23 +1092,46 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
 @Composable
 private fun Swatch(p: Palette, on: Boolean, modifier: Modifier, onPick: () -> Unit) {
     val shape = RoundedCornerShape(20.dp)
+    val reduced = rememberReducedMotion()
+    // The check lands on a spring, a hair past full size and back.
+    val mark by androidx.compose.animation.core.animateFloatAsState(if (on) 1f else 0f,
+        if (reduced) androidx.compose.animation.core.tween<Float>(0)
+        else androidx.compose.animation.core.spring<Float>(dampingRatio = 0.5f, stiffness = 500f), label = "swatch")
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(72.dp)
+                .height(80.dp)
                 .press(shape = shape, sink = true, feel = HapticFeedbackType.SegmentTick, onClick = onPick)
                 .clip(shape)
                 .background(p.bg)
-                .border(1.dp, if (on) androidx.compose.ui.graphics.Brush.linearGradient(
-                    0f to Tone.pulse, 1f to Tone.pulse.copy(alpha = 0.15f))
+                .border(if (on) 2.dp else 1.dp, if (on) com.erelay.relay.ui.theme.Accent.brush()
                     else androidx.compose.ui.graphics.SolidColor(Tone.strokeStrong), shape)
-                .pickedBar(on)
                 .padding(Space.x2),
-            contentAlignment = Alignment.BottomCenter,
         ) {
-            Box(Modifier.fillMaxWidth().height(24.dp).clip(RoundedCornerShape(12.dp)).background(p.surface)
-                .border(1.dp, p.stroke, RoundedCornerShape(12.dp)))
+            // A little picture of the theme: a card on its page, the accent pill and the green dot on it.
+            Row(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(30.dp)
+                    .clip(RoundedCornerShape(12.dp)).background(p.surface)
+                    .border(1.dp, p.stroke, RoundedCornerShape(12.dp)).padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(p.ok))
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.size(22.dp, 8.dp).clip(RoundedCornerShape(4.dp))
+                    .background(com.erelay.relay.ui.theme.Accent.brush()))
+            }
+            if (mark > 0.01f) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).size(20.dp)
+                        .graphicsLayer { scaleX = mark; scaleY = mark; alpha = mark.coerceIn(0f, 1f) }
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(com.erelay.relay.ui.theme.Accent.brush()),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Glyph.check, null, Modifier.size(12.dp), tint = Color.White)
+                }
+            }
         }
         Spacer(Modifier.height(Space.x2))
         Text(p.label, style = Type.caption.copy(color = if (on) Tone.text else Tone.text2,
@@ -1081,6 +1144,12 @@ private fun Swatch(p: Palette, on: Boolean, modifier: Modifier, onPick: () -> Un
 
 @Composable
 private fun About(core: RelayCore) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var updateSaid by remember { mutableStateOf("") }
+    var checking by remember { mutableStateOf(false) }
+    var newer by remember { mutableStateOf(false) }
+
     Section("Relay for Android",
         help = "Accounts are kept with a key the Android keystore holds; configs, pins and " +
             "test results are plain files in the data folder.") {
@@ -1091,6 +1160,44 @@ private fun About(core: RelayCore) {
             Sep()
             Line("Data", core.dataFolder)
         }
+    }
+
+    // Asked only when pressed (data/Updates.kt): most copies arrive re-shared,
+    // and one that never hears of a newer build stays on the one it came with.
+    Section("Newer version") {
+        Group {
+            SettingRow("Check for a newer version",
+                desc = "One question to GitHub, only when pressed. Nothing about this phone is sent.",
+                icon = Glyph.refresh, enabled = !checking, onClick = {
+                    checking = true
+                    newer = false
+                    updateSaid = "Asking GitHub…"
+                    scope.launch {
+                        try {
+                            val found = com.erelay.relay.data.Updates.check(context)
+                            newer = found.newer
+                            updateSaid = found.text
+                        } catch (e: Exception) {
+                            updateSaid = e.message ?: "Could not ask GitHub."
+                        } finally {
+                            checking = false
+                        }
+                    }
+                })
+            if (newer) {
+                Sep()
+                SettingRow("Open the releases page", icon = Glyph.arrowUpRight, onClick = {
+                    try {
+                        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse(com.erelay.relay.data.Updates.PAGE))
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                    } catch (e: android.content.ActivityNotFoundException) {
+                        updateSaid = "No browser on this phone to open ${com.erelay.relay.data.Updates.PAGE}"
+                    }
+                })
+            }
+        }
+        SaidLine(updateSaid)
     }
 }
 

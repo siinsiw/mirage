@@ -9,6 +9,8 @@
 <meta charset="utf-8">
 <title>Relay</title>
 <link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="midnight.css">
+<link rel="stylesheet" href="intro.css">
 <script>
   // First thing on the page. A script error used to leave a window that
   // looked fine and did nothing, with no way to find out why - so errors are
@@ -25,18 +27,6 @@
     + ((e.reason && e.reason.stack || '').split(/\n/).slice(1, 3)
        .map((l) => ' | ' + l.trim()).join(''))));
 </script>
-<!-- The theme before the first paint, from the last time this window saw
-     it - so a White copy does not open in Graphite and then change. Settings
-     have the real answer and boot puts it back if the two disagree. -->
-<script>
-  try {
-    var relayTheme = localStorage.getItem('relay.theme');
-    // Three themes now; every older name is Graphite, the default.
-    if (relayTheme === 'white' || relayTheme === 'light') relayTheme = 'white';
-    else if (relayTheme !== 'black') relayTheme = null;
-    if (relayTheme) document.documentElement.dataset.theme = relayTheme;
-  } catch (e) {}
-</script>
 </head>
 <body>
 
@@ -46,6 +36,33 @@
      that does not arrive. Licence beside this file. Stroke width, colour and
      size are all CSS's - the symbols carry currentColor and nothing else. -->
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <!-- Mirage's star chart, behind the intro and the welcome: the astrolabe's
+       circles, degree ring, tilted ecliptic and a few stars. Drawn once
+       here, used by both. Its own colours, not currentColor. -->
+  <symbol id="mi-chart" viewBox="-260 -260 520 520">
+    <g fill="none" stroke="#A3141F" stroke-width="1" opacity="0.26">
+      <circle r="80"/><circle r="122"/><circle r="172" stroke-dasharray="2 6"/><circle r="236"/>
+      <circle r="226" stroke-width="7" stroke-dasharray="1 3.73"/>
+      <ellipse rx="200" ry="118" transform="rotate(-23)"/>
+      <g stroke-width="0.8">
+        <line y1="-80" y2="-236"/><line y1="-80" y2="-236" transform="rotate(30)"/>
+        <line y1="-80" y2="-236" transform="rotate(60)"/><line y1="-80" y2="-236" transform="rotate(90)"/>
+        <line y1="-80" y2="-236" transform="rotate(120)"/><line y1="-80" y2="-236" transform="rotate(150)"/>
+        <line y1="-80" y2="-236" transform="rotate(180)"/><line y1="-80" y2="-236" transform="rotate(210)"/>
+        <line y1="-80" y2="-236" transform="rotate(240)"/><line y1="-80" y2="-236" transform="rotate(270)"/>
+        <line y1="-80" y2="-236" transform="rotate(300)"/><line y1="-80" y2="-236" transform="rotate(330)"/>
+      </g>
+    </g>
+    <polyline points="-150,-90 -95,-130 40,-205 130,-140" fill="none" stroke="#EDE6E3" stroke-width="0.6" opacity="0.18"/>
+    <g fill="#EDE6E3" opacity="0.55">
+      <circle cx="-150" cy="-90" r="1.6"/><circle cx="-95" cy="-130" r="1.1"/>
+      <circle cx="40" cy="-205" r="1.3"/><circle cx="130" cy="-140" r="1.2"/>
+      <circle cx="175" cy="60" r="1.4"/><circle cx="-90" cy="160" r="1.1"/>
+      <circle cx="-205" cy="30" r="1.2"/><circle cx="95" cy="185" r="1.5"/>
+    </g>
+  </symbol>
+  <!-- a server rack: two units, each with its light -->
+  <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4.5" width="16" height="6.5" rx="1.8"/><rect x="4" y="13" width="16" height="6.5" rx="1.8"/><path d="M8 7.75h.01M8 16.25h.01" stroke-width="2.4"/><path d="M12 7.75h4M12 16.25h4"/></symbol>
   <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 17H5" /> <path d="M19 7h-9" /> <circle cx="17" cy="17" r="3" /> <circle cx="7" cy="7" r="3" /></symbol>
   <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" /> <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" /></symbol>
   <symbol id="i-route" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3" /> <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" /> <circle cx="18" cy="5" r="3" /></symbol>
@@ -62,6 +79,13 @@
   <symbol id="i-minus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /></symbol>
   <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18" /> <path d="m6 6 12 12" /></symbol>
   <symbol id="i-chev-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></symbol>
+  <!-- Midnight (Lucide, same licence): the power mark, the shields, the two arrows of the tip. -->
+  <symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></symbol>
+  <symbol id="i-shield-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-shield-no" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7 7 17"/><path d="M17 17H7V7"/></symbol>
+  <symbol id="i-chev-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /> <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /> <path d="M2 12h20" /></symbol>
   <symbol id="i-building" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12h4" /> <path d="M10 8h4" /> <path d="M14 21v-3a2 2 0 0 0-4 0v3" /> <path d="M6 10H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-2" /> <path d="M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16" /></symbol>
   <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5" /> <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" /></symbol>
@@ -95,19 +119,6 @@
   <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /> <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /> <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></symbol>
   <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2" /> <path d="M12 18h.01" /></symbol>
   <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /> <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></symbol>
-  <!-- The continent marks, one per drawer in the location list. Drawn for
-       Relay (.claude/DESIGN-NIGHT.md §8) and identical on Android: 24 grid,
-       1.75 stroke, round caps and joins, nothing filled. -->
-  <symbol id="i-ct-europe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 4l9 5.5"/><path d="M4.5 9.5h15"/><path d="M6.5 12v5.5"/><path d="M10 12v5.5"/><path d="M14 12v5.5"/><path d="M17.5 12v5.5"/><path d="M3.5 20h17"/><path d="M12 7.1v.01"/></symbol>
-  <symbol id="i-ct-middle-east" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 20v-5.5a6.5 6.5 0 0 1 13 0V20"/><path d="M3.5 20h17"/><path d="M10.5 20v-2.25a1.5 1.5 0 0 1 3 0V20"/><path d="M12 8V5.75"/><path d="M12 4.25v.01"/></symbol>
-  <symbol id="i-ct-asia" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5V3"/><path d="M5 9 12 5l7 4"/><path d="M7 9v2.5h10V9"/><path d="M4 14.5 12 11.5l8 3"/><path d="M6 14.5V20h12v-5.5"/><path d="M3.5 20h17"/><path d="M11 20v-2.5h2V20"/></symbol>
-  <symbol id="i-ct-north-america" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20v-8h4v8"/><path d="M8 20V6.5h5V20"/><path d="M13 20v-10h4v10"/><path d="M17 20v-5h3v5"/><path d="M10.5 6.5V3.5"/><path d="M3.5 20h17"/><path d="M10.5 10v.01M10.5 13v.01"/></symbol>
-  <symbol id="i-ct-south-america" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19 9 9.5l4 5 3-4 5 8.5z"/><path d="M7.4 12 9 9.5l1.6 2"/><path d="M18.5 6.5a2 2 0 1 0 -4 0a2 2 0 1 0 4 0"/></symbol>
-  <symbol id="i-ct-africa" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20c.6-3 .6-6.2-.2-9h2.4c-.8 2.8-.8 6 -.2 9"/><path d="M4.5 9.5C6 6 9 5 12 6c3-1 6 0 7.5 3.5"/><path d="M12 11 9.5 8"/><path d="M12 11l2.5-3"/><path d="M3.5 20h17"/></symbol>
-  <symbol id="i-ct-oceania" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 9a3 3 0 1 0 -6 0a3 3 0 1 0 6 0"/><path d="M12 3.5V2.75"/><path d="M3 15.5c1.5 0 1.5-1 3-1s1.5 1 3 1 1.5-1 3-1 1.5 1 3 1 1.5-1 3-1 1.5 1 3 1"/><path d="M5 19.5c1.4 0 1.4-1 2.8-1s1.4 1 2.8 1 1.4-1 2.8-1 1.4 1 2.8 1 1.4-1 2.8-1"/></symbol>
-  <symbol id="i-ct-antarctica" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5c-3 0-5 3.2-5 8s2 8.5 5 8.5 5-3.7 5-8.5-2-8-5-8z"/><path d="M12 9c-1.5 0-2.4 2-2.4 4.5S10.5 18 12 18s2.4-2 2.4-4.5S13.5 9 12 9z"/><path d="M10.5 6.5v.01"/><path d="M13.5 6.5v.01"/><path d="M11.2 8 12 8.7l.8-.7"/><path d="M10 20l-1.2 1.2"/><path d="M14 20l1.2 1.2"/></symbol>
-  <symbol id="i-ct-elsewhere" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 0 -18 0a9 9 0 1 0 18 0"/><path d="m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9z"/></symbol>
-  <symbol id="i-ct-starred" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.8a.6.6 0 0 1 1 0l2.4 4.9 5.4.8a.6.6 0 0 1 .3 1l-3.9 3.8.9 5.4a.6.6 0 0 1-.8.6L12 16.8l-4.8 2.5a.6.6 0 0 1-.8-.6l.9-5.4L3.4 9.5a.6.6 0 0 1 .3-1l5.4-.8z"/></symbol>
 </svg>
 
 <!-- The connected country's flag, dim, behind the home screen. app.js puts a
@@ -117,6 +128,7 @@
 <!-- The world: your country from straight above, filled with its flag; on
      connect the camera pulls out to the planet, follows the signal over it
      and comes down onto the country the traffic leaves from (atlas.js). -->
+
 <canvas class="atlas" id="atlasCanvas" aria-hidden="true"></canvas>
 
 <main class="app">
@@ -130,12 +142,16 @@
            Android app's: a disc, its ring open across the upper right, and
            the bead that has left through the opening. Inline, so it takes
            the theme's colours. -->
-      <svg class="bar__logo" viewBox="0 0 256 256" aria-hidden="true">
-        <circle class="bar__disc" cx="128" cy="128" r="56"/>
-        <path class="bar__ring" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
-        <circle class="bar__bead" cx="221.3" cy="34.7" r="16"/>
+      <!-- Mirage's mark, the astrolabe eye (preview/logo/mirage-eye.svg). -->
+      <svg class="bar__logo bar__logo--eye" viewBox="18 30 84 60" aria-hidden="true">
+        <path d="M22 60 Q60 20 98 60" fill="none" stroke="#E0303F" stroke-width="5" stroke-linecap="round"/>
+        <path d="M22 60 Q60 100 98 60" fill="none" stroke="#A3141F" stroke-width="4" stroke-linecap="round" stroke-dasharray="1.5 5.5"/>
+        <circle cx="60" cy="60" r="15" fill="none" stroke="#E0303F" stroke-width="3.4" stroke-dasharray="0.9 3.03"/>
+        <circle cx="60" cy="60" r="7" fill="#E0303F"/>
+        <rect x="44" y="59.3" width="32" height="1.4" fill="#070304"/>
+        <circle cx="70.6" cy="49.4" r="3" fill="#FF5A6C"/>
       </svg>
-      <span class="bar__name">Relay</span>
+      <span class="bar__name">Mirage</span>
     </span>
     <span class="bar__drag drag-zone" aria-hidden="true"></span>
     <span class="bar__tools">
@@ -179,22 +195,39 @@
        or the one the traffic leaves from, seen from above. The flux strip under the status block
        is the live throughput sparkline. -->
   <section class="hero" id="hero" data-state="off" aria-label="Connection">
+    <!-- Midnight: the column down the middle - how long the tunnel has been
+         up, big; the shield line; the power disc in its rings (the one
+         action: it presses #act); the state word and the address under it.
+         midnight.js keeps the big clock, the shield and the disc in step
+         with what app.js writes into the elements it always has. -->
     <div class="head">
+      <p class="bigclock mono" id="bigClock" aria-hidden="true">00:00:00</p>
+      <p class="secure" id="secure">
+        <svg class="ico secure__ico" aria-hidden="true"><use href="#i-shield-no"/></svg>
+        <span id="secureWord">Not protected</span>
+      </p>
+      <button class="power" id="power" type="button" aria-label="Connect" data-mode="off">
+        <span class="power__ring power__ring--a" aria-hidden="true"></span>
+        <span class="power__ring power__ring--b" aria-hidden="true"></span>
+        <span class="power__wave" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="power__arc" aria-hidden="true"></span>
+        <!-- Mirage: the astrolabe's ring of degrees round the disc, with its
+             bead. The whole ring turns as one layer (midnight.js): slowly at
+             rest, fast while connecting; the bead goes white once it moves. -->
+        <svg class="power__astro" viewBox="-60 -60 120 120" aria-hidden="true">
+          <circle class="power__deg" r="41"/>
+          <circle class="power__bead" cx="29" cy="-29" r="3.2"/>
+        </svg>
+        <span class="power__disc" aria-hidden="true"><svg class="ico power__ico"><use href="#i-power"/></svg></span>
+      </button>
       <!-- The live dot: there only while the route is up, its halo ring
            pulsing (app.js, a GSAP loop that stops under reduced motion). -->
       <div class="status-line">
         <span class="live" id="liveDot" aria-hidden="true"><i class="live__halo"></i></span>
         <p class="status" id="status" role="status" data-state="off">Disconnected</p>
       </div>
-      <!-- The location line is the way into the picker. Off: the pick, or
-           "Any country". On: where the traffic really comes out. -->
-      <button class="where" id="pick" type="button" data-any="1">
-        <span class="where__flag" id="pickFlag" aria-hidden="true"></span>
-        <span class="where__label" id="pickLabel">Any country</span>
-        <svg class="ico where__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
-      </button>
-      <p class="status__where" id="statusWhere">&nbsp;</p>
       <p class="status__host mono" id="statusHost">&nbsp;</p>
+      <p class="status__where" id="statusWhere">&nbsp;</p>
       <p class="clock mono" id="statusClock"></p>
       <button class="icon head__more" id="more" type="button" hidden
               aria-label="Connection details" aria-expanded="false">
@@ -222,9 +255,28 @@
             <svg class="flux__arw" aria-hidden="true"><use href="#i-arrow"/></svg>
           </p>
         </div>
+        <!-- Once connected and landed: a pin on the country and a glass card
+             beside it - flag and name, the address, up and down (midnight.js). -->
+        <span class="pin" id="pin" aria-hidden="true"></span>
+        <div class="tip" id="tip" aria-hidden="true">
+          <p class="tip__name"><span class="tip__flag" id="tipFlag"></span><span id="tipName"></span></p>
+          <p class="tip__ip mono"><svg class="ico" aria-hidden="true"><use href="#i-globe"/></svg><span id="tipIp"></span></p>
+          <p class="tip__rates mono"><svg class="ico" aria-hidden="true"><use href="#i-up"/></svg><span id="tipUp">idle</span>
+            <svg class="ico" aria-hidden="true"><use href="#i-down"/></svg><span id="tipDown">idle</span></p>
+        </div>
     </div>
 
     <div class="hero__foot">
+      <!-- The server card, the reference's foot: the round flag, the place,
+           a line under it, the chevron. It is the way into the list. -->
+      <button class="where" id="pick" type="button" data-any="1">
+        <span class="where__flag" id="pickFlag" aria-hidden="true"><svg class="ico where__globe" aria-hidden="true"><use href="#i-globe"/></svg></span>
+        <span class="where__text">
+          <span class="where__label" id="pickLabel">Any country</span>
+          <span class="where__sub mono" id="pickSub">&nbsp;</span>
+        </span>
+        <svg class="ico where__chev" aria-hidden="true"><use href="#i-chev-right"/></svg>
+      </button>
       <div class="details" id="details" hidden>
         <dl class="details__grid">
           <dt>In</dt><dd class="mono" id="detIn">—</dd>
@@ -252,7 +304,7 @@
   <section class="card" id="card" data-state="off">
       <div class="way" id="wayWrap" data-way="surfshark">
         <div class="way__row">
-          <div class="dd" id="way" data-way="surfshark" data-open="0">
+          <div class="dd dd--seg" id="way" data-way="surfshark" data-open="0">
             <button class="dd__field" id="wayField" type="button"
                     aria-haspopup="listbox" aria-expanded="false"
                     aria-controls="wayList" aria-labelledby="wayCap wayValue">
@@ -314,7 +366,7 @@
 <dialog class="sheet" id="picker">
   <header class="sheet__top">
     <span class="sheet__heading">
-      <span class="sheet__title">Choose a location</span>
+      <span class="sheet__title">Server</span>
     </span>
     <!-- The way back to "no preference", now that the list has no row for it.
          Only there while something is picked. -->
@@ -510,14 +562,6 @@
         <span class="menu__copy">
           <span class="menu__name">Servers</span>
           <span class="menu__note">finding, pinning and timing</span>
-        </span>
-        <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
-      </button>
-      <button class="menu__row" type="button" data-goto="look">
-        <svg class="ico menu__ico" aria-hidden="true"><use href="#i-layers"/></svg>
-        <span class="menu__copy">
-          <span class="menu__name">Look</span>
-          <span class="menu__note">theme</span>
         </span>
         <svg class="ico menu__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
       </button>
@@ -1603,13 +1647,6 @@
     <!-- The tray menu's switches, here as well: a setting only reachable by
          right-clicking an icon in the corner of the taskbar is one most
          people never find. Both places change the same setting. -->
-    <section class="screen" data-screen="look" hidden>
-    <section class="pane">
-      <div class="pane__head"><h3 class="pane__title">Theme</h3></div>
-      <p class="pane__why">The map and the status colours follow the connection, not the theme.</p>
-      <div class="themes" id="themes" role="radiogroup" aria-label="Theme"></div>
-    </section>
-    </section>
     <section class="screen" data-screen="window" hidden>
 
     <div class="cards">
@@ -1670,6 +1707,18 @@
 
     <section class="screen" data-screen="about-this-copy" hidden>
 
+    <!-- Asked only when pressed: nothing here checks on its own. -->
+    <section class="pane">
+      <span class="pane__copy">
+        <h3 class="pane__title">Newer version</h3>
+        <p class="pane__why">Asks GitHub whether there is a newer Relay for
+          Windows than this one. Nothing about this computer is sent.</p>
+        <p class="note" id="updateSaid" role="status" aria-live="polite"></p>
+      </span>
+      <button class="btn btn--quiet btn--auto" id="updateCheck" type="button">Check</button>
+      <button class="btn btn--quiet btn--auto" id="updateOpen" type="button" hidden>Open the release page</button>
+    </section>
+
     <!-- 7 · a footnote, and shaped like one -->
     <section class="pane pane--foot">
       <div class="pane__head"><h3 class="pane__title">Where this copy keeps its files</h3></div>
@@ -1703,110 +1752,187 @@
      connect, rather than shown a Connect button that cannot work. The
      setup: once an account is in, its servers are fetched and pinned
      without anybody needing to find two buttons in Settings. -->
-<dialog class="sheet sheet--first sheet--intro" id="introDlg">
-  <header class="first__top">
+<!-- Mirage's intro (preview/DECISIONS.md). The logo, the name and the button
+     stay put through all four steps; only the title and the sentence under
+     it change, carved out and back in. The star chart behind turns once in
+     four minutes. Everything that moves is a transform or an opacity on its
+     own layer, so it holds its frame rate on a weak machine too. -->
+<dialog class="sheet sheet--intro mi" id="introDlg" aria-label="Welcome to Mirage">
+  <div class="mi__bg" aria-hidden="true">
+    <div class="mi__glow"></div>
+    <svg class="mi__chart" id="miChart" viewBox="-260 -260 520 520"><use href="#mi-chart" x="-260" y="-260" width="520" height="520"/></svg>
+    <div class="mi__vig"></div>
+  </div>
+  <header class="first__top mi__top">
     <button class="btn btn--quiet btn--auto" id="introSkip" type="button">Skip</button>
   </header>
-  <div class="intro__track" id="introTrack">
-    <section class="intro__slide">
-      <div class="intro__art"><svg class="logo-mark logo-mark--draw" viewBox="0 0 256 256" aria-hidden="true">
-        <circle class="logo-mark__disc" cx="128" cy="128" r="56"/>
-        <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
-        <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
-      </svg></div>
-      <h2 class="first__title">Choose where your traffic comes out.</h2>
-      <p class="first__say">Relay connects Windows to a VPN server and checks,
-        independently, which country websites see you in.</p>
-    </section>
-    <section class="intro__slide">
-      <h2 class="first__title">The first exit that answers.</h2>
-      <p class="first__say">Relay asks dozens of your provider's servers at once
-        and connects through whichever replies first. You can also pick a country.</p>
-    </section>
-    <section class="intro__slide">
-      <h2 class="first__title">Real addresses only.</h2>
-      <p class="first__say">This network's DNS can return forged answers for VPN
-        servers. Relay looks each one up over DNS-over-HTTPS and keeps the
-        address that really is its.</p>
-    </section>
-    <section class="intro__slide">
-      <h2 class="first__title">Or a server you rent.</h2>
-      <p class="first__say">Relay can carry traffic through your own server
-        instead, and lets named programs and sites skip the tunnel. Click the
-        map to connect; hold it to reconnect.</p>
-    </section>
+  <div class="mi__body">
+    <div class="mi__logo" id="miLogo">
+      <svg class="mi__eye" viewBox="0 0 120 120" aria-hidden="true">
+        <defs><clipPath id="miLowClip"><rect id="miLowRect" x="18" y="58" width="84" height="32"/></clipPath></defs>
+        <g clip-path="url(#miLowClip)"><path class="mi__low" d="M22 60 Q60 100 98 60"/></g>
+        <ellipse class="mi__inner" id="miInner" cx="60" cy="60" rx="11.5" ry="11.5"/>
+        <circle class="mi__pupil" id="miPupil" cx="60" cy="60" r="6"/>
+        <rect class="mi__cut" id="miCut" x="44" y="59.4" width="32" height="1.2"/>
+        <g id="miBeadG"><circle class="mi__bead" id="miBead" cx="70.6" cy="49.4" r="2.4"/></g>
+        <path class="mi__lid" id="miLidL" d="M60 40 Q41 40 22 60"/>
+        <path class="mi__lid" id="miLidR" d="M60 40 Q79 40 98 60"/>
+      </svg>
+      <svg class="mi__ticks" id="miTicks" viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="15"/></svg>
+    </div>
+    <div class="mi__word">
+      <p class="mi__name" id="miName" aria-label="Mirage"><span aria-hidden="true">M</span><span aria-hidden="true">I</span><span aria-hidden="true">R</span><span aria-hidden="true">A</span><span aria-hidden="true">G</span><span aria-hidden="true">E</span></p>
+      <div class="mi__echo" id="miEcho" aria-hidden="true"><p class="mi__name mi__name--echo">MIRAGE</p></div>
+    </div>
+    <div class="mi__stage" id="miStage" aria-live="polite">
+      <h2 class="mi__title" id="miTitle"></h2>
+      <p class="mi__say" id="miSay"></p>
+      <i class="mi__chisel" id="miChisel" aria-hidden="true"></i>
+    </div>
   </div>
-  <footer class="first__foot">
-    <div class="intro__dots" id="introDots" aria-hidden="true">
-      <i></i><i></i><i></i><i></i>
-    </div>
-    <button class="btn first__go" id="introNext" type="button" autofocus>Next</button>
-  </footer>
-</dialog>
-
-<dialog class="sheet sheet--first" id="welcomeDlg">
-  <div class="first__body">
-    <div class="first__art"><svg class="logo-mark logo-mark--draw" viewBox="0 0 256 256" aria-hidden="true">
-        <circle class="logo-mark__disc" cx="128" cy="128" r="56"/>
-        <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
-        <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
-      </svg></div>
-    <h2 class="first__title">Connect with an account or a server.</h2>
-    <p class="first__say">Relay needs one of these before it can carry traffic.
-      More can be added later under Settings.</p>
-    <div class="choice">
-      <span class="choice__copy">
-        <span class="choice__name">A VPN account</span>
-        <span class="choice__note">Sign in, and Relay fetches the provider's
-          servers and pins them to real addresses.</span>
-      </span>
-      <div class="choice__pair">
-        <button class="btn first__go" type="button" data-provider="surfshark">Surfshark</button>
-        <button class="btn first__go" type="button" data-provider="windscribe">Windscribe</button>
-      </div>
-    </div>
-    <button class="choice choice--row" id="welcomeServer" type="button">
-      <span class="choice__copy">
-        <span class="choice__name">My own server</span>
-        <span class="choice__note">A server of yours behind Cloudflare. Enter
-          its domain and password.</span>
-      </span>
-      <svg class="ico choice__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+  <footer class="mi__foot">
+    <div class="mi__steps" id="introDots" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <button class="mi__go" id="introNext" type="button" autofocus>
+      <span class="mi__ring" aria-hidden="true"><span class="mi__spin" id="miSpin"></span></span>
+      <span class="mi__face"><span id="introNextLabel">Next</span><svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></span>
     </button>
+  </footer>
+  <!-- The four steps' words. Kept as text here, not in app.js, so the copy is
+       edited where it reads. -->
+  <template id="introCopy">
+    <section><h2>Choose where your traffic comes out.</h2>
+      <p>Mirage connects Windows to a VPN server and checks, independently, which country websites see you in.</p></section>
+    <section><h2>The first exit that answers.</h2>
+      <p>Mirage asks dozens of your provider's servers at once and connects through whichever replies first.</p></section>
+    <section><h2>Real addresses only.</h2>
+      <p>This network's DNS can return forged answers. Mirage looks each server up over DNS-over-HTTPS.</p></section>
+    <section><h2>Or a server you rent.</h2>
+      <p>Mirage can carry traffic through your own server, and lets named programs and sites skip the tunnel.</p></section>
+  </template>
+  <!-- The reflection's heat haze: a fixed displacement, drawn once. It is
+       never animated - the echo layer around it is what sways. -->
+  <svg class="mi__defs" width="0" height="0" aria-hidden="true">
+    <filter id="miHeat" x="-10%" y="-40%" width="120%" height="180%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.02 0.24" numOctaves="1" seed="4" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="6" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </svg>
+</dialog>
+
+<!-- Mirage's welcome (preview/DECISIONS.md): the same star chart as the
+     intro, turning round a small eye and name; one line of title; three
+     choices of equal weight, each a single press away from where it is set
+     up. Obsidian rows with a red rim; on hover or keyboard focus the logo's
+     bead light runs once round the rim. -->
+<dialog class="sheet mi mw" id="welcomeDlg" aria-label="Connect Mirage">
+  <div class="mi__bg" aria-hidden="true">
+    <div class="mi__glow"></div>
+    <svg class="mi__chart" id="mwChart" viewBox="-260 -260 520 520"><use href="#mi-chart" x="-260" y="-260" width="520" height="520"/></svg>
+    <div class="mi__vig mw__vig"></div>
+  </div>
+  <div class="mw__body">
+    <div class="mw__lock" id="mwLock">
+      <svg class="mw__eye" viewBox="0 0 120 120" aria-hidden="true">
+        <path class="mi__low" d="M22 60 Q60 100 98 60"/>
+        <g id="mwTicks"><circle class="mw__tick" cx="60" cy="60" r="15"/></g>
+        <ellipse class="mi__inner" cx="60" cy="60" rx="11.5" ry="11.5"/>
+        <circle class="mi__pupil" cx="60" cy="60" r="6"/>
+        <rect class="mi__cut" x="44" y="59.4" width="32" height="1.2"/>
+        <circle class="mi__bead" cx="70.6" cy="49.4" r="2.4"/>
+        <path class="mi__lid" id="mwLid" d="M22 60 Q60 20 98 60"/>
+      </svg>
+      <p class="mi__name mw__name" aria-label="Mirage"><span aria-hidden="true">MIRAGE</span></p>
+    </div>
+    <h2 class="mw__title" id="mwTitle">Connect with an account or a server.</h2>
+    <p class="mw__say">Mirage needs one of these before it can carry traffic. You can add more later in Settings.</p>
+    <div class="mw__list">
+      <p class="mw__group">VPN account</p>
+      <button class="mw__row" type="button" data-provider="surfshark">
+        <span class="mw__rim" aria-hidden="true"><span class="mw__light"></span></span>
+        <span class="mw__face" aria-hidden="true"></span>
+        <span class="mw__in">
+          <span class="mw__mark"><svg class="ico" aria-hidden="true"><use href="#i-ss"/></svg></span>
+          <span class="mw__copy"><span class="mw__label">Surfshark</span>
+            <span class="mw__note">Service login from the manual-setup page</span></span>
+          <svg class="ico mw__chev" aria-hidden="true"><use href="#i-chev-right"/></svg>
+        </span>
+      </button>
+      <button class="mw__row" type="button" data-provider="windscribe">
+        <span class="mw__rim" aria-hidden="true"><span class="mw__light"></span></span>
+        <span class="mw__face" aria-hidden="true"></span>
+        <span class="mw__in">
+          <span class="mw__mark"><svg class="ico" aria-hidden="true"><use href="#i-ws"/></svg></span>
+          <span class="mw__copy"><span class="mw__label">Windscribe</span>
+            <span class="mw__note">Your Windscribe username and password</span></span>
+          <svg class="ico mw__chev" aria-hidden="true"><use href="#i-chev-right"/></svg>
+        </span>
+      </button>
+      <p class="mw__group">Your own server</p>
+      <button class="mw__row" type="button" id="welcomeServer">
+        <span class="mw__rim" aria-hidden="true"><span class="mw__light"></span></span>
+        <span class="mw__face" aria-hidden="true"></span>
+        <span class="mw__in">
+          <span class="mw__mark"><svg class="ico" aria-hidden="true"><use href="#i-server"/></svg></span>
+          <span class="mw__copy"><span class="mw__label">My own server</span>
+            <span class="mw__note">Paste the key your server printed</span></span>
+          <svg class="ico mw__chev" aria-hidden="true"><use href="#i-chev-right"/></svg>
+        </span>
+      </button>
+    </div>
   </div>
 </dialog>
 
-<dialog class="sheet sheet--first" id="setupDlg">
-  <div class="first__body">
-    <div class="first__art"><svg class="logo-mark logo-mark--spin" viewBox="0 0 256 256" aria-hidden="true">
-        <circle class="logo-mark__disc" cx="128" cy="128" r="56"/>
-        <path class="logo-mark__ring" pathLength="1" d="M226.48 110.64 A100 100 0 1 1 145.36 29.52"/>
-        <circle class="logo-mark__bead" cx="221.3" cy="34.7" r="16"/>
-      </svg></div>
-    <h2 class="first__title" id="setupTitle">Getting your servers ready</h2>
-    <p class="first__say">Once, for each account. After this Relay connects in a second.</p>
-    <ol class="steps">
-      <li class="steps__row" data-step="signed" data-at="done">
-        <i class="steps__tick" aria-hidden="true"></i>
-        <span class="steps__copy"><span class="steps__name" id="setupSigned">Signed in</span></span>
+<!-- Getting an account's servers ready (preview/DECISIONS.md): the eye
+     searching - its tick ring turning fast and its bead running round - over
+     three engraved steps and a degree-scale progress bar. Done, the bead
+     settles and a red ring closes round the eye; failed, the step that broke
+     is marked and the orbiting-bead button offers another go. -->
+<dialog class="sheet mi ms" id="setupDlg" aria-labelledby="setupTitle">
+  <div class="mi__bg" aria-hidden="true">
+    <div class="ms__glow"></div>
+    <svg class="mi__chart" id="msChart" viewBox="-260 -260 520 520"><use href="#mi-chart" x="-260" y="-260" width="520" height="520"/></svg>
+    <div class="ms__fade"></div>
+  </div>
+  <div class="ms__body">
+    <div class="ms__hero" id="msHero">
+      <svg class="ms__eye" viewBox="0 0 120 120" aria-hidden="true">
+        <path class="mi__low" d="M22 60 Q60 100 98 60"/>
+        <g id="msTicks"><circle class="mw__tick" cx="60" cy="60" r="15"/></g>
+        <ellipse class="mi__inner" cx="60" cy="60" rx="11.5" ry="11.5"/>
+        <circle class="mi__pupil" cx="60" cy="60" r="6"/>
+        <rect class="mi__cut" x="44" y="59.4" width="32" height="1.2"/>
+        <g id="msBead"><circle class="mi__bead" cx="70.6" cy="49.4" r="2.4"/></g>
+        <path class="mi__lid" d="M22 60 Q60 20 98 60"/>
+        <circle class="ms__done" id="msDone" cx="60" cy="60" r="34" transform="rotate(-90 60 60)"/>
+      </svg>
+    </div>
+    <h2 class="ms__title" id="setupTitle">Getting your servers ready</h2>
+    <p class="ms__say" id="setupSay">Once for each account. After this, Mirage connects in a second.</p>
+    <ol class="ms__steps">
+      <li class="ms__row" data-step="signed" data-at="done">
+        <i class="ms__mk" aria-hidden="true"></i>
+        <span class="ms__copy"><span class="ms__name" id="setupSigned">Signed in</span></span>
       </li>
-      <li class="steps__row" data-step="servers" data-at="todo">
-        <i class="steps__tick" aria-hidden="true"></i>
-        <span class="steps__copy"><span class="steps__name" id="setupServers">Getting the server list</span></span>
+      <li class="ms__row" data-step="servers" data-at="todo">
+        <i class="ms__mk" aria-hidden="true"></i>
+        <span class="ms__copy"><span class="ms__name" id="setupServers">Getting the server list</span></span>
       </li>
-      <li class="steps__row" data-step="pinning" data-at="todo">
-        <i class="steps__tick" aria-hidden="true"></i>
-        <span class="steps__copy">
-          <span class="steps__name">Pinning each server to its real address</span>
-          <span class="steps__detail mono" id="setupDetail"></span>
-          <span class="steps__bar" aria-hidden="true"><i id="setupBar"></i></span>
+      <li class="ms__row" data-step="pinning" data-at="todo">
+        <i class="ms__mk" aria-hidden="true"></i>
+        <span class="ms__copy">
+          <span class="ms__name">Pinning each server to its real address</span>
+          <span class="ms__detail mono" id="setupDetail"></span>
+          <span class="ms__scale" aria-hidden="true"><i class="ms__ticksbar"></i><i class="ms__fill" id="setupBar"></i></span>
         </span>
       </li>
     </ol>
-    <p class="note note--bad" id="setupError" hidden></p>
-    <div class="choice__pair" id="setupAgain" hidden>
-      <button class="btn first__go" id="setupRetry" type="button">Try again</button>
-      <button class="btn btn--quiet" id="setupClose" type="button">Close</button>
+    <p class="ms__err" id="setupError" role="alert" hidden></p>
+    <div class="ms__again" id="setupAgain" hidden>
+      <button class="mi__go ms__go" id="setupRetry" type="button">
+        <span class="mi__ring" aria-hidden="true"><span class="mi__spin" id="msSpin"></span></span>
+        <span class="mi__face"><span>Try again</span><svg class="ico ms__redo" aria-hidden="true"><use href="#i-refresh"/></svg></span>
+      </button>
+      <button class="ma__cancel" id="setupClose" type="button">Close</button>
     </div>
   </div>
 </dialog>
@@ -1863,74 +1989,102 @@
   </div>
 </dialog>
 
-<dialog class="sheet sheet--add" id="acctDlg">
-  <header class="sheet__top">
-    <span class="sheet__heading">
-      <span class="sheet__title" id="acctDlgTitle">Add an account</span>
-    </span>
-    <button class="icon" id="acctDlgClose" type="button" aria-label="Close">
+<!-- Adding an account (preview/DECISIONS.md): its own page per provider,
+     opened for that provider, with nothing to switch. The provider's own logo
+     in the astrolabe ring; obsidian fields whose rim lights when they take
+     focus; the orbiting-bead button. What it asks for - a service credential
+     or a login - is the only difference between the two. One account per
+     provider. The optional fields wait behind a link each. -->
+<dialog class="sheet mi ma" id="acctDlg" aria-labelledby="acctDlgTitle">
+  <div class="mi__bg" aria-hidden="true">
+    <div class="ma__glow"></div>
+    <svg class="mi__chart" id="maChart" viewBox="-260 -260 520 520"><use href="#mi-chart" x="-260" y="-260" width="520" height="520"/></svg>
+    <div class="ma__fade"></div>
+  </div>
+  <header class="ma__top">
+    <h2 class="ma__sr" id="acctDlgTitle">Add an account</h2>
+    <button class="ma__close" id="acctDlgClose" type="button" aria-label="Close">
       <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
     </button>
   </header>
-  <!-- Its own page per provider: opened from that provider's card, for that
-       provider, with nothing to switch. What it asks for - a service
-       credential or a login - is the only difference between them. One
-       account per provider. -->
-  <div class="acct__new addacct" id="acctNew">
-  <!-- The chosen provider, large, and which login it wants. -->
-  <div class="addacct__hero" id="acctHero" data-provider="surfshark">
-    <span class="addacct__badge">
-      <svg class="addacct__mark" aria-hidden="true"><use id="acctHeroMark" href="#i-ss"/></svg>
-    </span>
-    <span class="addacct__copy">
-      <b class="addacct__name" id="acctHeroName">Connect Surfshark</b>
-      <span class="addacct__say" id="acctNewSay">The service login from Surfshark's
-        manual-setup page, not your email.</span>
-    </span>
-  </div>
+  <div class="acct__new ma__body" id="acctNew">
+    <!-- The chosen provider, in the ring, and which login it wants. -->
+    <div class="ma__hero" id="acctHero" data-provider="surfshark">
+      <svg class="ma__seal" id="maSeal" viewBox="0 0 84 84" aria-hidden="true">
+        <g id="maRing"><circle class="ma__ticks" cx="42" cy="42" r="38"/></g>
+        <circle class="ma__disc" cx="42" cy="42" r="31"/>
+        <use id="acctHeroMark" href="#i-ss" x="28" y="28" width="28" height="28"/>
+        <circle class="ma__done" id="maDone" cx="42" cy="42" r="31" transform="rotate(-90 42 42)"/>
+      </svg>
+      <b class="ma__name" id="acctHeroName">Connect Surfshark</b>
+      <span class="ma__say" id="acctNewSay">Use the service login from Surfshark's manual-setup page, not your email.</span>
+    </div>
 
-  <!-- This provider has its account already: nothing to add until it is
-       removed. -->
-  <p class="addacct__full" id="acctFull" hidden>Each provider takes one account. Remove
-    this one's in Accounts to add a different one.</p>
+    <!-- This provider has its account already: nothing to add until it is
+         removed. -->
+    <p class="ma__full" id="acctFull" hidden>Each provider takes one account. Remove
+      this one's in Accounts to add a different one.</p>
 
-  <div class="addacct__form" id="acctForm">
-  <label class="field">
-    <span class="field__cap" id="acctUserCap">Service username</span>
-    <input class="field__in mono" id="acctUser" type="text" placeholder="from the manual-setup page"
-           autocomplete="off" autocapitalize="off" spellcheck="false">
-  </label>
-  <label class="field">
-    <span class="field__cap">Password</span>
-    <span class="field__pair">
-      <input class="field__in mono" id="acctPass" type="password" placeholder="password"
-             autocomplete="off" spellcheck="false">
-      <button class="field__peek" id="acctPeek" type="button"
-              aria-pressed="false" aria-label="Show the password">
-        <svg class="ico" aria-hidden="true"><use href="#i-eye" id="acctPeekIcon"/></svg>
-      </button>
-    </span>
-  </label>
-  <label class="field" id="acctTwoWrap" hidden>
-    <span class="field__cap">Two-factor code <span class="field__hint">optional</span></span>
-    <input class="field__in mono" id="acctTwo" type="text" placeholder="only if it is on"
-           autocomplete="off" spellcheck="false" inputmode="numeric">
-  </label>
-  <label class="field">
-    <span class="field__cap">Name <span class="field__hint">optional</span></span>
-    <input class="field__in" id="acctLabel" type="text" placeholder="the username, if you leave this"
-           autocomplete="off" spellcheck="false">
-  </label>
+    <div class="ma__form" id="acctForm">
+      <label class="ma__field" id="maUserField">
+        <span class="ma__cap" id="acctUserCap">Service username</span>
+        <span class="ma__box">
+          <span class="ma__rim" aria-hidden="true"><span class="ma__light"></span></span>
+          <span class="ma__face" aria-hidden="true"></span>
+          <input class="ma__in mono" id="acctUser" type="text" placeholder="from the manual-setup page"
+                 autocomplete="off" autocapitalize="off" spellcheck="false">
+        </span>
+      </label>
+      <label class="ma__field" id="maPassField">
+        <span class="ma__cap">Password</span>
+        <span class="ma__box">
+          <span class="ma__rim" aria-hidden="true"><span class="ma__light"></span></span>
+          <span class="ma__face" aria-hidden="true"></span>
+          <input class="ma__in ma__in--peek mono" id="acctPass" type="password" placeholder="password"
+                 autocomplete="off" spellcheck="false">
+          <button class="ma__peek" id="acctPeek" type="button"
+                  aria-pressed="false" aria-label="Show the password">
+            <svg class="ico" aria-hidden="true"><use href="#i-eye" id="acctPeekIcon"/></svg>
+          </button>
+        </span>
+      </label>
+      <!-- what went wrong, or what is happening, right under the fields -->
+      <p class="note ma__said" id="acctNewSaid" role="status"></p>
+      <label class="ma__field" id="acctTwoWrap" hidden>
+        <span class="ma__cap">Two-step code</span>
+        <span class="ma__box">
+          <span class="ma__rim" aria-hidden="true"><span class="ma__light"></span></span>
+          <span class="ma__face" aria-hidden="true"></span>
+          <input class="ma__in mono" id="acctTwo" type="text" placeholder="6 digits, only if it is on"
+                 autocomplete="off" spellcheck="false" inputmode="numeric">
+        </span>
+      </label>
+      <label class="ma__field" id="acctLabelWrap" hidden>
+        <span class="ma__cap">Name</span>
+        <span class="ma__box">
+          <span class="ma__rim" aria-hidden="true"><span class="ma__light"></span></span>
+          <span class="ma__face" aria-hidden="true"></span>
+          <input class="ma__in" id="acctLabel" type="text" placeholder="the username, if you leave this"
+                 autocomplete="off" spellcheck="false">
+        </span>
+      </label>
+      <div class="ma__more">
+        <button class="ma__link" id="acctMoreTwo" type="button" hidden>I use two-step sign-in</button>
+        <button class="ma__link" id="acctMoreName" type="button">Add a name (optional)</button>
+      </div>
 
-  <p class="addacct__safe">
-    <svg class="ico ico--sm" aria-hidden="true"><use href="#i-key"/></svg>
-    <span>Kept on this computer. Sent only to <span id="acctSafeTo">Surfshark</span>.</span>
-  </p>
-
-  <button class="btn addacct__go" id="acctSave" type="button">Save account</button>
-  <button class="addacct__cancel" id="acctCancel" type="button">Cancel</button>
-  <p class="note" id="acctNewSaid"></p>
-  </div>
+      <div class="ma__foot">
+        <p class="ma__safe">
+          <svg class="ico" aria-hidden="true"><use href="#i-key"/></svg>
+          <span>Kept on this computer. Sent only to <span id="acctSafeTo">Surfshark</span>.</span>
+        </p>
+        <button class="mi__go ma__go" id="acctSave" type="button">
+          <span class="mi__ring" aria-hidden="true"><span class="mi__spin" id="maSpin"></span></span>
+          <span class="mi__face"><span id="acctSaveLabel">Save account</span><svg class="ico" aria-hidden="true"><use href="#i-arrow" id="acctSaveIcon"/></svg></span>
+        </button>
+        <button class="ma__cancel" id="acctCancel" type="button">Cancel</button>
+      </div>
+    </div>
   </div>
 </dialog>
 
@@ -2006,11 +2160,13 @@
 <!-- qrcode-generator 1.4.4, MIT, vendored from cdnjs (SRI-checked); the
      licence is in the file's own header. Draws the codes on Other devices. -->
 <script src="qrcode.min.js"></script>
-<!-- three.js r170 (MIT), as a plain script; the outlines are Natural Earth
-     (public domain), written by app/make_world.py. -->
-<script src="three.min.js"></script>
-<script src="world-data.js"></script>
+<!-- three.js r170 (MIT, three.min.js) and the outlines (Natural Earth,
+     public domain, world-data.js, written by app/make_world.py) are not
+     loaded here: 1.5 MB of script parsed before the first paint is a blank
+     window on a weak PC. app.js (initConnectionCore) loads both once the
+     page is on screen; atlas.js waits for them. -->
 <script src="atlas.js"></script>
+<script src="midnight.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

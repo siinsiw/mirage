@@ -3,12 +3,16 @@ package com.erelay.relay.ui
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +21,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,7 +34,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
@@ -37,24 +41,27 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -97,6 +104,22 @@ data class HomeState(
     val canStart get() = if (way == Way.PROVIDER) hasCredentials && serverCount > 0 else tunnelReady
 }
 
+/*
+ * The main screen, Midnight (the reference's left screen):
+ *
+ *   the bar      settings on the leading edge; what is using the connection,
+ *                the exits that stopped answering, and the way out as the
+ *                accent pill on the trailing edge
+ *   the readout  how long the tunnel has been up, big, its digits rolling;
+ *                "Secured connection" under it with its shield
+ *   the button   the power disc in its rings - the one action
+ *   the state    "Connected" in green and the address the world now sees
+ *   the band     the dotted planet shows through here: the country the
+ *                traffic leaves from is in the middle of the band, its dots
+ *                in its flag's colours, and a glass card beside it says
+ *                where, which address, and how much is moving
+ *   the foot     the server card - flag, place, address - the way into the list
+ */
 @Composable
 fun Home(
     s: HomeState,
@@ -110,9 +133,8 @@ fun Home(
     onCopy: (String) -> Unit,
     onReconnect: () -> Unit = {},
 ) {
-    // Where the scene's own box and the free band between the status block and
-    // the panel are on screen: the map puts its country in the middle of the
-    // band, not in the middle of the screen.
+    // Where the scene's own box and the band are on screen: the map puts its
+    // country in the middle of the band, not in the middle of the screen.
     var scene by remember { mutableStateOf(Rect.Zero) }
     var band by remember { mutableStateOf(Rect.Zero) }
     val shift = if (scene.height > 0f && band.height > 0f)
@@ -131,17 +153,18 @@ fun Home(
     }
 
     Backdrop {
-        // The map fills the screen, behind everything: it is where the country is now.
+        // The planet fills the screen, behind everything.
         WorldLayer(world, orbPaused, Modifier.fillMaxSize().onGloballyPositioned { scene = it.boundsInRoot() })
+        // The page darkens over the planet's top and foot, so the words and
+        // the card read over it and the planet seems to rise out of the page.
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+            0f to bg.copy(alpha = 0.94f), 0.34f to bg.copy(alpha = 0.72f), 0.52f to Color.Transparent,
+            0.84f to Color.Transparent, 1f to bg.copy(alpha = 0.86f))))
+
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            // The spare height of a tall phone goes to the gap between the
-            // status block and the panel, over the map; what the rest needs is
-            // measured, not guessed, so a large font only costs the gap, and
-            // when even that is gone the screen scrolls.
             val screen = maxHeight
             val scroll = rememberScrollState()
             val gutter = if (maxWidth < 360.dp) Space.x4 else Space.x5
-            // A tablet gets the phone's column, in the middle of the screen.
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
@@ -150,11 +173,11 @@ fun Home(
                     .verticalScroll(scroll, enabled = scroll.maxValue > 0)
                     .padding(horizontal = gutter),
             ) {
-                FillColumn(screen, flex = 2, least = 0.dp) {
-                    Header(s, onLog, onDrop, onSettings)
-                    Readout(s, onPick)
-                    Spacer(Modifier.onGloballyPositioned { band = it.boundsInRoot() })
-                    Panel(s, onWay, onAct, onCopy)
+                FillColumn(screen, flex = 2, least = 132.dp) {
+                    TopBar(s, onLog, onDrop, onSettings, onWay)
+                    Readout(s, onAct, onCopy)
+                    Band(s, Modifier.onGloballyPositioned { band = it.boundsInRoot() })
+                    Foot(s, onPick, onAct, onWay)
                 }
             }
         }
@@ -175,43 +198,58 @@ private fun connectedCode(s: HomeState): String {
     }.takeIf { it.length == 2 } ?: ""
 }
 
-/**
- * The soft dark shadow type needs where it lies over the map (a light one on
- * the light theme): the map is busy, and a word with nothing under it would
- * lose to a coastline.
- */
-@Composable
-private fun typeShadow(): Shadow {
-    val px = with(LocalDensity.current) { 12.dp.toPx() }
-    return Shadow(if (Tone.light) Color.White.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.75f),
-        Offset(0f, px / 6f), px)
+// -- the bar ------------------------------------------------------------------------------
+
+private val WAY_NOTE = mapOf(
+    Way.PROVIDER to "The provider's proxy: every country, slow uploads",
+    Way.SERVER to "Your own server through a CDN: the steadiest",
+    Way.SERVER_EXIT to "Your server, out by a provider exit",
+)
+
+private val WAY_ICON = mapOf(
+    Way.PROVIDER to Glyph.globe,
+    Way.SERVER to Glyph.tower,
+    Way.SERVER_EXIT to Glyph.route,
+)
+
+/** The ways out that can work now: a provider needs an account and servers, your server needs the tunnel set up. */
+private fun waysOf(s: HomeState): List<Way> {
+    val provider = s.hasCredentials && s.serverCount > 0
+    return Way.entries.filter {
+        when (it) {
+            Way.PROVIDER -> provider
+            Way.SERVER -> s.tunnelReady
+            Way.SERVER_EXIT -> s.tunnelReady && provider
+        }
+    }
 }
 
-// -- header -----------------------------------------------------------------------------
-
 @Composable
-private fun Header(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettings: () -> Unit) {
+private fun TopBar(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettings: () -> Unit, onWay: (Way) -> Unit) {
+    val ways = waysOf(s)
+    LaunchedEffect(ways) {
+        if (ways.isNotEmpty() && s.way !in ways) onWay(ways.first())
+    }
     Row(Modifier.fillMaxWidth().padding(top = Space.x2), verticalAlignment = Alignment.CenterVertically) {
-        RelayMark(Modifier.size(24.dp))
-        Spacer(Modifier.width(Space.x2))
-        Text("Relay", style = Type.subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f))
+        IconButton(Glyph.menu, "Settings", onSettings, tint = com.erelay.relay.ui.theme.Mirage.bright)
+        Spacer(Modifier.weight(1f))
         Box {
-            IconButton(Glyph.activity, "What is using the connection", onLog)
-            // Traffic is moving: a still dot. The pulsing one is the status word's alone.
+            IconButton(Glyph.activity, "What is using the connection", onLog, tint = com.erelay.relay.ui.theme.Mirage.bright)
             if (s.traffic.live && s.traffic.downRate + s.traffic.upRate > 512) {
                 LiveDot(Modifier.align(Alignment.TopEnd).offset((-Space.x2), Space.x3), size = 6.dp, ring = false)
             }
         }
         if (s.deadCount > 0) {
             Box {
-                IconButton(Glyph.archive, "Exits that stopped answering", onDrop)
+                IconButton(Glyph.archive, "Exits that stopped answering", onDrop, tint = com.erelay.relay.ui.theme.Mirage.bright)
                 Text(s.deadCount.toString(), style = Type.mono.copy(color = Tone.ink, fontSize = 11.sp),
                     modifier = Modifier.align(Alignment.TopEnd).offset((-Space.x1), Space.x1)
                         .clip(RoundedCornerShape(Shape.pill)).background(Tone.fail).padding(horizontal = 5.dp))
             }
         }
-        IconButton(Glyph.settings, "Settings", onSettings)
+        // The way out is no longer up here: it is the three cards at the foot
+        // (Mirage's layout 7, 2026-11-13). Nothing at the top is a control but
+        // these icons.
     }
 }
 
@@ -233,130 +271,29 @@ private fun wordOf(mode: Mode) = when (mode) {
 }
 
 /**
- * Top-left: the status word in the state's colour, the place under it, what
- * the connection is doing in mono, the timer, and under them the throughput
- * line. Left-aligned, every line a fixed height so nothing under it moves when
- * the words change. It lies over the map, so its type carries a soft shadow.
+ * The column down the middle: the timer, the shield line, the power button,
+ * the state word and the address under it. Centred, every line a fixed
+ * height so nothing moves when the words change.
  */
 @Composable
-private fun Readout(s: HomeState, onPick: () -> Unit) {
+private fun Readout(s: HomeState, onAct: () -> Unit, onCopy: (String) -> Unit) {
     val mode = s.conn.mode
-    val shadow = typeShadow()
-    val reduced = rememberReducedMotion()
-    val ms = if (reduced) 0 else Shape.LARGE_MS
-    val word = wordOf(mode)
-    val stateColor by animateColorAsState(if (mode == Mode.OFF) Tone.text2 else Tone.stateOf(mode),
-        tween(ms, easing = Shape.ease), label = "word")
-
-    Column(Modifier.fillMaxWidth().padding(top = Space.x6)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // Connected: the live dot, Pulse with its halo ring breathing out
-            // (DESIGN-NIGHT 4) - the one perpetual loop on the screen.
-            AnimatedVisibility(mode == Mode.ON,
-                enter = fadeIn(tween(if (reduced) 0 else Shape.ENTER_MS)),
-                exit = fadeOut(tween(if (reduced) 0 else Shape.FADE_MS))) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    LiveDot(Modifier.padding(start = 4.dp))
-                    Spacer(Modifier.width(14.dp))
-                }
-            }
-            AnimatedContent(word, transitionSpec = {
-                fadeIn(tween(if (reduced) 0 else Shape.ENTER_MS, easing = Shape.ease)) togetherWith
-                    fadeOut(tween(if (reduced) 0 else Shape.FADE_MS))
-            }, label = "word") { w ->
-                // One word: smaller rather than broken over two lines.
-                androidx.compose.foundation.text.BasicText(w,
-                    style = Type.status.copy(color = stateColor, fontSize = 30.sp, lineHeight = 34.sp, shadow = shadow),
-                    maxLines = 1, softWrap = false, autoSize = FitText(30.sp, floor = 20.dp))
-            }
-        }
-        Spacer(Modifier.height(Space.x2))
-        LocationLine(s, onPick, shadow)
+    val short = shortScreen()
+    Column(Modifier.fillMaxWidth().padding(top = if (short) Space.x4 else Space.x8),
+        horizontalAlignment = Alignment.CenterHorizontally) {
+        Timer(s)
         Spacer(Modifier.height(Space.x1))
-        AddressLine(s, shadow)
-        Spacer(Modifier.height(Space.x1))
-        Timer(s, shadow)
-        // The last minute of traffic, under the status block (the slot is
-        // always reserved, so the Connect button never moves when it appears).
-        Box(Modifier.padding(top = Space.x2).height(if (shortScreen()) SPARK_SLOT_SHORT else SPARK_SLOT)
-            .fillMaxWidth(0.72f), contentAlignment = Alignment.CenterStart) {
-            if (s.feel.meter) Sparkline(s.traffic, shown = mode == Mode.ON, reduced = reduced)
-        }
+        SecureLine(mode)
+        Spacer(Modifier.height(if (short) Space.x1 else Space.x3))
+        StateWord(mode)
+        Spacer(Modifier.height(2.dp))
+        AddressLine(s, onCopy)
     }
 }
 
-/** The place, as one line: flag, name. It is also the way into the list of places. */
+/** How long the tunnel has been up, big, as hh:mm:ss; its digits roll as they change. Zeros, dimmed, when it is down. */
 @Composable
-private fun LocationLine(s: HomeState, onPick: () -> Unit, shadow: Shadow) {
-    val mode = s.conn.mode
-    val pickable = s.way != Way.SERVER && mode != Mode.BUSY
-    val any = s.picked == "auto" && s.way != Way.SERVER
-    val pickCode = countryOfPick(s.picked).lowercase()
-
-    val connectedCode = connectedCode(s)
-    val place: String
-    val code: String
-    when {
-        s.way == Way.SERVER && mode != Mode.ON -> { place = "Your server"; code = "" }
-        mode == Mode.ON && s.seen == null && s.way != Way.PROVIDER -> { place = "Your server"; code = "" }
-        mode == Mode.ON && connectedCode.isNotEmpty() -> {
-            // The exact place the pick named, when that is where traffic comes out.
-            place = if (!any && pickCode == connectedCode) s.pickLabel else countryName(connectedCode)
-            code = connectedCode
-        }
-        any -> { place = "Any country"; code = "" }
-        else -> { place = s.pickLabel.ifEmpty { "Choose a location" }; code = pickCode }
-    }
-    val dim = any && mode != Mode.ON
-
-    val shape = RoundedCornerShape(Shape.tip)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .press(pickable, shape, onClick = onPick)
-            .clip(shape),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (code.isNotEmpty()) {
-            Flag(code, 20.dp)
-        } else {
-            Icon(Glyph.globe, null, Modifier.size(20.dp), tint = Tone.text2)
-        }
-        Spacer(Modifier.width(Space.x3))
-        Text(place, style = Type.title.copy(color = if (dim) Tone.text2 else Tone.text, shadow = shadow).script(place),
-            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        if (pickable) {
-            Spacer(Modifier.width(Space.x2))
-            Icon(Glyph.chevRight, "Change location", Modifier.size(16.dp), tint = Tone.text3)
-        }
-    }
-}
-
-/**
- * What the connection is doing, in mono: while it works, how far the search
- * has got; once it is up, the exit it came out of. The two addresses
- * themselves are in the panel below.
- */
-@Composable
-private fun AddressLine(s: HomeState, shadow: Shadow) {
-    val line = when (s.conn.mode) {
-        Mode.ON -> s.conn.exitAddress.takeIf { it.isNotEmpty() }
-            ?.let { "via " + if (s.way == Way.PROVIDER) "$it:443" else it }.orEmpty()
-        Mode.BUSY -> {
-            val stage = STAGES.entries.firstOrNull { s.conn.note.startsWith(it.key) }?.value
-                ?: "Looking for a server"
-            if (s.conn.total > 0) "$stage  ·  ${s.conn.asked} of ${s.conn.total}" else stage
-        }
-        else -> ""
-    }
-    Text(line.ifEmpty { " " }, style = Type.mono.copy(shadow = shadow), maxLines = 2, overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.heightIn(min = 16.dp))
-}
-
-/** How long the tunnel has been up: h:mm:ss, ticking once a second. */
-@Composable
-private fun Timer(s: HomeState, shadow: Shadow) {
+private fun Timer(s: HomeState) {
     val on = s.conn.mode == Mode.ON
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(on, s.conn.since) {
@@ -366,18 +303,291 @@ private fun Timer(s: HomeState, shadow: Shadow) {
         }
     }
     val secs = if (on && s.conn.since > 0) (now / 1000 - s.conn.since).coerceAtLeast(0) else 0
-    Text(
-        if (on) "%d:%02d:%02d".format(secs / 3600, secs / 60 % 60, secs % 60) else " ",
-        style = Type.monoBody.copy(color = Tone.text2, shadow = shadow), maxLines = 1,
-        modifier = Modifier.heightIn(min = 20.dp),
-    )
+    val text = "%02d:%02d:%02d".format(secs / 3600, secs / 60 % 60, secs % 60)
+    val reduced = rememberReducedMotion()
+    val ink by animateColorAsState(if (on) Tone.text else Tone.text3.copy(alpha = 0.55f),
+        tween(if (reduced) 0 else 500), label = "timerInk")
+    val size = if (shortScreen()) 44.sp else 52.sp
+    RollingText(text, Type.display.copy(color = ink, fontSize = size, lineHeight = size * 1.12f,
+        letterSpacing = (-0.01).em, fontFeatureSettings = "tnum"))
+}
+
+/** The state in its colour: one word, rising into place as it changes. */
+@Composable
+private fun StateWord(mode: Mode) {
+    val reduced = rememberReducedMotion()
+    val color by animateColorAsState(if (mode == Mode.OFF) Tone.text2 else Tone.stateOf(mode),
+        tween(if (reduced) 0 else Shape.LARGE_MS, easing = Shape.ease), label = "word")
+    AnimatedContent(wordOf(mode), transitionSpec = {
+        (fadeIn(tween(if (reduced) 0 else Shape.ENTER_MS, easing = Shape.ease)) +
+            slideInVertically(tween(if (reduced) 0 else 360, easing = Shape.ease)) { it / 3 }) togetherWith
+            (fadeOut(tween(if (reduced) 0 else Shape.FADE_MS)) +
+                slideOutVertically(tween(if (reduced) 0 else 200)) { -it / 4 })
+    }, label = "word") { w ->
+        androidx.compose.foundation.text.BasicText(w,
+            style = Type.status.copy(color = color, fontSize = 26.sp, lineHeight = 32.sp,
+                letterSpacing = (-0.015).em, textAlign = TextAlign.Center),
+            maxLines = 1, softWrap = false, autoSize = FitText(26.sp, floor = 18.dp))
+    }
+}
+
+/**
+ * Under the state word, in mono: once connected, the address the world sees
+ * (tap to copy); while connecting, how far the search has got; at rest, your
+ * own address.
+ */
+@Composable
+private fun AddressLine(s: HomeState, onCopy: (String) -> Unit) {
+    val mode = s.conn.mode
+    val copy: String?
+    val line = when (mode) {
+        Mode.ON -> {
+            copy = s.seen?.ip
+            s.seen?.ip ?: if (s.seenFailed) "address unconfirmed" else "checking the address…"
+        }
+        Mode.BUSY -> {
+            copy = null
+            val stage = STAGES.entries.firstOrNull { s.conn.note.startsWith(it.key) }?.value ?: "Looking for a server"
+            if (s.conn.total > 0) "$stage  ·  ${s.conn.asked} of ${s.conn.total}" else stage
+        }
+        else -> {
+            copy = s.realIp?.ip
+            when {
+                s.realIp != null -> "Your address  ${s.realIp.ip}"
+                s.realIpAsked -> "Your address is unknown"
+                else -> "Checking your address…"
+            }
+        }
+    }
+    Row(
+        Modifier
+            .heightIn(min = 28.dp)
+            .clip(RoundedCornerShape(Shape.pill))
+            .then(if (copy != null) Modifier.press(shape = RoundedCornerShape(Shape.pill)) { onCopy(copy) } else Modifier)
+            .padding(horizontal = Space.x3, vertical = Space.x1),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (mode == Mode.ON) {
+            Icon(Glyph.globe, null, Modifier.size(15.dp), tint = Tone.text2)
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(line, style = Type.ip.copy(fontSize = if (mode == Mode.ON) 17.sp else 13.sp,
+            color = if (mode == Mode.ON) Tone.text else Tone.text2, textAlign = TextAlign.Center),
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+// -- the band -------------------------------------------------------------------------------
+
+/**
+ * The free height over the planet. Its middle is where the map brings the
+ * country down to; once connected - after the camera has landed there - a pin
+ * lights on it and a glass card opens beside it: the flag and the country, the
+ * address, and the traffic either way.
+ */
+@Composable
+private fun Band(s: HomeState, modifier: Modifier) {
+    val code = connectedCode(s)
+    val on = s.conn.mode == Mode.ON && code.isNotEmpty()
+    val reduced = rememberReducedMotion()
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(on, code) {
+        shown = false
+        if (on) {
+            // The journey over the planet takes about this long to land.
+            if (!reduced) delay(2700)
+            shown = true
+        }
+    }
+    val p by animateFloatAsState(if (shown) 1f else 0f,
+        if (reduced) tween<Float>(0) else spring<Float>(dampingRatio = 0.72f, stiffness = Spring.StiffnessLow), label = "tip")
+    val ok = Tone.ok
+
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val w = maxWidth
+        val h = maxHeight
+        if (p > 0.01f) {
+            LiveDot(Modifier.align(Alignment.Center), color = ok, size = 9.dp)
+        }
+    }
+}
+
+/** The glass card by the pin: flag and country, the address, up and down. */
+@Composable
+private fun ExitTip(s: HomeState, code: String, modifier: Modifier) {
+    val shape = RoundedCornerShape(18.dp)
+    val name = countryName(code)
+    Column(
+        modifier
+            .widthIn(max = 220.dp)
+            .floatShadow(shape)
+            .glass(shape, solid = false)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            FlagDisc(code, 16.dp)
+            Spacer(Modifier.width(8.dp))
+            Text(name, style = Type.strong.copy(fontSize = 15.sp).script(name), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Glyph.globe, null, Modifier.size(15.dp), tint = Tone.text2)
+            Spacer(Modifier.width(8.dp))
+            Text(s.seen?.ip ?: "checking…", style = Type.mono.copy(color = Tone.text, fontSize = 13.sp), maxLines = 1)
+        }
+        if (s.feel.meter) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Glyph.arrowUpRight, null, Modifier.size(14.dp), tint = Tone.text2)
+                Spacer(Modifier.width(4.dp))
+                RollingText(rate(s.traffic.upRate), Type.mono.copy(color = Tone.text2))
+                Spacer(Modifier.width(10.dp))
+                Icon(Glyph.arrowDownLeft, null, Modifier.size(14.dp), tint = Tone.text2)
+                Spacer(Modifier.width(4.dp))
+                RollingText(rate(s.traffic.downRate), Type.mono.copy(color = Tone.text2))
+            }
+        }
+    }
+}
+
+// -- the foot -------------------------------------------------------------------------------
+
+private const val WAY_NEEDS_TUNNEL = "Set the domain and passwords under Settings → Your own tunnel first."
+
+/** Anything the screen has to say, then the server card. */
+@Composable
+private fun Foot(s: HomeState, onPick: () -> Unit, onAct: () -> Unit, onWay: (Way) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = Space.x2, bottom = Space.x3)) {
+        AnimatedVisibility(s.hint.isNotEmpty()) {
+            Text(s.hint, style = Type.caption.copy(color = if (s.hintBad) Tone.fail else Tone.text2,
+                textAlign = TextAlign.Center), maxLines = 4, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(bottom = Space.x3, start = Space.x2, end = Space.x2))
+        }
+        val ready = s.way == Way.PROVIDER || s.tunnelReady
+        AnimatedVisibility(!ready) {
+            Text(WAY_NEEDS_TUNNEL, style = Type.caption.copy(color = Tone.fail, textAlign = TextAlign.Center),
+                modifier = Modifier.fillMaxWidth().padding(bottom = Space.x3))
+        }
+        ServerCard(s, onPick)
+        Spacer(Modifier.height(Space.x3))
+        val mode = s.conn.mode
+        Btn(
+            when (mode) {
+                Mode.BUSY -> "Cancel"
+                Mode.ON -> "Disconnect"
+                else -> "Connect"
+            },
+            onAct,
+            Modifier.fillMaxWidth().heightIn(min = 54.dp),
+            enabled = mode == Mode.BUSY || mode == Mode.ON || s.canStart,
+            strong = mode != Mode.ON,
+            icon = Glyph.power,
+        )
+        Spacer(Modifier.height(Space.x3))
+        WayCards(s, onWay)
+    }
+}
+
+/**
+ * The ways out, as three cards side by side under Connect - never a menu.
+ * Only the ways that can work now are drawn; with one there is nothing to
+ * choose and the row is not drawn. Locked while connecting.
+ */
+@Composable
+private fun WayCards(s: HomeState, onWay: (Way) -> Unit) {
+    val ways = waysOf(s)
+    if (ways.size < 2) return
+    val busy = s.conn.mode == Mode.BUSY
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.x2)) {
+        for (w in ways) {
+            val on = w == s.way
+            val shape = RoundedCornerShape(16.dp)
+            Column(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 72.dp)
+                    .press(enabled = !busy && !on, shape = shape, sink = true, onClick = { onWay(w) })
+                    .clip(shape)
+                    .glass(shape, solid = false)
+                    .border(if (on) 1.5.dp else 1.dp, if (on) Tone.text2 else Tone.stroke, shape)
+                    .graphicsLayer { alpha = if (busy) 0.45f else 1f }
+                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(w.label, style = Type.strong.copy(fontSize = 13.sp, textAlign = TextAlign.Center), maxLines = 1)
+                Text(WAY_NOTE.getValue(w), style = Type.caption.copy(fontSize = 11.sp, lineHeight = 14.sp,
+                    textAlign = TextAlign.Center), maxLines = 3)
+            }
+        }
+    }
+}
+
+/**
+ * The reference's foot card: the place's round flag, its name, the address
+ * under it, and a chevron - the way into the list of places. While
+ * connected it is where the traffic leaves; before, what is picked.
+ */
+@Composable
+private fun ServerCard(s: HomeState, onPick: () -> Unit) {
+    val mode = s.conn.mode
+    val pickable = s.way != Way.SERVER && mode != Mode.BUSY
+    val any = s.picked == "auto" && s.way != Way.SERVER
+    val pickCode = countryOfPick(s.picked).lowercase()
+    val exit = connectedCode(s)
+    val place: String
+    val code: String
+    when {
+        s.way == Way.SERVER && mode != Mode.ON -> { place = "Your server"; code = "" }
+        mode == Mode.ON && s.seen == null && s.way != Way.PROVIDER -> { place = "Your server"; code = "" }
+        mode == Mode.ON && exit.isNotEmpty() -> {
+            place = if (!any && pickCode == exit) s.pickLabel else countryName(exit)
+            code = exit
+        }
+        any -> { place = "Any country"; code = "" }
+        else -> { place = s.pickLabel.ifEmpty { "Choose a location" }; code = pickCode }
+    }
+    val detail = when {
+        mode == Mode.ON && s.seen != null -> "IP ${s.seen.ip}"
+        mode == Mode.ON -> "checking the address…"
+        s.way == Way.SERVER -> "Reached through a CDN"
+        any -> "The quickest of ${s.serverCount} servers"
+        s.serverCount > 0 -> "${s.serverCount} servers in ${s.countries} countries"
+        else -> "No servers yet"
+    }
+
+    val shape = RoundedCornerShape(Shape.card)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 76.dp)
+            .press(pickable, shape, sink = true, sinkTo = 0.985f, onClick = onPick)
+            .floatShadow(shape)
+            .glass(shape, solid = false)
+            .padding(start = 12.dp, end = Space.x4, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (code.isNotEmpty()) FlagDisc(code, 52.dp)
+        else IconWell(Glyph.globe, size = 52.dp, tint = Tone.text)
+        Spacer(Modifier.width(Space.x3))
+        Column(Modifier.weight(1f)) {
+            Text(place, style = Type.title.copy(fontSize = 20.sp, lineHeight = 26.sp).script(place),
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (mode == Mode.ON) {
+                    LiveDot(size = 6.dp, ring = false)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(detail, style = Type.mono.copy(fontSize = 12.5.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (pickable) {
+            Spacer(Modifier.width(Space.x2))
+            Icon(Glyph.chevRight, "Change location", Modifier.size(20.dp), tint = Tone.text2)
+        }
+    }
 }
 
 // -- layout ---------------------------------------------------------------------------------
-
-/** The strip under the status block for the throughput line; reserved so nothing jumps when it appears. */
-private val SPARK_SLOT = 52.dp
-private val SPARK_SLOT_SHORT = 44.dp
 
 /**
  * A column [height] tall, its [flex]th child given whatever the others leave
@@ -400,207 +610,6 @@ private fun FillColumn(height: Dp, flex: Int, least: Dp, content: @Composable ()
                 p!!.place((width - p.width) / 2, y)
                 y += p.height
             }
-        }
-    }
-}
-
-// -- the panel ------------------------------------------------------------------------------
-
-/**
- * The foot of the screen, one frosted panel (a floating layer, so glass): the
- * two addresses side by side - yours on the left, the one the world sees on the
- * right, each under its own flag - then the way out and the one action. The
- * fill is translucent over the map; the blur the desktop puts behind it is not
- * drawn, because Compose cannot blur what is behind a view, only what is in it.
- */
-@Composable
-private fun Panel(s: HomeState, onWay: (Way) -> Unit, onAct: () -> Unit, onCopy: (String) -> Unit) {
-    val shape = RoundedCornerShape(Shape.sheet)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(top = Space.x2, bottom = Space.x3)
-            .floatShadow(shape)
-            .glass(shape, solid = false)
-            .padding(start = Space.x5, end = Space.x5, top = 18.dp, bottom = Space.x5),
-    ) {
-        Addresses(s, onCopy)
-        Spacer(Modifier.height(Space.x4))
-        Controls(s, onWay, onAct)
-    }
-}
-
-/** Who you are, and who the world thinks you are: the whole product is the difference between them. */
-@Composable
-private fun Addresses(s: HomeState, onCopy: (String) -> Unit) {
-    val mode = s.conn.mode
-    val homeCode = s.realIp?.country.orEmpty()
-    val exitCode = connectedCode(s)
-    val ownServer = mode == Mode.ON && exitCode.isEmpty() && s.way != Way.PROVIDER
-
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        AddressColumn(
-            label = "Your address", end = false,
-            code = homeCode,
-            place = when {
-                homeCode.isNotEmpty() -> countryName(homeCode)
-                s.realIpAsked -> "Unknown"
-                else -> "Checking…"
-            },
-            ip = s.realIp?.ip ?: if (s.realIpAsked) "unknown" else "…",
-            copy = s.realIp?.ip, onCopy = onCopy, modifier = Modifier.weight(1f))
-        AddressColumn(
-            label = "Seen as", end = true,
-            code = exitCode,
-            place = when {
-                mode != Mode.ON -> "Not connected"
-                exitCode.isNotEmpty() -> countryName(exitCode)
-                ownServer -> "Your server"
-                else -> "Checking…"
-            },
-            ip = when {
-                mode != Mode.ON -> "—"
-                s.seen != null -> s.seen.ip
-                s.seenFailed -> "unconfirmed"
-                else -> "checking…"
-            },
-            copy = if (mode == Mode.ON) s.seen?.ip else null, onCopy = onCopy, modifier = Modifier.weight(1f))
-    }
-}
-
-/** A label in Dust, the flag and the country beside it, the address under in mono: right-aligned when [end]. */
-@Composable
-private fun AddressColumn(
-    label: String, end: Boolean, code: String, place: String, ip: String,
-    copy: String?, onCopy: (String) -> Unit, modifier: Modifier,
-) {
-    Column(modifier, horizontalAlignment = if (end) Alignment.End else Alignment.Start) {
-        Text(label, style = Type.caption, maxLines = 1)
-        Spacer(Modifier.height(Space.x1))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // The flag sits on the outer side of the name: left for yours, right for the exit.
-            if (!end && code.isNotEmpty()) FlagTile(code)
-            Text(place, style = Type.strong.copy(fontSize = 17.sp, lineHeight = 22.sp), maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            if (end && code.isNotEmpty()) FlagTile(code)
-        }
-        Spacer(Modifier.height(2.dp))
-        Text(ip, style = Type.mono, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .heightIn(min = 16.dp)
-                .then(if (copy != null) Modifier.press(shape = RoundedCornerShape(Shape.pill)) { onCopy(copy) } else Modifier))
-    }
-}
-
-// -- the thumb zone -------------------------------------------------------------------------
-
-private val WAY_SAID = mapOf(
-    Way.PROVIDER to "The provider's own proxy. Nothing to set up, and every country below is " +
-        "available. Uploads are the catch — on this line they crawl or stall outright.",
-    Way.SERVER to "Your own server, reached through a CDN. The quickest and steadiest of the " +
-        "three. No country to choose: the server is where it is.",
-    Way.SERVER_EXIT to "Your server, handing the last leg to a provider exit. Sites see that " +
-        "country's address, and uploads keep your server's speed.",
-)
-
-/** What each way is, in the few words its line in the menu has room for. */
-private val WAY_NOTE = mapOf(
-    Way.PROVIDER to "The provider's proxy, any country",
-    Way.SERVER to "Your server, through a CDN",
-    Way.SERVER_EXIT to "Your server, out by a provider exit",
-)
-
-private val WAY_ICON = mapOf(
-    Way.PROVIDER to Glyph.globe,
-    Way.SERVER to Glyph.tower,
-    Way.SERVER_EXIT to Glyph.route,
-)
-
-private const val WAY_NEEDS_TUNNEL = "Set the domain and passwords under Settings → Your own tunnel first."
-
-@Composable
-private fun Controls(s: HomeState, onWay: (Way) -> Unit, onAct: () -> Unit) {
-    val mode = s.conn.mode
-    Column(Modifier.fillMaxWidth()) {
-        if (s.hint.isNotEmpty()) {
-            Text(s.hint, style = Type.caption.copy(color = if (s.hintBad) Tone.fail else Tone.text2),
-                maxLines = 4, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().padding(bottom = Space.x3))
-        }
-
-        // Only the ways that can work: a provider needs an account and its
-        // servers, your server needs the tunnel set up, and server + exit
-        // needs both. With one way left there is nothing to choose, so the
-        // strip is not drawn at all.
-        val provider = s.hasCredentials && s.serverCount > 0
-        val ways = Way.entries.filter {
-            when (it) {
-                Way.PROVIDER -> provider
-                Way.SERVER -> s.tunnelReady
-                Way.SERVER_EXIT -> s.tunnelReady && provider
-            }
-        }
-        LaunchedEffect(ways) {
-            if (ways.isNotEmpty() && s.way !in ways) onWay(ways.first())
-        }
-        if (ways.size >= 2) {
-            Row(Modifier.padding(bottom = Space.x3), verticalAlignment = Alignment.CenterVertically) {
-                Dropdown(ways, s.way, { it.label }, onWay, caption = "Way out",
-                    modifier = Modifier.weight(1f), icon = { WAY_ICON.getValue(it) },
-                    note = { WAY_NOTE.getValue(it) }, enabled = mode != Mode.BUSY)
-                InfoTip(WAY_SAID.getValue(s.way))
-            }
-        }
-        val ready = s.way == Way.PROVIDER || s.tunnelReady
-        AnimatedVisibility(!ready) {
-            Text(WAY_NEEDS_TUNNEL, style = Type.caption.copy(color = Tone.fail),
-                modifier = Modifier.padding(bottom = Space.x3))
-        }
-
-        GoButton(mode, enabled = mode == Mode.BUSY || mode == Mode.ON || s.canStart, onAct)
-    }
-}
-
-/**
- * The one primary action, full width, a pill: Mist White fill and Void type
- * when there is something to start; once there is something to stop, a ghost
- * pill with a 1dp Edge. A press moves it down 1dp; it never glows.
- */
-@Composable
-private fun GoButton(mode: Mode, enabled: Boolean, onClick: () -> Unit) {
-    val reduced = rememberReducedMotion()
-    val ms = if (reduced) 0 else Shape.LARGE_MS
-    val shape = RoundedCornerShape(50)
-    val outlined = mode == Mode.BUSY || mode == Mode.ON
-    val fill by animateColorAsState(if (outlined) Tone.text.copy(alpha = 0f) else Tone.text,
-        tween(ms, easing = Shape.ease), label = "goFill")
-    val edge by animateColorAsState(if (outlined) Tone.strokeStrong else Color.Transparent,
-        tween(ms, easing = Shape.ease), label = "goEdge")
-    val ink by animateColorAsState(if (outlined) Tone.text else Tone.ink,
-        tween(ms, easing = Shape.ease), label = "goInk")
-    val word = when (mode) {
-        Mode.BUSY -> "Cancel"
-        Mode.ON -> "Disconnect"
-        else -> "Connect"
-    }
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 52.dp)
-            .press(enabled, shape, sink = true, sinkTo = 0.985f, nudge = true,
-                feel = androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm, onClick = onClick)
-            .clip(shape)
-            .background(fill)
-            .border(1.dp, edge, shape)
-            .alpha(if (enabled) 1f else 0.45f)
-            .padding(horizontal = Space.x4),
-        contentAlignment = Alignment.Center,
-    ) {
-        AnimatedContent(word, transitionSpec = {
-            fadeIn(tween(if (reduced) 0 else Shape.ENTER_MS, easing = Shape.ease)) togetherWith
-                fadeOut(tween(if (reduced) 0 else Shape.FADE_MS))
-        }, label = "goWord") { w ->
-            Text(w, style = Type.button.copy(color = ink), maxLines = 1)
         }
     }
 }

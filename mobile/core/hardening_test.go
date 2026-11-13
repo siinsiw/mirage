@@ -514,48 +514,109 @@ func pinServer(t *testing.T, srv **TunnelServer, switching bool) (port int, pinA
 	return ln.Addr().(*net.TCPAddr).Port, pinA, handshakes, requests
 }
 
-func TestFirstUsePinIsTakenBeforeAnythingIsSent(t *testing.T) {
+// A server by address with no pin is not dialled: no handshake, no request,
+// and so no password to whatever happens to answer there first.
+func TestUnpinnedAddressIsRefusedBeforeAnythingIsSent(t *testing.T) {
+	var srv *TunnelServer
+	port, _, handshakes, requests := pinServer(t, &srv, false)
+	srv = NewTunnelServer("127.0.0.1", "tunnel-pw", nil, ModeBulk)
+	srv.Port = port
+	defer srv.Close()
+
+	_, _, err := srv.Open("example.com:443", 5*time.Second)
+	if err == nil || !strings.Contains(err.Error(), ErrNoPin.Error()) {
+		t.Fatalf("an address without a pin was dialled: %v", err)
+	}
+	select {
+	case got := <-requests:
+		t.Fatalf("a request reached a server nobody had confirmed: %s", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if n := handshakes.Load(); n != 0 {
+		t.Fatalf("%d handshakes with a server that has no pin", n)
+	}
+}
+
+// PeekPin shows the certificate and trusts nothing: one bare handshake, no
+// request, and the server is still refused until the pin is handed back.
+func TestPeekPinShowsWithoutTrusting(t *testing.T) {
 	var srv *TunnelServer
 	port, pinA, handshakes, requests := pinServer(t, &srv, false)
 	srv = NewTunnelServer("127.0.0.1", "tunnel-pw", nil, ModeBulk)
 	srv.Port = port
 	defer srv.Close()
 
-	_, _, err := srv.Open("example.com:443", 5*time.Second)
+	seen, err := srv.PeekPin(context.Background(), 5*time.Second)
+	if err != nil || seen != pinA {
+		t.Fatalf("PeekPin = %q, %v; want %s", seen, err, pinA)
+	}
+	if n := handshakes.Load(); n != 1 {
+		t.Fatalf("%d handshakes for one look", n)
+	}
+	if srv.pin() != "" {
+		t.Fatalf("looking kept the pin %q", srv.pin())
+	}
+	if _, _, err := srv.Open("example.com:443", 5*time.Second); err == nil ||
+		!strings.Contains(err.Error(), ErrNoPin.Error()) {
+		t.Fatalf("a look was taken for a confirmation: %v", err)
+	}
+	select {
+	case got := <-requests:
+		t.Fatalf("a request was sent before the pin was confirmed: %s", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Confirmed: the pin is handed back, and only now does anything travel.
+	srv.Pin = seen
+	_, _, err = srv.Open("example.com:443", 5*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("expected the 404 this server gives: %v", err)
 	}
 	select {
 	case got := <-requests:
 		if got != pinA+" /gwb" {
-			t.Fatalf("the request arrived with the pin %q, want %s already held", got, pinA)
+			t.Fatalf("the request arrived with the pin %q, want %s held", got, pinA)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no request arrived")
-	}
-	if n := handshakes.Load(); n != 2 {
-		t.Fatalf("%d handshakes: want one bare, then one that talks", n)
 	}
 	if srv.SeenPin() != pinA {
 		t.Fatalf("SeenPin %q", srv.SeenPin())
 	}
 }
 
-func TestFirstUsePinHoldsTheConnectionThatAuthenticates(t *testing.T) {
+// The certificate that was confirmed is the one the authenticating
+// connection has to show: another one after the look is refused unsent.
+func TestConfirmedPinHoldsTheConnectionThatAuthenticates(t *testing.T) {
 	var srv *TunnelServer
-	port, _, _, requests := pinServer(t, &srv, true)
+	port, pinA, _, requests := pinServer(t, &srv, true)
 	srv = NewTunnelServer("127.0.0.1", "tunnel-pw", nil, ModeSingle)
 	srv.Port = port
 	defer srv.Close()
 
-	_, _, err := srv.Open("example.com:443", 5*time.Second)
+	seen, err := srv.PeekPin(context.Background(), 5*time.Second)
+	if err != nil || seen != pinA {
+		t.Fatalf("PeekPin = %q, %v; want %s", seen, err, pinA)
+	}
+	srv.Pin = seen
+
+	_, _, err = srv.Open("example.com:443", 5*time.Second)
 	if err == nil || !strings.Contains(err.Error(), ErrPinChanged.Error()) {
-		t.Fatalf("a certificate that changed after first use was not refused: %v", err)
+		t.Fatalf("a certificate that changed after it was confirmed was not refused: %v", err)
 	}
 	select {
 	case got := <-requests:
 		t.Fatalf("a request reached a server showing another certificate: %s", got)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// A server by name has no pin to show: a CA vouches for it.
+func TestPeekPinIsNothingForAName(t *testing.T) {
+	srv := NewTunnelServer("example.invalid", "tunnel-pw", nil, ModeSingle)
+	defer srv.Close()
+	if seen, err := srv.PeekPin(context.Background(), time.Second); seen != "" || err != nil {
+		t.Fatalf("PeekPin of a name = %q, %v", seen, err)
 	}
 }
 

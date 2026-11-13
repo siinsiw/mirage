@@ -178,8 +178,9 @@ func apiHost(host string, port int) string {
 // ErrNoPin is the API asked of a server by address before its certificate
 // is known. A pin left empty there would trust whatever answered first and
 // hand it the API password - so the request is not made at all, and the
-// caller tests the server (which learns the pin; see TunnelServer.learnPin)
-// before asking again.
+// caller gets the pin first - from the server's key, or by showing the
+// person what TunnelServer.PeekPin saw and having them confirm it - before
+// asking again. The tunnel refuses an address without a pin the same way.
 var ErrNoPin = errors.New("the server's certificate is not pinned yet - test the server first")
 
 // apiTransports holds one transport per server and pin, so the requests an
