@@ -49,6 +49,14 @@ import paths                                                 # noqa: E402
 # import: engine computes REACH_PATH from paths.STATE_DIR the moment it is
 # imported, and a run whose window used a fixture while its engine read the
 # real folders would prove nothing about either.
+_DEV_FLAGS = [f for f in ('--ui-drive', '--ui-layout', '--ui-perf')
+              if f in sys.argv]
+if _DEV_FLAGS and paths.FROZEN:
+    # Development tools, left out of the built exe (build.DEV_ONLY): said,
+    # rather than a crash on the first line or a thread that dies quietly.
+    print(f'{_DEV_FLAGS[0]} needs Relay run from source (python app/main.py); '
+          'this build does not include it.', file=sys.stderr)
+    raise SystemExit(2)
 if '--ui-drive' in sys.argv:
     import uidrive
     _DRIVE_TREE = uidrive.fixture()
@@ -196,8 +204,8 @@ def app_version():
 
 # The settings file - load, save, the lock, the backup and the sealing -
 # lives in settingsfile.py, where it can be tested without a window.
-from settingsfile import (load_settings, save_settings,      # noqa: E402
-                          update_settings)
+from settingsfile import (SETTINGS_LOCK, load_settings,      # noqa: E402
+                          save_settings, update_settings)
 
 
 def _tray_importable():
@@ -637,9 +645,13 @@ class Api:
         # nothing. Connecting is already refused, with a message that says
         # why, so the list is left showing what is there.
         self._engine.providers = set(chosen) if chosen else None
-        if self._settings.get('providers') != chosen:
-            self._settings['providers'] = chosen
-            save_settings(self._settings)
+        # Compared and written as one step (SETTINGS_LOCK, an RLock that
+        # save_settings takes too): another thread's change in between
+        # would otherwise be saved over.
+        with SETTINGS_LOCK:
+            if self._settings.get('providers') != chosen:
+                self._settings['providers'] = chosen
+                save_settings(self._settings)
         return chosen
 
     def _reconcile_credentials(self):
@@ -2271,6 +2283,9 @@ class Api:
         if not sweep.configs_in(folder):
             return {'ok': False,
                     'error': f'Nothing waiting in {folder}.'}
+        # Not under SETTINGS_LOCK: choosing the route can take half a minute
+        # of probes, and every other save would wait behind it. The keys it
+        # sets are plain values, each written whole.
         self._settings['pinFolder'] = folder
         routed = self._choose_pin_route()
         save_settings(self._settings)
@@ -2703,15 +2718,19 @@ class Api:
         connect button already understands, which is what stops a favourite
         meaning something the app cannot act on.
         """
-        codes = list(self._settings.get('favourites') or [])
-        if code in codes:
-            codes.remove(code)
-            on = False
-        else:
-            codes.append(code)
-            on = True
-        self._settings['favourites'] = codes
-        save_settings(self._settings)
+        # Read, changed and written back as one step: two stars pressed
+        # quickly come from two threads, and without the lock the second
+        # could start from the list as it was before the first.
+        with SETTINGS_LOCK:
+            codes = list(self._settings.get('favourites') or [])
+            if code in codes:
+                codes.remove(code)
+                on = False
+            else:
+                codes.append(code)
+                on = True
+            self._settings['favourites'] = codes
+            save_settings(self._settings)
         self._retray()
         return {'ok': True, 'codes': codes, 'on': on}
 
@@ -3011,13 +3030,16 @@ class Api:
         """The two passwords, made here when there are none yet. The install
         command carries them to the server, so this window already holds what
         the server will ask for and nothing has to be copied back."""
-        changed = False
-        for key in ('tunnelPassword', 'tunnelApiPassword'):
-            if not self._settings.get(key):
-                self._settings[key] = secrets.token_urlsafe(15)
-                changed = True
-        if changed:
-            save_settings(self._settings)
+        # Under the lock: two callers at once would each make a password,
+        # and the install command could carry the one that was not kept.
+        with SETTINGS_LOCK:
+            changed = False
+            for key in ('tunnelPassword', 'tunnelApiPassword'):
+                if not self._settings.get(key):
+                    self._settings[key] = secrets.token_urlsafe(15)
+                    changed = True
+            if changed:
+                save_settings(self._settings)
             self._tunnel = None
 
     def installCommand(self, domain=None):
@@ -3098,26 +3120,30 @@ class Api:
                 return {**self.tunnelPlan(), 'ok': False,
                         'error': f'That {label} has characters it cannot '
                                  f'have. It has to be {px_.SECRET_RULE}.'}
-        if domain is not None:
-            if domain.strip() != self._settings.get('tunnelDomain', ''):
-                # A new server: the certificate kept for the old one is not
-                # this one's, and would only make it refuse.
-                try:
-                    self._tunnel_client().forget_cert()
-                except RuntimeError:
-                    pass
-                # And what a key said about the old one - its Shadowsocks,
-                # its exported locations - is not true of the new one.
-                for name in ('tunnelSs', 'tunnelExport', 'exportLast',
-                             'tunnelPort'):
-                    self._settings.pop(name, None)
-                self._settings['tunnelTransport'] = 'ws'
-            self._settings['tunnelDomain'] = domain.strip()
-        if password:
-            self._settings['tunnelPassword'] = password.strip()
-        if apiPassword:
-            self._settings['tunnelApiPassword'] = apiPassword.strip()
-        save_settings(self._settings)
+        if domain is not None and                 domain.strip() != self._settings.get('tunnelDomain', ''):
+            # A new server: the certificate kept for the old one is not
+            # this one's, and would only make it refuse.
+            try:
+                self._tunnel_client().forget_cert()
+            except RuntimeError:
+                pass
+        # The server's fields change together, so no other save in between
+        # writes a new domain with the old server's key material.
+        with SETTINGS_LOCK:
+            if domain is not None:
+                if domain.strip() != self._settings.get('tunnelDomain', ''):
+                    # What a key said about the old one - its Shadowsocks,
+                    # its exported locations - is not true of the new one.
+                    for name in ('tunnelSs', 'tunnelExport', 'exportLast',
+                                 'tunnelPort'):
+                        self._settings.pop(name, None)
+                    self._settings['tunnelTransport'] = 'ws'
+                self._settings['tunnelDomain'] = domain.strip()
+            if password:
+                self._settings['tunnelPassword'] = password.strip()
+            if apiPassword:
+                self._settings['tunnelApiPassword'] = apiPassword.strip()
+            save_settings(self._settings)
         self._tunnel = None
         return self.tunnelPlan()
 

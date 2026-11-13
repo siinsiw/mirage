@@ -123,7 +123,30 @@ function icon(href, className, title) {
 function initConnectionCore() {
   const canvas = $('atlasCanvas');
   if (!canvas || !window.Atlas) return;
-  window.Atlas.init(canvas, { calm: () => CALM });
+  // three.js and the world's outlines are 1.5 MB of script, loaded only once
+  // the page has painted: a weak PC shows the window first and the globe a
+  // moment later, instead of a blank window while both are parsed. Classic
+  // scripts, so this works over file:// where module imports do not.
+  const load = (src) => new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = false;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`${src} did not load`));
+    document.body.append(s);
+  });
+  let started = false;
+  const go = () => {
+    if (started) return;
+    started = true;
+    Promise.all([load('three.min.js'), load('world-data.js')])
+      .then(() => window.Atlas.init(canvas, { calm: () => CALM }))
+      .catch(() => { canvas.hidden = true; });
+  };
+  // After the first frame; and on a timer as well, because a window that
+  // starts hidden (in the tray) gets no frames until it is shown.
+  requestAnimationFrame(() => setTimeout(go, 0));
+  setTimeout(go, 1500);
 }
 
 /* ------------------------------------------------------------- rendering */

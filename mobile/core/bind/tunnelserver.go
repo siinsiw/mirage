@@ -242,8 +242,8 @@ func SeenAsLiveJSON(timeoutMs int) string {
 	return out
 }
 
-// LatestReleaseTag is the tag of the newest published release (GitHub's
-// releases/latest for this repository), asked through the tunnel that is up.
+// LatestReleaseTag is the tag of the newest published Android release (the
+// highest android-v* tag in this repository's releases), asked through the tunnel that is up.
 // What a "check for a newer version" button calls while connected; the
 // window compares it with its own version. An error when nothing is carrying
 // - the window then decides whether to ask some other way - or when GitHub

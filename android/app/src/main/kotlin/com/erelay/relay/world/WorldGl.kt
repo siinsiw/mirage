@@ -332,7 +332,12 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
      * app has no picture of is a quiet grey, so the fill still reads.
      */
     private fun textureOf(code: String, c: WorldData.Country): CountryTex {
-        textures[code]?.let { return it }
+        // Kept under whether the flag is hidden as well, so flipping the
+        // neutral-flag setting draws the other one at once rather than once
+        // this one has been evicted.
+        val hidden = flagHidden(context, code)
+        val key = if (hidden) "$code#plain" else code
+        textures[key]?.let { return it }
         val b = c.box
         val cw = 1024
         val ch = max(64, min(1024, (1024f * (b[3] - b[1]) / max(0.01f, b[2] - b[0])).roundToInt()))
@@ -353,10 +358,10 @@ internal class WorldGl(private val context: Context, private val world: WorldDat
         // With mip levels, so the country's edge holds still when it is small on screen.
         val mask = texture(bmp, mipmaps = true)
         bmp.recycle()
-        val flag = (if (flagHidden(context, code)) null else mapFlag(code))?.let { bmp -> texture(bmp, mipmaps = true).also { bmp.recycle() } }
+        val flag = (if (hidden) null else mapFlag(code))?.let { bmp -> texture(bmp, mipmaps = true).also { bmp.recycle() } }
             ?: texture(flagBitmap(context, code)?.asAndroidBitmap(), grey = true)
         val t = CountryTex(mask, flag)
-        textures[code] = t
+        textures[key] = t
         // The last four only: two are in use, the rest are the ones just left.
         while (textures.size > 4) {
             val eldest = textures.entries.first()

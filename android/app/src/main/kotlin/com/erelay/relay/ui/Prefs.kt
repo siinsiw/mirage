@@ -1046,7 +1046,12 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
             SwitchRow("Show the traffic meter",
                 "The live wave of what is going up and down while connected.",
                 feel.meter, { onFeel(feel.copy(meter = it)) })
-            Sep()
+        }
+    }
+
+    // Not motion: what is drawn for one country, in the lists and on the map.
+    Section("Flags") {
+        Group {
             IranFlagRow()
         }
     }
@@ -1139,6 +1144,12 @@ private fun Swatch(p: Palette, on: Boolean, modifier: Modifier, onPick: () -> Un
 
 @Composable
 private fun About(core: RelayCore) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var updateSaid by remember { mutableStateOf("") }
+    var checking by remember { mutableStateOf(false) }
+    var newer by remember { mutableStateOf(false) }
+
     Section("Relay for Android",
         help = "Accounts are kept with a key the Android keystore holds; configs, pins and " +
             "test results are plain files in the data folder.") {
@@ -1149,6 +1160,44 @@ private fun About(core: RelayCore) {
             Sep()
             Line("Data", core.dataFolder)
         }
+    }
+
+    // Asked only when pressed (data/Updates.kt): most copies arrive re-shared,
+    // and one that never hears of a newer build stays on the one it came with.
+    Section("Newer version") {
+        Group {
+            SettingRow("Check for a newer version",
+                desc = "One question to GitHub, only when pressed. Nothing about this phone is sent.",
+                icon = Glyph.refresh, enabled = !checking, onClick = {
+                    checking = true
+                    newer = false
+                    updateSaid = "Asking GitHub…"
+                    scope.launch {
+                        try {
+                            val found = com.erelay.relay.data.Updates.check(context)
+                            newer = found.newer
+                            updateSaid = found.text
+                        } catch (e: Exception) {
+                            updateSaid = e.message ?: "Could not ask GitHub."
+                        } finally {
+                            checking = false
+                        }
+                    }
+                })
+            if (newer) {
+                Sep()
+                SettingRow("Open the releases page", icon = Glyph.arrowUpRight, onClick = {
+                    try {
+                        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse(com.erelay.relay.data.Updates.PAGE))
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                    } catch (e: android.content.ActivityNotFoundException) {
+                        updateSaid = "No browser on this phone to open ${com.erelay.relay.data.Updates.PAGE}"
+                    }
+                })
+            }
+        }
+        SaidLine(updateSaid)
     }
 }
 

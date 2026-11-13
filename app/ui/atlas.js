@@ -49,6 +49,9 @@
     let landStyle = 'flag';                         /* 'flag' or 'dots' - see GLOBE_FRAG */
     const landDefines = () => (landStyle === 'flag' ? { FLAG_LAND: '' } : {});
     let state = 'off', homeCode = null, liveCode = null, pickedCode = null;
+    /* A home country named before the world data has loaded (app.js loads it
+       after the first paint): kept, and taken up by init. */
+    let pendingHome = null;
     let originCode = null, destCode = null, busyTl = null, journey = null;
     const view = { dir: null, dist: 5, shift: 0 };
     const lean = { x: 0, y: 0 };
@@ -729,6 +732,7 @@
        anything of ours was in the way. */
     function home(code) {
       code = (code || '').toLowerCase();
+      if (!W) { pendingHome = code || null; return; }
       if (!has(code) || code === homeCode) return;
       const first = homeCode === null && originCode === null;
       homeCode = code;
@@ -794,6 +798,8 @@
     function init(cv, opts) {
       T = window.THREE; W = window.WORLD;
       if (!T || !W) return false;
+      if (pendingHome && has(pendingHome)) homeCode = pendingHome;
+      pendingHome = null;
       canvas = cv;
       isCalm = (opts && opts.calm) || (() => false);
       try {

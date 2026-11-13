@@ -2160,10 +2160,11 @@
 <!-- qrcode-generator 1.4.4, MIT, vendored from cdnjs (SRI-checked); the
      licence is in the file's own header. Draws the codes on Other devices. -->
 <script src="qrcode.min.js"></script>
-<!-- three.js r170 (MIT), as a plain script; the outlines are Natural Earth
-     (public domain), written by app/make_world.py. -->
-<script src="three.min.js"></script>
-<script src="world-data.js"></script>
+<!-- three.js r170 (MIT, three.min.js) and the outlines (Natural Earth,
+     public domain, world-data.js, written by app/make_world.py) are not
+     loaded here: 1.5 MB of script parsed before the first paint is a blank
+     window on a weak PC. app.js (initConnectionCore) loads both once the
+     page is on screen; atlas.js waits for them. -->
 <script src="atlas.js"></script>
 <script src="midnight.js"></script>
 <script src="app.js"></script>
