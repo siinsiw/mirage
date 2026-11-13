@@ -73,6 +73,8 @@ object Glyph {
     val tower = stroke("tower", "M4.9 16.1C1 12.2 1 5.8 4.9 1.9", "M7.8 4.7a6.14 6.14 0 0 0-.8 7.5",
         circle(12f, 9f, 2f), "M16.2 4.8c2 2 2.26 5.11.8 7.47", "M19.1 1.9a9.96 9.96 0 0 1 0 14.1",
         "M9.5 18h5", "m8 22 4-11 4 11")
+    /** A server of your own: two stacked units (Lucide "server"), as the Windows welcome has it. */
+    val server = stroke("server", rect(2f, 2f, 20f, 8f, 2f), rect(2f, 14f, 20f, 8f, 2f), "M6 6h.01", "M6 18h.01")
     val check = stroke("check", "M20 6 9 17l-5-5")
     val x = stroke("x", "M18 6 6 18", "m6 6 12 12")
     val chevDown = stroke("chevDown", "m6 9 6 6 6-6")
@@ -112,6 +114,29 @@ object Glyph {
         "M21 16h-3a2 2 0 0 0-2 2v3", "M21 21v.01", "M12 7v3a2 2 0 0 1-2 2H7", "M3 12h.01", "M12 3h.01",
         "M12 16v.01", "M16 12h1", "M21 12v.01", "M12 21v-1")
 
+    /* Added with the Midnight redesign, from Lucide as well (same licence, same 24 grid). */
+    /** Lucide's power. */
+    val power = stroke("power", "M12 2v10", "M18.4 6.6a9 9 0 1 1-12.77.04", width = 2.25f)
+    /** Lucide's shield-check: "Secured connection". */
+    val shieldCheck = stroke("shieldCheck",
+        "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+        "m9 12 2 2 4-4")
+    /** Lucide's shield-alert: open, not secured. */
+    val shieldOff = stroke("shieldOff",
+        "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+        "M12 8v4", "M12 16h.01")
+    /** The menu mark of the reference: two long strokes round a short one. */
+    val menu = stroke("menu", "M4 6h16", "M4 12h10", "M4 18h16")
+    val arrowUpRight = stroke("arrowUpRight", "M7 7h10v10", "M7 17 17 7")
+    val arrowDownLeft = stroke("arrowDownLeft", "M17 7 7 17", "M17 17H7V7")
+    val arrowRight = stroke("arrowRight", "M5 12h14", "m12 5 7 7-7 7", width = 2f)
+    val chevronsRight = stroke("chevronsRight", "m6 17 5-5-5-5", "m13 17 5-5-5-5")
+    val lock = stroke("lock", rect(3f, 11f, 18f, 11f, 2f), "M7 11V7a5 5 0 0 1 10 0v4")
+    val user = stroke("user", "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2", circle(12f, 7f, 4f))
+    val palette = stroke("palette",
+        "M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z",
+        circle(13.5f, 6.5f, .5f), circle(17.5f, 10.5f, .5f), circle(6.5f, 12.5f, .5f), circle(8.5f, 7.5f, .5f))
+
     /** Surfshark's mark, from the same sprite. */
     val surfshark = filled("surfshark", 24f,
         "M11.47 0C7.815.2 6.3 2.293 5.872 3.43c-1.615 4.866-3.127 14.325-3.33 15.662-.201 1.31-.228 2.119-.228 2.119 0 .328.026.705.102 1.059.454 1.286 1.792 2.37 4.768 1.287a192.353 192.353 0 0 0 9.533-4.44c1.387-.807 3.227-2.32 4.236-4.312.404-.807.682-1.716.733-2.65v-.452c-.026-2.295-.052-4.692-.204-7.013 0 0-.125-1.488-.2-2.017-.076-.53-.177-.733-.177-.733C20.626.906 19.693.38 18.71.126 18.23.026 17.7.024 17.095 0Zm4.692 4.44h.252c.277 0 .48.2.48.452V6.53c0 .252-.203.455-.48.455h-.252c-1.589 0-2.875 1.26-2.875 2.8v2.498c0 2.976-2.472 5.37-5.498 5.37h-.254c-.277 0-.478-.2-.478-.452v-1.64c0-.253.226-.454.478-.454h.254c1.589 0 2.875-1.262 2.875-2.8V9.81c0-2.977 2.472-5.373 5.498-5.373z" to 1f)
@@ -121,32 +146,4 @@ object Glyph {
         "M5 20L9.58333 9.58333L20 5L30.4167 9.58333L35 20H30V11.6667H25.8333L23.3333 14.1667V20H16.6667V14.1667L14.1667 11.6667H10V20H5Z" to .4f,
         "M10 11.6666V29.1666H14.5833L20 23.3333L25.4167 29.1666H30V11.6666H25.8333V24.1666L20 17.9166L14.1667 24.1666V11.6666H10Z" to 1f,
         "M32.0833 7.91677L20 2.91677L7.91666 7.91677L2.91666 20.0001L7.91666 32.0834L20 37.0834L32.0833 32.0834L37.0833 20.0001L32.0833 7.91677ZM34.1667 34.1667L20 40L5.83333 34.1667L0 20L5.83333 5.83333L20 0L34.1667 5.83333L40 20L34.1667 34.1667Z" to 1f)
-}
-
-/** The ten continent marks of DESIGN-NIGHT 8 (24 grid, 1.75 stroke), identical on the desktop. */
-object ContinentMark {
-    val europe = stroke("europe", "M3 9.5 12 4l9 5.5", "M4.5 9.5h15", "M6.5 12v5.5", "M10 12v5.5", "M14 12v5.5", "M17.5 12v5.5", "M3.5 20h17", "M12 7.1v.01")
-    val middleEast = stroke("middle-east", "M5.5 20v-5.5a6.5 6.5 0 0 1 13 0V20", "M3.5 20h17", "M10.5 20v-2.25a1.5 1.5 0 0 1 3 0V20", "M12 8V5.75", "M12 4.25v.01")
-    val asia = stroke("asia", "M12 5V3", "M5 9 12 5l7 4", "M7 9v2.5h10V9", "M4 14.5 12 11.5l8 3", "M6 14.5V20h12v-5.5", "M3.5 20h17", "M11 20v-2.5h2V20")
-    val northAmerica = stroke("north-america", "M4 20v-8h4v8", "M8 20V6.5h5V20", "M13 20v-10h4v10", "M17 20v-5h3v5", "M10.5 6.5V3.5", "M3.5 20h17", "M10.5 10v.01M10.5 13v.01")
-    val southAmerica = stroke("south-america", "M3 19 9 9.5l4 5 3-4 5 8.5z", "M7.4 12 9 9.5l1.6 2", "M18.5 6.5a2 2 0 1 0 -4 0a2 2 0 1 0 4 0")
-    val africa = stroke("africa", "M11 20c.6-3 .6-6.2-.2-9h2.4c-.8 2.8-.8 6 -.2 9", "M4.5 9.5C6 6 9 5 12 6c3-1 6 0 7.5 3.5", "M12 11 9.5 8", "M12 11l2.5-3", "M3.5 20h17")
-    val oceania = stroke("oceania", "M15 9a3 3 0 1 0 -6 0a3 3 0 1 0 6 0", "M12 3.5V2.75", "M3 15.5c1.5 0 1.5-1 3-1s1.5 1 3 1 1.5-1 3-1 1.5 1 3 1 1.5-1 3-1 1.5 1 3 1", "M5 19.5c1.4 0 1.4-1 2.8-1s1.4 1 2.8 1 1.4-1 2.8-1 1.4 1 2.8 1 1.4-1 2.8-1")
-    val antarctica = stroke("antarctica", "M12 3.5c-3 0-5 3.2-5 8s2 8.5 5 8.5 5-3.7 5-8.5-2-8-5-8z", "M12 9c-1.5 0-2.4 2-2.4 4.5S10.5 18 12 18s2.4-2 2.4-4.5S13.5 9 12 9z", "M10.5 6.5v.01", "M13.5 6.5v.01", "M11.2 8 12 8.7l.8-.7", "M10 20l-1.2 1.2", "M14 20l1.2 1.2")
-    val elsewhere = stroke("elsewhere", "M21 12a9 9 0 1 0 -18 0a9 9 0 1 0 18 0", "m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9z")
-    val starred = stroke("starred", "M11.5 2.8a.6.6 0 0 1 1 0l2.4 4.9 5.4.8a.6.6 0 0 1 .3 1l-3.9 3.8.9 5.4a.6.6 0 0 1-.8.6L12 16.8l-4.8 2.5a.6.6 0 0 1-.8-.6l.9-5.4L3.4 9.5a.6.6 0 0 1 .3-1l5.4-.8z")
-
-    /** A picker group's name -> its mark; anything unknown is the compass. */
-    fun of(continent: String): ImageVector = when (continent.trim().lowercase()) {
-        "europe" -> europe
-        "middle east" -> middleEast
-        "asia" -> asia
-        "north america" -> northAmerica
-        "south america" -> southAmerica
-        "africa" -> africa
-        "oceania" -> oceania
-        "antarctica" -> antarctica
-        "starred" -> starred
-        else -> elsewhere
-    }
 }
