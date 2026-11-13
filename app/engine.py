@@ -1601,8 +1601,12 @@ class Engine:
         if adapter:
             if progress:
                 progress({'phase': 'adapter'})
+            # sing-box and Xray as carriers too: the Configs section's
+            # latency tests run them, and a test measures this line, not
+            # whichever exit happens to be up.
             want = dict(keep=[keep] if keep else [], own=[sys.executable],
-                        carriers=[paths.gost_exe()],
+                        carriers=[paths.gost_exe(), paths.singbox_exe(),
+                                  paths.xray_exe()],
                         split_rules=split.rules(self.split))
             # The adapter that held the line through a switch is kept as it
             # is, when it is the adapter this connection would have started

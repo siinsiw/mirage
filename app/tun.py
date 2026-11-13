@@ -588,7 +588,7 @@ def carriers_of_a_reconnect():
             if name.lower() in ('python.exe', 'pythonw.exe') \
                     and name.lower() != other:
                 out.append(os.path.join(folder, other))
-    for found in (paths.singbox_exe(), paths.gost_exe()):
+    for found in (paths.singbox_exe(), paths.gost_exe(), paths.xray_exe()):
         if found:
             out.append(os.path.normpath(found))
     return out
@@ -735,7 +735,14 @@ class Tun:
         return os.path.exists(self._path('held'))
 
     def start(self, port, keep=(), watch=None, own=(), carriers=(),
-              split_rules=None, hold=False):
+              split_rules=None, hold=False, config=None):
+        """Bring the adapter up, carrying traffic to the worker on `port`.
+
+        Or, given `config`, with that whole sing-box configuration instead:
+        the Configs section's, whose own outbounds carry the traffic and
+        whose mixed inbound is on `port`. Everything else - the elevation,
+        the watch, the kill switch's hold - is the same either way.
+        """
         exe = paths.singbox_exe()
         if not exe:
             raise RuntimeError('tun-missing: sing-box.exe was not found')
@@ -749,12 +756,21 @@ class Tun:
         # ensure_ascii, so the text is the same bytes whatever PowerShell 5.1
         # makes of the script's encoding - a path with a Persian user name in
         # it comes out the other side unchanged.
-        config = json.dumps(build_config(port, keep, own, carriers,
-                                         self._path('sing-box.log'),
-                                         split_rules=split_rules,
-                                         line_resolver=line_dns()
-                                         if split_rules else None),
-                            ensure_ascii=True)
+        if config is not None:
+            built = dict(config)
+            built['log'] = dict(built.get('log') or {},
+                                output=self._path('sing-box.log'))
+            fingerprint = 'configs:' + hashlib.sha256(json.dumps(
+                built, sort_keys=True).encode('utf-8')).hexdigest()
+        else:
+            built = build_config(port, keep, own, carriers,
+                                 self._path('sing-box.log'),
+                                 split_rules=split_rules,
+                                 line_resolver=line_dns()
+                                 if split_rules else None)
+            fingerprint = self.fingerprint(port, own=own, carriers=carriers,
+                                           split_rules=split_rules)
+        config = json.dumps(built, ensure_ascii=True)
 
         wrapper = KILL_PS + WRAPPER.format(
             exe=_ps_string(exe),
@@ -777,9 +793,7 @@ class Tun:
 
         with open(self._path('state.json'), 'w', encoding='utf-8') as f:
             json.dump({'port': port, 'watch': watch, 'since': time.time(),
-                       'fingerprint': self.fingerprint(
-                           port, own=own, carriers=carriers,
-                           split_rules=split_rules)}, f)
+                       'fingerprint': fingerprint}, f)
 
         # Hash-checked by the elevated side before it runs (sweep.elevated).
         script, script_path = elevated(wrapper, self.dir, 'run')

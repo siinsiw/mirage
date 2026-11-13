@@ -76,7 +76,17 @@ def gost_exe():
 def singbox_exe():
     """What brings up the adapter in tunnel mode, or None. Looked for where
     gost is, because it ships the same way: beside the exe, or in tunnel/."""
-    name = 'sing-box.exe' if os.name == 'nt' else 'sing-box'
+    return _shipped('sing-box')
+
+
+def xray_exe():
+    """What carries the configs sing-box cannot (xhttp and a few more), or
+    None. Shipped the same way as sing-box."""
+    return _shipped('xray')
+
+
+def _shipped(stem):
+    name = stem + '.exe' if os.name == 'nt' else stem
     for folder in (DATA_DIR, TUNNEL_DIR):
         path = os.path.join(folder, name)
         if os.path.isfile(path):

@@ -67,3 +67,7 @@ tunnel/gost
 tunnel/sing-box.exe
 tunnel/sing-box
 tunnel/sing-box-LICENSE.txt
+# And Xray, which carries the configs sing-box cannot (xhttp).
+tunnel/xray.exe
+tunnel/xray
+tunnel/xray-LICENSE.txt
