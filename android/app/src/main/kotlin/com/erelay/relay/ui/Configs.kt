@@ -251,7 +251,7 @@ fun ConfigsSheet(
     }
 }
 
-private fun bytes(n: Long): String {
+private fun cfgBytes(n: Long): String {
     var v = n.toDouble()
     val units = listOf("B", "KB", "MB", "GB", "TB")
     var i = 0
@@ -259,7 +259,7 @@ private fun bytes(n: Long): String {
     return if (v >= 10 || i == 0) "${v.toLong()} ${units[i]}" else String.format(java.util.Locale.US, "%.1f %s", v, units[i])
 }
 
-private fun ago(ts: Long): String {
+private fun cfgAgo(ts: Long): String {
     if (ts <= 0) return ""
     val s = System.currentTimeMillis() / 1000 - ts
     return when {
@@ -275,19 +275,19 @@ private fun GroupHead(g: CfgGroup, count: Int, fetching: Boolean,
                       onTest: () -> Unit, onUpdate: () -> Unit, onRemove: () -> Unit) {
     val title = if (g.kind == "manual") "Added by hand" else g.name.ifEmpty { g.host.ifEmpty { "Subscription" } }
     val bits = mutableListOf("$count")
-    if (g.total > 0) bits += "${bytes(g.upload + g.download)} of ${bytes(g.total)}"
+    if (g.total > 0) bits += "${cfgBytes(g.upload + g.download)} of ${cfgBytes(g.total)}"
     if (g.expire > 0) {
         val days = (g.expire - System.currentTimeMillis() / 1000) / 86400
         bits += if (days >= 0) "$days days left" else "expired"
     }
-    if (fetching) bits += "fetching…" else if (g.updated > 0) bits += "updated ${ago(g.updated)}"
+    if (fetching) bits += "fetching…" else if (g.updated > 0) bits += "updated ${cfgAgo(g.updated)}"
     Row(Modifier.fillMaxWidth().padding(top = Space.x6, bottom = Space.x1),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(start = Space.x1)) {
             Text(title.uppercase(), style = Type.caption.copy(color = Tone.text2, fontSize = 11.sp,
                 letterSpacing = 0.08.sp).script(title), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(bits.joinToString(" · "), style = Type.caption.copy(color = Tone.text3, fontSize = 11.5.sp))
-            if (g.plainHttp) Chip("http: the line can read and change this list", Tone.fail)
+            if (g.plainHttp) CfgChip("http: the line can read and change this list", Tone.fail)
             if (g.error.isNotEmpty()) Text(g.error, style = Type.caption.copy(color = Tone.fail, fontSize = 11.5.sp))
         }
         if (count > 0) IconButton(Glyph.gauge, "Test these", onTest, size = 36.dp, quiet = true)
@@ -299,7 +299,7 @@ private fun GroupHead(g: CfgGroup, count: Int, fetching: Boolean,
 }
 
 @Composable
-private fun Chip(text: String, color: Color) {
+private fun CfgChip(text: String, color: Color) {
     Text(text, style = Type.caption.copy(color = color, fontSize = 10.5.sp),
         modifier = Modifier.padding(top = 3.dp)
             .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(Shape.pill))
@@ -333,9 +333,9 @@ private fun ConfigRow(c: CfgItem, current: Boolean, open: Boolean, onTap: () -> 
             // chip beside a seller's long name leaves room for neither.
             for (w in c.warnings) {
                 if (w == "insecure" && c.allowInsecure) continue
-                Chip(WARN[w] ?: w, if (w == "plain") Tone.fail else if (w == "insecure") Tone.work else Tone.text2)
+                CfgChip(WARN[w] ?: w, if (w == "plain") Tone.fail else if (w == "insecure") Tone.work else Tone.text2)
             }
-            if (c.allowInsecure) Chip("Certificate not checked", Tone.work)
+            if (c.allowInsecure) CfgChip("Certificate not checked", Tone.work)
         }
         val (ms, color) = when {
             c.ms > 0 -> "${c.ms} ms" to when {
