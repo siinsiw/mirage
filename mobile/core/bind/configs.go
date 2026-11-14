@@ -170,7 +170,7 @@ func CancelConfigsTest() {
 // alone: the caller closes it (ParcelFileDescriptor.adoptFd(fd).close()), as
 // it does for the other two ways - closing it on both sides is what
 // Android's fdsan ends the process for.
-func (c *Client) StartConfigsTunnel(fd int, mtu int, groupJSON, selected string, auto, fragment bool) error {
+func (c *Client) StartConfigsTunnel(fd int, mtu int, groupJSON, selected string, fastest, fragment bool) error {
 	set, err := configsFrom(groupJSON)
 	if err != nil {
 		return err
@@ -180,7 +180,7 @@ func (c *Client) StartConfigsTunnel(fd int, mtu int, groupJSON, selected string,
 	if c.tunnel != nil {
 		return errTunnelUp
 	}
-	w, err := core.NewConfigsWay(set, selected, auto, fragment)
+	w, err := core.NewConfigsWay(set, selected, fastest, fragment)
 	if err != nil {
 		return err
 	}
