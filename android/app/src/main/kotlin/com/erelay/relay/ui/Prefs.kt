@@ -66,7 +66,7 @@ private enum class Screen(val title: String, val note: String, val head: String 
     MENU("Settings", ""),
     ACCOUNTS("Accounts", "Providers, sign-ins and servers"),
     CONNECTION("Connection", "Your own tunnel, and the local network"),
-    SPLIT("Split tunnel", "Which apps and sites go around Relay"),
+    SPLIT("Split tunnel", "Which apps and sites go around Mirage"),
     LAN("Share this connection", "Let devices on the same Wi-Fi use it", head = "Share this connection"),
     SHARE("Configs for other devices", "Links and QR codes", head = "Other devices"),
     SERVERS("Servers", "Finding, pinning and timing them"),
@@ -165,12 +165,12 @@ private fun Identity(signedIn: Int, servers: Int, countries: Int) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(52.dp).clip(CircleShape).background(Tone.surface2), contentAlignment = Alignment.Center) {
-            RelayMark(Modifier.size(28.dp))
+            MirageEye(Modifier.size(28.dp))
         }
         Spacer(Modifier.width(Space.x4))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Relay", style = Type.title.copy(fontSize = 20.sp, lineHeight = 26.sp))
+                Text("Mirage", style = Type.title.copy(fontSize = 20.sp, lineHeight = 26.sp))
                 Spacer(Modifier.width(Space.x2))
                 if (mode == Mode.ON) LiveDot(size = 7.dp) else
                     Box(Modifier.size(7.dp).clip(CircleShape).background(Tone.stateOf(mode)))
@@ -696,14 +696,14 @@ private fun LanShare(core: RelayCore) {
     }
 
     Section("Share this connection",
-        note = "Phones and laptops on the same Wi-Fi or hotspot can use Relay's connection through " +
-            "this phone. Only devices on the same network can reach it, only while Relay is connected, " +
+        note = "Phones and laptops on the same Wi-Fi or hotspot can use Mirage's connection through " +
+            "this phone. Only devices on the same network can reach it, only while Mirage is connected, " +
             "and only with the password.") {
         Group {
             SwitchRow("Share on Wi-Fi",
                 when {
                     !on -> "Off"
-                    !up -> "Starts when Relay connects."
+                    !up -> "Starts when Mirage connects."
                     lan.on -> "Sharing now"
                     // The core's own reason, e.g. no Wi-Fi or hotspot address.
                     lan.error.isNotEmpty() -> lan.error.replaceFirstChar { it.uppercase() }
@@ -774,7 +774,7 @@ private fun LanShare(core: RelayCore) {
                     }
                 } else {
                     Column(Modifier.fillMaxWidth().padding(Space.x4)) {
-                        Text(if (!up) "Connect first. The address shows here once Relay is up."
+                        Text(if (!up) "Connect first. The address shows here once Mirage is up."
                              else "No Wi-Fi or hotspot address found. Join a Wi-Fi network or turn on the hotspot.",
                             style = Type.body)
                         Text("Port $shownPort", style = Type.mono, modifier = Modifier.padding(top = Space.x2))
@@ -1061,13 +1061,13 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
         var tileSaid by remember { mutableStateOf("") }
         Section("Quick settings") {
             Group {
-                SettingRow("Add the Relay tile",
+                SettingRow("Add the Mirage tile",
                     desc = "In the panel you pull down from the top: one press connects, another disconnects.",
                     icon = Glyph.bolt, onClick = {
                         val bar = context.getSystemService(android.app.StatusBarManager::class.java)
                         bar?.requestAddTileService(
                             android.content.ComponentName(context, com.erelay.relay.RelayTile::class.java),
-                            "Relay",
+                            "Mirage",
                             android.graphics.drawable.Icon.createWithResource(context, com.erelay.relay.R.drawable.ic_relay),
                             context.mainExecutor,
                         ) { result ->
@@ -1075,7 +1075,7 @@ private fun Look(feel: com.erelay.relay.data.Feel, onFeel: (com.erelay.relay.dat
                                 android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> "Added."
                                 android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> "It is already there."
                                 android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_NOT_ADDED -> ""
-                                else -> "This phone did not offer to add it. Edit the quick-settings panel and drag Relay in."
+                                else -> "This phone did not offer to add it. Edit the quick-settings panel and drag Mirage in."
                             }
                         }
                     })
@@ -1150,7 +1150,7 @@ private fun About(core: RelayCore) {
     var checking by remember { mutableStateOf(false) }
     var newer by remember { mutableStateOf(false) }
 
-    Section("Relay for Android",
+    Section("Mirage for Android",
         help = "Accounts are kept with a key the Android keystore holds; configs, pins and " +
             "test results are plain files in the data folder.") {
         Group {

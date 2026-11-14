@@ -97,9 +97,9 @@ def parse_key(text):
     try:
         body = json.loads(base64.urlsafe_b64decode(raw + '=' * (-len(raw) % 4)))
     except (ValueError, TypeError):
-        raise ValueError('that is not a Relay key - it should start with relay://')
+        raise ValueError('that is not a Mirage key - it should start with relay://')
     if not isinstance(body, dict) or body.get('v') != 1:
-        raise ValueError('that key is from a newer Relay than this one')
+        raise ValueError('that key is from a newer Mirage than this one')
 
     def text_field(name, required=True):
         value = body.get(name, '')
