@@ -57,7 +57,7 @@ def test_version_file():
             os.environ['RELAY_VERSION'] = 'v2.7.3-beta.1'
             text = open(build.write_version_file(), encoding='utf-8').read()
             assert "filevers=(2, 7, 3, 1)" in text
-            assert "StringStruct('ProductName', 'Relay')" in text
+            assert "StringStruct('ProductName', 'Mirage')" in text
             assert "StringStruct('ProductVersion', '2.7.3-beta.1')" in text
             # A release tag names the app: desktop-v1.4.0 is version 1.4.0.
             os.environ['RELAY_VERSION'] = 'desktop-v1.4.0'

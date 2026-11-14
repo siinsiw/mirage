@@ -124,8 +124,8 @@ def test_the_kill_switch_is_a_file_the_script_reads():
     assert w.index('Set-Content -LiteralPath $held') > hold_at
     assert 'Test-Path -LiteralPath $watchf' in w
     # The window going does not end the hold any more - it is only said.
-    assert 'Relay went away while holding traffic' not in w
-    assert 'stays held until Relay opens again' in w
+    assert 'went away while holding traffic' not in w
+    assert 'stays held until Mirage opens again' in w
     gone = w.index('$watch -eq 0 -and $uiGone')
     assert 'break' not in w[gone:w.index('if (-not $up)', gone)]
     # sing-box going by itself, with the hold on, hands the hold to the

@@ -416,7 +416,7 @@ class RelayVpnService : VpnService() {
             // rather than be killed for not having called startForeground.
             if (req != null) {
                 status = "failed: Android did not let the tunnel start from the background - " +
-                    "open Relay and connect"
+                    "open Mirage and connect"
                 sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName))
             }
             wanted = false
@@ -544,7 +544,7 @@ class RelayVpnService : VpnService() {
      */
     private fun buildInterface(): Pair<Builder, CoreSplit> {
         val b = Builder()
-            .setSession("Relay")
+            .setSession("Mirage")
             .addAddress(Relay.tunAddress(), Relay.tunPrefix().toInt())
             .addDnsServer(Relay.tunDNS())
             .setMtu(Relay.tunMTU().toInt())
@@ -1607,7 +1607,7 @@ class RelayVpnService : VpnService() {
             else -> ""
         }
         return when {
-            text.startsWith("connected") -> "Connected to ${place.ifEmpty { "Relay" }}" to
+            text.startsWith("connected") -> "Connected to ${place.ifEmpty { "Mirage" }}" to
                 (if (exitProvider.isNotEmpty()) exitName else exitAddress)
             text.startsWith("reconnecting") -> "Reconnecting…" to
                 text.removePrefix("reconnecting: ").replaceFirstChar { it.uppercase() }
@@ -1617,7 +1617,7 @@ class RelayVpnService : VpnService() {
             text.startsWith("racing") -> "Connecting…" to text.replaceFirstChar { it.uppercase() }
             text.startsWith("opening") || text.startsWith("finding") ||
                 text.startsWith("checking") -> "Connecting…" to text.replaceFirstChar { it.uppercase() }
-            else -> "Relay" to text.replaceFirstChar { it.uppercase() }
+            else -> "Mirage" to text.replaceFirstChar { it.uppercase() }
         }
     }
 
