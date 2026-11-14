@@ -791,6 +791,28 @@ class RelayCore(private val app: Application) {
             .setAction(RelayVpnService.ACTION_STOP))
     }
 
+    // -- the Configs section (data/Configs.kt) ---------------------------------------
+
+    /** Servers bought or given from anywhere: a section of its own. */
+    val configs = ConfigsModel(app)
+
+    /**
+     * Start the service through the picked config. The same one VpnService,
+     * so whatever was up - a provider exit, the user's own server - goes
+     * first, as it does between those two.
+     */
+    suspend fun connectConfigs(): Said = withContext(io) {
+        configs.ready().let { if (!it.ok) return@withContext it }
+        val intent = Intent(app, RelayVpnService::class.java)
+            .setAction(RelayVpnService.ACTION_START)
+            .putExtra(RelayVpnService.EXTRA_PROVIDER, Configs.PROVIDER)
+        connecting = true
+        _splitPending.value = false
+        _conn.update { it.copy(mode = Mode.BUSY, failure = null, asked = 0, total = 0) }
+        ContextCompat.startForegroundService(app, intent)
+        Said.OK
+    }
+
     // -- reach tests and dead exits ---------------------------------------------------
 
     /**

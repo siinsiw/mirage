@@ -10,6 +10,7 @@
 -keep class * implements relay.Namer { *; }
 -keep class * implements relay.ReachProgress { *; }
 -keep class * implements relay.PinProgress { *; }
+-keep class * implements relay.ConfigsProgress { *; }
 
 # Stack traces that still say where they came from.
 -keepattributes SourceFile,LineNumberTable

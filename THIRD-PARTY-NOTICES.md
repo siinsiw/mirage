@@ -7,12 +7,13 @@ named here is shipped beside it.
 
 ## The Android app is distributed under GPL-3.0-or-later
 
-The Android app links two libraries into its binary through gomobile:
+The Android app links these GPL libraries into its binary through gomobile:
 
 | Library | Licence |
 | --- | --- |
 | [sagernet/sing](https://github.com/SagerNet/sing) | GPL-3.0-or-later |
 | [sagernet/sing-tun](https://github.com/SagerNet/sing-tun) | GPL-3.0-or-later |
+| [sagernet/sing-box](https://github.com/SagerNet/sing-box) - the Configs section's outbounds and groups only (`mobile/core/configs_box.go`), with the sagernet modules it brings (sing-vmess, sing-shadowsocks, sing-quic, quic-go fork, uTLS fork) | GPL-3.0-or-later; its own dependencies under their licences, as pinned in `go.sum` |
 
 A program that includes GPL-3.0 code is distributed under the GPL as a whole.
 So the Android APK, as released, is under the

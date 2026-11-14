@@ -98,6 +98,30 @@ android {
         compose = true
     }
 
+    // One APK per architecture, and a universal one beside them. The Go core
+    // is a native library per architecture - 20.9 MB on arm64 once the
+    // Configs section's sing-box is in it (measured 2026-11-14) - and the
+    // universal APK carries all four: over 100 MB to download over a
+    // filtered line, where most phones need only the arm64-v8a one.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            isUniversalApk = true
+        }
+    }
+
+    // Compressed inside the APK and unpacked when it installs: the core
+    // compresses to about 38 % of its size, and the download is what the
+    // line pays for. Stored uncompressed (the default) the APK is bigger by
+    // the difference on every download.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     sourceSets["main"].assets.directories.add(generatedAssets.get().asFile.path)
 }
 

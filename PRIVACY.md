@@ -177,9 +177,12 @@ through it.
 - A latency test fetches the Cloudflare trace page above through each config
   being tested, from the user's own line, and only when the user asks.
 - The links, the subscription addresses and the test results are kept only
-  on the device, sealed with Windows' DPAPI for the user's account, and are
-  removed with the rest by erasing the app's data. Logs never contain a link
-  or a password.
+  on the device - on Windows sealed with DPAPI for the user's account, on
+  Android in the app's keystore-encrypted store - and are removed with the
+  rest by erasing the app's data. Logs never contain a link or a password.
+- On Android a latency test asks `1.1.1.1/cdn-cgi/trace` (the page the app
+  already uses to see where traffic comes out) through each config, and the
+  servers' own names are looked up over DNS-over-HTTPS at `1.1.1.1`.
 - A link that asks for certificate checks to be skipped does not get its way:
   the check stays on until the user turns it off for that one server, after
   a warning. Links that carry traffic without encryption are marked, and

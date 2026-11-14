@@ -132,6 +132,8 @@ fun Home(
     onAct: () -> Unit,
     onCopy: (String) -> Unit,
     onReconnect: () -> Unit = {},
+    /** The Configs section: servers bought or given from anywhere. */
+    onConfigs: () -> Unit = {},
 ) {
     // Where the scene's own box and the band are on screen: the map puts its
     // country in the middle of the band, not in the middle of the screen.
@@ -174,7 +176,7 @@ fun Home(
                     .padding(horizontal = gutter),
             ) {
                 FillColumn(screen, flex = 2, least = 132.dp) {
-                    TopBar(s, onLog, onDrop, onSettings, onWay)
+                    TopBar(s, onLog, onDrop, onSettings, onWay, onConfigs)
                     Readout(s, onAct, onCopy)
                     Band(s, Modifier.onGloballyPositioned { band = it.boundsInRoot() })
                     Foot(s, onPick, onAct, onWay)
@@ -225,7 +227,8 @@ private fun waysOf(s: HomeState): List<Way> {
 }
 
 @Composable
-private fun TopBar(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettings: () -> Unit, onWay: (Way) -> Unit) {
+private fun TopBar(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettings: () -> Unit,
+                   onWay: (Way) -> Unit, onConfigs: () -> Unit) {
     val ways = waysOf(s)
     LaunchedEffect(ways) {
         if (ways.isNotEmpty() && s.way !in ways) onWay(ways.first())
@@ -233,6 +236,7 @@ private fun TopBar(s: HomeState, onLog: () -> Unit, onDrop: () -> Unit, onSettin
     Row(Modifier.fillMaxWidth().padding(top = Space.x2), verticalAlignment = Alignment.CenterVertically) {
         IconButton(Glyph.menu, "Settings", onSettings, tint = com.erelay.relay.ui.theme.Mirage.bright)
         Spacer(Modifier.weight(1f))
+        IconButton(Glyph.layers, "Configs", onConfigs, tint = com.erelay.relay.ui.theme.Mirage.bright)
         Box {
             IconButton(Glyph.activity, "What is using the connection", onLog, tint = com.erelay.relay.ui.theme.Mirage.bright)
             if (s.traffic.live && s.traffic.downRate + s.traffic.upRate > 512) {

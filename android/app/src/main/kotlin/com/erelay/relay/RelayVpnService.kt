@@ -18,6 +18,7 @@ import android.os.SystemClock
 import com.erelay.relay.data.SplitMode
 import java.net.Inet4Address
 import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -344,6 +345,21 @@ class RelayVpnService : VpnService() {
             status = text
             ctx.sendBroadcast(Intent(ACTION_STATUS).setPackage(ctx.packageName))
         }
+
+        /**
+         * The Configs section's live switch: new connections go through
+         * another config of the group that is up, with nothing taken down.
+         * False when no group is up or auto is choosing - then it is a
+         * reconnect.
+         */
+        fun selectConfig(id: String, name: String): Boolean {
+            val ok = try { live?.selectConfig(id) == true } catch (e: Exception) { false }
+            if (ok) exitName = "$name (config)"
+            return ok
+        }
+
+        /** The config carrying now, by id (auto's pick included), or "". */
+        fun configNow(): String = try { live?.configNow().orEmpty() } catch (e: Exception) { "" }
     }
 
     override fun onCreate() {
@@ -469,7 +485,11 @@ class RelayVpnService : VpnService() {
                 // service out of the foreground just now.
                 enterForeground("finding an exit")
             }
-            if (req.provider == "surfshark") connect(a, req) else connectServer(a, req)
+            when (req.provider) {
+                "surfshark" -> connect(a, req)
+                com.erelay.relay.data.Configs.PROVIDER -> connectConfigs(a)
+                else -> connectServer(a, req)
+            }
         }
         return START_STICKY
     }
@@ -1016,6 +1036,88 @@ class RelayVpnService : VpnService() {
             }
         } catch (e: Exception) {
             Log.e(TAG, "server connect failed", e)
+            fail(a, e.message ?: e.toString())
+        }
+    }
+
+    /**
+     * Through a config from the Configs section (data/Configs.kt): servers
+     * bought or given from anywhere, carried by the core's sing-box Way. The
+     * same interface, split tunnelling and watchdog as the user's own server;
+     * only the Way under the stack differs, and UDP goes through it too.
+     */
+    private fun connectConfigs(a: Attempt) {
+        try {
+            Keys.migrate(applicationContext)
+            val pick = com.erelay.relay.data.Configs.pick(applicationContext)
+            if (pick == null) {
+                fail(a, "no config picked - open Configs and pick one")
+                return
+            }
+            val c: Client = synchronized(lifecycle) {
+                if (!a.current) return
+                hooks()
+                Relay.newClient("", "").also { client = it; live = it }
+            }
+
+            // One real request through the config before the interface goes
+            // up, as for the user's own server: a config that carries nothing
+            // would otherwise read as connected with every app's traffic
+            // routed into it. With auto there is no one config to ask; the
+            // group's own test picks a working one.
+            if (!pick.auto) {
+                say("checking ${pick.name} answers", a)
+                val one = JSONArray(pick.groupJson).let { all ->
+                    JSONArray().also { out ->
+                        for (i in 0 until all.length()) {
+                            val o = all.optJSONObject(i) ?: continue
+                            if (o.optString("id") == pick.selected) out.put(o)
+                        }
+                    }
+                }
+                val r = JSONObject(Relay.testConfigsJSON(one.toString(), pick.fragment, 1L, 10_000L, null))
+                if (!a.current) return
+                val first = r.optJSONArray("results")?.optJSONObject(0)
+                if (first != null && first.optInt("ms") <= 0) {
+                    val why = first.optString("said").ifEmpty { first.optString("error") }
+                    fail(a, "${pick.name} did not carry a request: ${why.take(140)}")
+                    return
+                }
+            }
+
+            say("opening the tunnel through ${pick.name}", a)
+            synchronized(lifecycle) {
+                if (!a.current) return
+                val (builder, split) = buildInterface()
+                if (!applySplit(a, c, split)) return
+
+                val pfd = builder.establish()
+                if (pfd == null) {
+                    fail(a, "Android refused to open the interface")
+                    return
+                }
+                val fd = pfd.detachFd()
+                try {
+                    c.startConfigsTunnel(fd.toLong(), Relay.tunMTU(), pick.groupJson,
+                        pick.selected, pick.auto, pick.fragment)
+                } catch (e: Exception) {
+                    ParcelFileDescriptor.adoptFd(fd).close()
+                    throw e
+                }
+                tunFd = fd
+
+                exitAddress = pick.host
+                exitFile = ""
+                exitProvider = ""
+                exitName = if (pick.auto) "fastest config" else "${pick.name} (config)"
+                since = System.currentTimeMillis() / 1000
+                connectedText = "connected through $exitName"
+                say(connectedText)
+                shareOnLan(c)
+                watch(c) { redialServer(c) }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "config connect failed", e)
             fail(a, e.message ?: e.toString())
         }
     }

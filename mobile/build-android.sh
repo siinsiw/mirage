@@ -84,7 +84,7 @@ echo "  ndk      $(basename "$ANDROID_NDK_HOME")"
 echo
 
 cd "$HERE/core"
-go vet ./...
+go vet -tags with_gvisor,with_quic,with_utls ./...
 
 # with_gvisor is not optional, and leaving it off fails late rather than
 # early: everything compiles, the app installs, the race finds an exit in a
@@ -93,7 +93,11 @@ go vet ./...
 # two of userspace TCP/IP - which is exactly what an unprivileged Android app
 # needs, because the system stack wants a raw socket per connection and an
 # app does not get those.
-gomobile bind -tags with_gvisor -target=android -androidapi 21 \
+#
+# with_quic and with_utls are the Configs section's (core/configs_box.go):
+# without the first sing-box has no Hysteria2 or TUIC, and without the second
+# no Reality and no browser fingerprints - both fail at connect, not here.
+gomobile bind -tags with_gvisor,with_quic,with_utls -target=android -androidapi 21 \
     -o "$HERE/relay.aar" ./bind
 
 # Where Gradle reads it: android/app/libs, in the native app at the repo

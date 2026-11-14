@@ -29,7 +29,7 @@ import kotlinx.coroutines.launch
 enum class Gate { LOADING, INTRO, WELCOME, SETUP, READY }
 
 /** Which sheet is over the main screen, if any. */
-enum class Over { NONE, PICKER, PREFS, LOG, DROP }
+enum class Over { NONE, PICKER, PREFS, LOG, DROP, CONFIGS }
 
 /** A sheet that can open over another one. */
 enum class Over2 { NONE, SOURCES, ADD_ACCOUNT, SPLIT_APPS, SHARE_PLACES }
@@ -69,6 +69,7 @@ fun Root(core: RelayCore) {
     val pinPlan by core.pinPlan.collectAsStateWithLifecycle()
     val pinRun by core.pinRun.collectAsStateWithLifecycle()
     val feel by core.feel.collectAsStateWithLifecycle()
+    val configsState by core.configs.state.collectAsStateWithLifecycle()
     androidx.compose.runtime.SideEffect {
         com.erelay.relay.ui.theme.Tone.palette = com.erelay.relay.ui.theme.Palette.of(feel.theme)
         // The one accent the app has is the connection state.
@@ -84,6 +85,8 @@ fun Root(core: RelayCore) {
     var addFor by rememberSaveable { mutableStateOf("surfshark") }
     var said by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     var pendingCode by rememberSaveable { mutableStateOf("auto") }
+    // The connect waiting on consent is the Configs section's, not a pick's.
+    var pendingConfigs by rememberSaveable { mutableStateOf(false) }
     // How long the last tunnel carried, for the line after it closes.
     var lastSince by remember { mutableStateOf(0L) }
     var closedMinutes by remember { mutableStateOf<Int?>(null) }
@@ -135,7 +138,7 @@ fun Root(core: RelayCore) {
     val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         if (r.resultCode == Activity.RESULT_OK) {
             scope.launch {
-                val out = core.connect(pendingCode)
+                val out = if (pendingConfigs) core.connectConfigs() else core.connect(pendingCode)
                 if (!out.ok) said = out.text to true
             }
         } else {
@@ -149,7 +152,7 @@ fun Root(core: RelayCore) {
             consent.launch(ask)
         } else {
             scope.launch {
-                val out = core.connect(code)
+                val out = if (pendingConfigs) core.connectConfigs() else core.connect(code)
                 if (!out.ok) said = out.text to true
             }
         }
@@ -160,8 +163,26 @@ fun Root(core: RelayCore) {
         consentThenConnect(pendingCode)
     }
 
+    /** Through the config the Configs section picked: consent first, as for any connect. */
+    fun connectConfigs() {
+        pendingConfigs = true
+        said = null
+        val ready = core.configs.ready()
+        if (!ready.ok) {
+            Toasts.show(ready.text, long = true)
+            return
+        }
+        if (core.shouldAskNotifications()) {
+            core.askedNotifications()
+            notifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        consentThenConnect(pendingCode)
+    }
+
     fun connect(code: String) {
         pendingCode = code
+        pendingConfigs = false
         said = null
         scope.launch {
             val ready = core.ready()
@@ -203,7 +224,9 @@ fun Root(core: RelayCore) {
     // Usable means something to connect with: an account with servers to race,
     // or a server of its own. Until then the window is the way to get there,
     // not a Connect button that cannot work.
-    val usable = (hasCredentials && serverCount > 0) || tunnel.ready
+    // Or configs from anywhere (the Configs section): someone who only bought
+    // a subscription has something to connect with too.
+    val usable = (hasCredentials && serverCount > 0) || tunnel.ready || configsState.items.isNotEmpty()
     val gate = when {
         !loaded -> Gate.LOADING
         usable -> Gate.READY
@@ -233,6 +256,7 @@ fun Root(core: RelayCore) {
                     prefsStart = "connection"
                     over = Over.PREFS
                 },
+                onConfigs = { over = Over.CONFIGS },
             )
             Gate.SETUP -> SetupScreen(
                 setup = setup, run = pinRun,
@@ -256,12 +280,16 @@ fun Root(core: RelayCore) {
             onLog = { over = Over.LOG },
             onDrop = { over = Over.DROP },
             onSettings = { prefsStart = "menu"; over = Over.PREFS },
+            onConfigs = { over = Over.CONFIGS },
             onWay = { core.setWay(it) },
             onPick = { over = Over.PICKER },
             onAct = {
                 when (conn.mode) {
                     Mode.BUSY, Mode.ON -> core.disconnect()
-                    else -> connect(if (way == Way.SERVER) "auto" else picked)
+                    // Configs and nothing else: the one way there is.
+                    else -> if (!(hasCredentials && serverCount > 0) && !tunnel.ready &&
+                            configsState.items.isNotEmpty()) connectConfigs()
+                        else connect(if (way == Way.SERVER) "auto" else picked)
                 }
             },
             onCopy = ::copy,
@@ -347,6 +375,18 @@ fun Root(core: RelayCore) {
 
         LogSheet(over == Over.LOG, live = conn.mode == Mode.ON, hosts = { core.hosts() },
             onClose = { over = Over.NONE })
+
+        ConfigsSheet(
+            open = over == Over.CONFIGS, model = core.configs, state = configsState,
+            connected = conn.mode == Mode.ON,
+            onConnect = { id ->
+                over = Over.NONE
+                core.configs.select(id)
+                connectConfigs()
+            },
+            onCopy = { text -> core.copy(text, sensitive = true); Toasts.show("Link copied") },
+            onClose = { over = Over.NONE },
+        )
 
         DropSheet(over == Over.DROP, dead,
             drop = { core.dropExits(it) }, restore = { core.restoreDropped(it) },

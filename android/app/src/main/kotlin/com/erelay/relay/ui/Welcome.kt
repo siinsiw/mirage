@@ -57,6 +57,8 @@ fun Welcome(
     paused: Boolean,
     onProvider: (String) -> Unit,
     onServer: () -> Unit,
+    /** The Configs section: links or a subscription bought from anywhere. */
+    onConfigs: () -> Unit = {},
 ) {
     val reduced = rememberReducedMotion()
     val moving = !reduced && !paused
@@ -131,6 +133,13 @@ fun Welcome(
                 Spacer(Modifier.height(8.dp))
                 Rise(670) {
                     StoneRow("My own server", "Its domain and password, behind Cloudflare", Glyph.server, onServer)
+                }
+                Spacer(Modifier.height(18.dp))
+                Rise(750) { MiLabel("Configs from anywhere") }
+                Spacer(Modifier.height(8.dp))
+                Rise(810) {
+                    StoneRow("Links or a subscription", "vless, vmess, trojan, ss, hysteria2 - pasted or fetched",
+                        Glyph.layers, onConfigs)
                 }
             }
             Spacer(Modifier.height(24.dp))
