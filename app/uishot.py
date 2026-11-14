@@ -65,7 +65,7 @@ def find_window(title, pid=None):
     return found[0] if found else 0
 
 
-def shot(name, out, title='Relay', pid=None):
+def shot(name, out, title='Mirage', pid=None):
     """Write out/<name>.png. Returns what happened, as a line for the log."""
     try:
         from PIL import Image

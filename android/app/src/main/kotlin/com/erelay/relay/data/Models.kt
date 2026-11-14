@@ -269,7 +269,7 @@ data class ExportStep(
 /** One slot's links, and what stands behind them. */
 data class ExportSlotLinks(
     val k: Int,
-    /** What the other device lists it as: "Relay · Germany". */
+    /** What the other device lists it as: "Mirage · Germany". */
     val name: String,
     /** The place it leaves from, as the screen says it; empty for the server itself. */
     val place: String,

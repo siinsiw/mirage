@@ -52,7 +52,8 @@ PUBLIC_RELEASE = '--public-release' in sys.argv
 BUILD_ROOT = os.path.join(ROOT, 'release-build') if PUBLIC_RELEASE else ROOT
 DIST = os.path.join(BUILD_ROOT, 'dist')
 WORK = os.path.join(BUILD_ROOT, 'build')
-NAME = 'Relay'
+NAME = 'Relay'                # the exe's file name, kept so installs carry on
+DISPLAY_NAME = 'Mirage'       # what people see: shortcut, version resource
 STARTERS = os.path.join(HERE, 'public-starters.json')
 
 # Modules in app/ that are for development only and are kept out of the exe
@@ -394,12 +395,12 @@ def write_version_file():
   ffi=FixedFileInfo(filevers={fixed!r}, prodvers={fixed!r}, mask=0x3f,
     flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
   kids=[StringFileInfo([StringTable('040904B0', [
-    StringStruct('CompanyName', 'Relay contributors'),
-    StringStruct('FileDescription', 'Relay desktop proxy'),
+    StringStruct('CompanyName', 'Mirage contributors'),
+    StringStruct('FileDescription', 'Mirage'),
     StringStruct('FileVersion', '{version}'),
     StringStruct('InternalName', 'Relay'),
     StringStruct('OriginalFilename', 'Relay.exe'),
-    StringStruct('ProductName', 'Relay'),
+    StringStruct('ProductName', 'Mirage'),
     StringStruct('ProductVersion', '{version}')])]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])])
 """
@@ -746,9 +747,10 @@ def main():
         audit_public_output(out)
         link = None
     else:
+        # Named for what the app is called; the exe keeps its file name.
         link = make_shortcut(
             exe, os.path.join(os.path.expanduser('~'), 'Desktop'),
-            NAME, shortcut_icon)
+            DISPLAY_NAME, shortcut_icon)
 
     print()
     print('done.')

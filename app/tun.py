@@ -509,7 +509,7 @@ while (-not $box.HasExited) {{
         }}
     }}
     if ($watch -eq 0 -and $uiGone -and -not $saidGone) {{
-        Set-Content -LiteralPath $held -Value 'Relay closed while holding traffic; it stays held until Relay opens again' -Encoding utf8
+        Set-Content -LiteralPath $held -Value 'Mirage closed while holding traffic; it stays held until Mirage opens again' -Encoding utf8
         $saidGone = $true
     }}
     if (-not $up) {{
@@ -546,7 +546,7 @@ if ($box.HasExited) {{
             if ($fw) {{
                 $why += "; $fw"
             }} else {{
-                $why += '; traffic is held by Windows Firewall until Relay reconnects or is told to disconnect'
+                $why += '; traffic is held by Windows Firewall until Mirage reconnects or is told to disconnect'
             }}
         }}
         Set-Content -LiteralPath $failed -Value $why -Encoding utf8
@@ -615,7 +615,7 @@ def explain(error):
     kind, _, detail = text.partition(':')
     detail = detail.strip()
     if kind == 'tun-missing':
-        return ('sing-box.exe is not beside Relay, so there is no adapter to '
+        return ('sing-box.exe is not beside Mirage, so there is no adapter to '
                 'bring up. Use the proxy setting instead.')
     if kind == 'tun-refused':
         return ('Windows was not given administrator approval, so the adapter '
