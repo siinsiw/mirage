@@ -359,6 +359,41 @@ class Runner:
         """host:port to fetch through while up, else None."""
         return f'127.0.0.1:{self.port}' if self.alive() else None
 
+    # -- settings changed while up --------------------------------------------
+
+    def set_kill_switch(self, on):
+        """The kill switch flipped while a config's adapter is up: its hold
+        follows, as the provider adapter's does (main.setKillSwitch only
+        knows the provider's port)."""
+        try:
+            if self.port and self.engine.tun.engaged_for(self.port):
+                self.engine.tun.set_hold(bool(on))
+                return True
+        except Exception:
+            pass
+        return False
+
+    def reroute(self):
+        """The system-proxy switch or proxy-versus-adapter changed while a
+        config is up. True when applied in place (the proxy setting put on
+        or taken off), 'reconnect' when it is a move between the proxy
+        setting and the adapter and the programs have to start again, False
+        when nothing is up."""
+        with self.lock:
+            if not self.alive():
+                return False
+            want = ('tun' if self.engine.set_system_proxy
+                    and self.engine.route_with == 'tun' else 'proxy')
+            if want != self.mode:
+                return 'reconnect'
+            if self.mode == 'proxy':
+                if self.engine.set_system_proxy:
+                    if not self.sysproxy.engaged_for(self.port):
+                        self.sysproxy.engage('127.0.0.1', self.port)
+                elif self.sysproxy.engaged_for(self.port):
+                    self.sysproxy.restore()
+            return True
+
     # -- down ---------------------------------------------------------------
 
     def disconnect(self, quiet=False, hold=False):
@@ -386,13 +421,13 @@ class Runner:
                     self.engine.tun.release_firewall()
             except Exception:
                 pass
-        elif self.mode == 'tun' and self.port and not release:
-            # Holding through a switch: the adapter goes with its sing-box,
-            # and the firewall hold (kill switch) keeps traffic in.
-            try:
-                self.engine.tun.stop()
-            except Exception:
-                pass
+        # Holding (a switch with the kill switch on): nothing is put back. In
+        # proxy mode Windows stays pointed at the port while its program
+        # goes, so what is in flight fails rather than leaving. In tun mode
+        # the adapter is left up: a stop that was asked for raises no
+        # firewall hold, so stopping it here would put every program on the
+        # bare line until the next one came up. The next tun.Tun.start
+        # replaces it, as the provider side's own switches do.
         procs.stop(self.box)
         procs.stop(self.xray)
         self.box = self.xray = None

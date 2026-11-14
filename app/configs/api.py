@@ -281,10 +281,15 @@ class Section:
 
         def work():
             try:
-                # One connection at a time: the provider side goes first.
+                # One connection at a time: the provider side goes first -
+                # held, with the kill switch on, the way a switch between two
+                # provider exits is: Windows stays pointed at the worker that
+                # is going (or its adapter stays up) until this connection
+                # takes over, so nothing in between leaves on the bare line.
                 try:
                     if owner._engine.running() or owner._engine.engaged():
-                        owner._engine.disconnect(quiet=True)
+                        owner._engine.disconnect(
+                            quiet=True, hold=owner._engine.holding())
                 except Exception:
                     pass
                 status = self.runner.connect(
@@ -298,9 +303,11 @@ class Section:
             except Exception as e:
                 self._log(f'connect {cid}: ' + traceback.format_exc())
                 kind = str(e).split(':')[0] if str(e) else type(e).__name__
+                # Held by either side: this one's port, or the provider's,
+                # left pointed at when the handoff above held it.
                 blocked = False
                 try:
-                    blocked = self.runner.blocked()
+                    blocked = self.runner.blocked() or owner._engine.blocked()
                 except Exception:
                     pass
                 owner._holding = blocked
@@ -345,6 +352,37 @@ class Section:
         threading.Thread(target=work, daemon=True).start()
 
     # -- for main.py -----------------------------------------------------
+
+    def kill_switch_changed(self, on):
+        """main.setKillSwitch, for a config connection: the adapter's hold
+        follows the switch, and turned off while holding, the hold goes -
+        that is what turning it off means. True when something was let go."""
+        r = self.runner
+        r.set_kill_switch(on)
+        if on or r.alive() or not r.port:
+            return False
+        if r.engaged() or self.owner._engine.tun.held_by_firewall():
+            r.disconnect(quiet=True)
+            self._reconnect = None
+            return True
+        return False
+
+    def reroute(self):
+        """main.setSystemProxy / setRouteWith, for a config connection:
+        applied in place where it can be, otherwise the same config is
+        connected again - a switch that says one thing while the machine
+        does another is the alternative."""
+        r = self.runner
+        if not r.active():
+            return None
+        out = r.reroute()
+        if out == 'reconnect':
+            cid = r.current if r.current and r.current != 'auto' else None
+            try:
+                self.do_connect({'id': cid, 'auto': r.auto})
+            except ValueError as e:
+                self._log(f'reroute: {e}')
+        return out
 
     def take_reconnect(self):
         """The config to bring back when the home's Connect is pressed while

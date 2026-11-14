@@ -1085,6 +1085,14 @@ class Api:
             except Exception:
                 pass
             self._holding = False
+        # A config connection's adapter is on its own port: its hold is set,
+        # and let go of, by the Configs section.
+        try:
+            if self._configs.kill_switch_changed(on):
+                released = True
+                self._holding = False
+        except Exception:
+            pass
         update_settings(self._settings,
                         lambda st: st.__setitem__('killSwitch', on))
         return {'ok': True, 'killSwitch': on, 'released': released}
@@ -1112,6 +1120,11 @@ class Api:
                 self._engine.set_system_proxy = was
                 return {'ok': False, 'systemProxy': was,
                         'error': tun.explain(e) or str(e)[:200]}
+        # And to a config connection, which the engine does not run.
+        try:
+            self._configs.reroute()
+        except Exception:
+            pass
         self._settings['systemProxy'] = on
         save_settings(self._settings)
         return {'ok': True, 'systemProxy': on}
@@ -1141,6 +1154,13 @@ class Api:
                     pass
                 return {'ok': False, 'routeWith': was,
                         'error': tun.explain(e) or str(e)[:200]}
+        # A config connection moves too: between the proxy setting and the
+        # adapter that is the same config connected again.
+        if way != was:
+            try:
+                self._configs.reroute()
+            except Exception:
+                pass
         self._settings['routeWith'] = way
         save_settings(self._settings)
         return {'ok': True, 'routeWith': way}
@@ -3344,10 +3364,13 @@ class Api:
         if again:
             return self._configs.call('connect', {'id': again[0],
                                                   'auto': again[1]})
-        # One connection at a time: a config's goes before a provider's.
+        # One connection at a time: a config's goes before a provider's -
+        # held, with the kill switch on, so the machine stays pointed at it
+        # (or its adapter stays up) until the provider's takes over.
         if self._configs.runner.active():
             try:
-                self._configs.runner.disconnect(quiet=True)
+                self._configs.runner.disconnect(
+                    quiet=True, hold=self._configs.runner.holding())
             except Exception:
                 pass
         self._busy = True
@@ -3446,7 +3469,10 @@ class Api:
                     pass
                 blocked = False
                 try:
-                    blocked = self._engine.blocked()
+                    # Or held on the Configs section's port, when this was a
+                    # move from a config that the kill switch kept pointed.
+                    blocked = (self._engine.blocked()
+                               or self._configs.runner.blocked())
                 except Exception:
                     pass
                 self._holding = blocked
