@@ -804,7 +804,7 @@ async function choose(code) {
      up does the obvious thing instead of nothing. */
   if (state.mode === 'busy') return;
   // With the kill switch on, the move is the backend's to make in one step:
-  // it keeps Windows pointed at Relay while the old exit goes and the new
+  // it keeps Windows pointed at Mirage while the old exit goes and the new
   // one is found, where a Disconnect first would put the bare line back for
   // the seconds in between.
   if (state.mode === 'on' && state.killSwitch === false) {
@@ -910,7 +910,7 @@ function paintClock() {
 setInterval(paintClock, 1000);
 
 /* The kill switch at work. The connection is gone, and Windows is still
-   pointed at Relay on purpose so nothing leaves on the bare line. Said in
+   pointed at Mirage on purpose so nothing leaves on the bare line. Said in
    red, with the two ways out: Connect (the big button, which reconnects)
    and Disconnect, which puts Windows back. */
 function showBlocked(why) {
@@ -920,7 +920,7 @@ function showBlocked(why) {
   $('exitPlace').textContent = 'not connected';
   $('exitFlag').style.backgroundImage = '';
   setStatus('Blocked', 'fail', 'Internet is blocked', '');
-  setHint(`${why} Nothing reaches the internet outside Relay until you `
+  setHint(`${why} Nothing reaches the internet outside Mirage until you `
     + 'reconnect, or disconnect to use your normal connection.', true);
   $('blocked').hidden = false;
   render();
@@ -1026,7 +1026,7 @@ window.onFailedPlain = (err) => {
     'moved-and-died': 'The port changed, but the connection did not come back up on it. Connect again.',
     // Tunnel mode only. The exit was found and is fine; it is the adapter
     // that did not come up, so the way out is a setting, not another server.
-    'tun-missing': 'Tunnel mode needs sing-box.exe beside Relay, and it is not '
+    'tun-missing': 'Tunnel mode needs sing-box.exe beside Mirage, and it is not '
       + 'there. Switch Settings → Connection back to the proxy setting.',
     'tun-refused': 'Windows was not given administrator approval, so the '
       + 'network adapter was not brought up. Connect again and allow it, or '
@@ -2024,7 +2024,7 @@ const lanPane = (() => {
     const fw = snap.firewall;
     if (fw === 'ok') out.push(['Windows lets other devices in.', '']);
     else if (fw === 'missing') {
-      out.push(['Windows is blocking other devices. A firewall rule for Relay is missing.', 'bad']);
+      out.push(['Windows is blocking other devices. A firewall rule for Mirage is missing.', 'bad']);
     } else if (fw === 'public-network') {
       out.push(['Windows treats this Wi-Fi as Public and blocks other devices — set it to Private in Windows settings.', 'bad']);
     } else out.push(['Could not check the Windows firewall.', '']);
@@ -2724,7 +2724,7 @@ $('updateCheck').addEventListener('click', async () => {
   if (!r || !r.ok) { said($('updateSaid'), (r && r.error) || 'Could not check.', 'bad'); return; }
   if (r.newer) {
     updateUrl = r.url;
-    said($('updateSaid'), `Relay ${r.latest} is out. This copy is ${r.current}.`, 'good');
+    said($('updateSaid'), `Mirage ${r.latest} is out. This copy is ${r.current}.`, 'good');
     $('updateOpen').hidden = false;
   } else {
     said($('updateSaid'), `This is the newest Windows release (${r.latest}).`, 'good');
@@ -4325,7 +4325,7 @@ function paintRouteWith() {
   splitPane.note();
   if (busyNow) return;
   $('routeWithSaid').textContent = !state.tunReady
-    ? 'Tunnel needs sing-box.exe beside Relay, and this copy does not have it.'
+    ? 'Tunnel needs sing-box.exe beside Mirage, and this copy does not have it.'
     : (seg.dataset.with === 'tun' && !state.elevated
         ? 'Windows will ask for administrator approval each time this connects.'
         : '');
@@ -4366,7 +4366,7 @@ for (const b of $('routeWith').querySelectorAll('.seg__opt')) {
   });
 }
 
-/* Split tunnel: which traffic goes round Relay rather than through it.
+/* Split tunnel: which traffic goes round Mirage rather than through it.
 
    The pane holds a draft. What the backend says is in force is state.split;
    what the pane shows is the draft, and the two only become one again on
@@ -4410,9 +4410,9 @@ const splitPane = (() => {
 
   const MODES = ['off', 'bypass', 'only'];
   const SAID = {
-    off: 'Everything goes through Relay. The list waits here until one of the other two is chosen.',
-    bypass: 'Everything goes through Relay except what is listed, which goes straight out.',
-    only: 'Only what is listed goes through Relay; everything else goes straight out.',
+    off: 'Everything goes through Mirage. The list waits here until one of the other two is chosen.',
+    bypass: 'Everything goes through Mirage except what is listed, which goes straight out.',
+    only: 'Only what is listed goes through Mirage; everything else goes straight out.',
   };
   // The pill is what is in force, not what is on screen - the two differ
   // between an edit and its Apply, and that difference is worth seeing.
@@ -4505,7 +4505,7 @@ const splitPane = (() => {
   }
 
   /* Programs are only told apart by the tunnel. Through the proxy setting
-     the only traffic Relay ever sees is the traffic a program chose to send
+     the only traffic Mirage ever sees is the traffic a program chose to send
      it, so a program that ignores the setting is not "except" anything - it
      was never coming through in the first place. */
   function note() {
@@ -4940,12 +4940,12 @@ const splitPane = (() => {
       const now = r.applied === 'now';
       let text;
       if (state.split.mode !== 'off') {
-        text = !now ? 'Saved. It takes effect the next time Relay connects.'
+        text = !now ? 'Saved. It takes effect the next time Mirage connects.'
           : tunUp ? 'In force — the adapter is back up with the new list.'
             : 'In force on the connection that is up now.';
       } else if (before && before.mode !== 'off') {
-        text = now ? 'Off. Everything goes through Relay again.'
-          : 'Saved. It is off from the next time Relay connects.';
+        text = now ? 'Off. Everything goes through Mirage again.'
+          : 'Saved. It is off from the next time Mirage connects.';
       } else {
         text = 'Saved. The list is kept for when it is turned on.';
       }
@@ -6734,7 +6734,7 @@ $('acctSave').addEventListener('click', async () => {
   // what it can cost. The second press is the person deciding to go on.
   if (acct.provider === 'windscribe' && !acct.windscribeNoteSeen) {
     acct.windscribeNoteSeen = true;
-    said($('acctNewSaid'), 'Before you sign in: Relay signs in the way '
+    said($('acctNewSaid'), 'Before you sign in: Mirage signs in the way '
       + 'Windscribe’s browser extension does. Windscribe may not allow that, '
       + 'and your account could be blocked. Press the button again to go on.',
     'bad');

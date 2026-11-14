@@ -99,7 +99,7 @@ class RelayTile : TileService() {
             up -> Tile.STATE_ACTIVE
             else -> Tile.STATE_INACTIVE
         }
-        tile.label = "Relay"
+        tile.label = "Mirage"
         tile.icon = Icon.createWithResource(this, R.drawable.ic_relay)
         if (Build.VERSION.SDK_INT >= 29) {
             tile.subtitle = when {
