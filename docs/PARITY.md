@@ -26,9 +26,10 @@ changes a feature updates its row.
 | Per-app routing | yes | yes | Windows by exe name (with the proxy setting, only programs that use it); Android by package, through VpnService |
 | Iran preset: sites, address ranges, apps | yes | yes | lists/ - ranges from RIPE NCC via lists/update.py, the rest by hand; apps on Android only |
 | Configs for other devices (VLESS / VMess links, QR, several locations) | yes | yes | your own server only, installer from this version (--slots); each location pinned to the exit that uploads best, saved on the server |
-| Configs section: servers bought or given from anywhere (vless / vmess / trojan / ss / hysteria2 / tuic links, subscriptions) | yes | part | a section of its own, not a provider way out; one connection at a time across the app; both read links against tests/links-fixtures.json. Windows: sing-box (Xray in front for xhttp), proxy or Tunnel mode, kill switch, split lists, live switch, auto (urltest), UDP, TLS fragment. Android: sing-box as a library inside the Go core's own tun (mobile/core/configs_box.go) - split, per-app, DNS and the watchdog unchanged, UDP through the config, live switch, auto, fragment; no xhttp yet (needs Xray). Not yet on either: QR, Mux; Share on Wi-Fi while a config is up on Windows |
+| Configs section: servers bought or given from anywhere (vless / vmess / trojan / ss / hysteria2 / tuic links, subscriptions) | yes | part | a section of its own, not a provider way out; one connection at a time across the app; both read links against tests/links-fixtures.json. Windows: sing-box (Xray in front for xhttp), proxy or Tunnel mode, kill switch, split lists, live switch, auto (urltest), UDP, TLS fragment. Android: sing-box as a library inside the Go core's own tun (mobile/core/configs_box.go) - split, per-app, DNS and the watchdog unchanged, UDP through the config, live switch, auto, fragment; no xhttp yet (needs Xray). Windows since this branch: an app of its own inside Mirage (its own home, Connect and settings, entered through the eye), settings of its own apart from Mirage's (mode, kill switch, split; fragment by sing-box or Xray with sizes; DoH remote/direct, IPv6; subscriptions on a timer and on opening; test kind, page, timeout, order; connect on opening, reconnect on drop; Mux; adapter stack/MTU/strict route). Android: still the sheet, Mirage's switches, no Mux. Not yet on either: QR; Share on Wi-Fi while a config is up on Windows; noise, mixed-case SNI, WARP, ad blocking |
 | Share this connection on Wi-Fi / hotspot (HTTP + SOCKS5 proxy for other devices) | yes | yes | private addresses only; Windows adds a Private-profile firewall rule (UAC), Android serves it from the Go core while connected |
-| Locations grouped by continent, Fastest available / Test all removed | yes | yes | continent comes from the catalogue (countries.py / countries.go) |
+| Locations in Windscribe's own order (countries and cities), Surfshark-only ones slotted into their region | yes | no | Windows: countries.listing_order + windscribe-order.json; Android still by continent |
+| Locations grouped by continent, Fastest available / Test all removed | no | yes | continent comes from the catalogue (countries.py / countries.go) |
 | Connected country's flag dimmed behind the home screen | yes | yes | |
 | Three themes: Graphite, White, Black | yes | yes | older theme names map onto these |
 | Traffic meter, counted as bytes flow | yes | yes | |
@@ -54,13 +55,13 @@ changes a feature updates its row.
 | Setup after sign-in picks its lookup route and logs failures | yes | n/a | Windows: direct DoH, else a local proxy that answers; `.state/setup.log` |
 | Tray / quick-settings tile, one-press connect | part | yes | Windows: tray menu |
 | Accounts screen, one card per provider, one account each | yes | yes | |
-| Quick timing: one exit per country, on its own every 6 h | yes | yes | |
+| Quick timing: one exit per country, on its own every 6 h | no | yes | Windows took it out: a test runs only on the country, city or server pressed. Android still has it |
 | Untimed countries listed apart under Fastest first | yes | yes | |
 | Failed exit: red mark, reason on hover / tap | yes | yes | |
 | Connection-type strip only when more than one works | yes | yes | |
 | City rows: time on the right, star and test of their own | yes | yes | |
 | Exit list as cards: time and place under the name, badges line, cities inside | yes | yes | |
-| Sort chips with words, source chip, Fastest available card | yes | yes | |
+| Sort chips with words, source chip, Fastest available card | part | yes | Windows: the chosen sort says its name, the others are icons; no Fastest group |
 | Narrow screens: rows fold to two lines instead of cutting text | yes | yes | Android also for a large font |
 | Wide screens: content in a centred column | yes | yes | Windows from 720px, Android tablets |
 | Window size, single instance | yes | n/a | |
