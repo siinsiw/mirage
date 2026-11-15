@@ -226,7 +226,7 @@ def _batch(sb, batch, note, fragment, cancel, opts=None):
     try:
         hops = {}
         if for_xray:
-            entries = [(c, xports[n], 'relay', procs.token())
+            entries = [(c, xports[n], 'mirage', procs.token())
                        for n, c in enumerate(for_xray)]
             hops = {c['id']: (p, u, pw) for c, p, u, pw in entries}
             path = procs.write_config(xray.build(entries, fragment, opts=opts),

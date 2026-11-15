@@ -554,7 +554,7 @@ func firstRemote(text string) (host, port string, found bool) {
 // a config pinned on a phone reads the same as one pinned on a desktop.
 func pinnedText(text, host, ip string) string {
 	head := fmt.Sprintf(
-		"# pinned by Relay on %s - cloudflare over DoH\n#   %s -> %s\n",
+		"# pinned by Mirage on %s - cloudflare over DoH\n#   %s -> %s\n",
 		time.Now().Format("2006-01-02 15:04"), host, ip)
 	return head + stripScripts(swapRemote(text, ip))
 }
@@ -651,7 +651,7 @@ func stripScripts(text string) string {
 	if len(dropped) == 0 {
 		return text
 	}
-	note := "# removed by Relay: " + strings.Join(dropped, ", ") +
+	note := "# removed by Mirage: " + strings.Join(dropped, ", ") +
 		" - options that run programs or reach outside the config have no place in a pinned config\n"
 	return note + strings.Join(kept, "")
 }

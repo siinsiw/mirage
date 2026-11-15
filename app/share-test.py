@@ -311,9 +311,9 @@ def test_a_shared_client_cannot_reach_this_machine_by_going_around():
 
 
 def test_firewall_rule_is_narrow_and_named_for_the_port():
-    assert engine.firewall_rule_name(8877) == 'Relay LAN share (8877)'
+    assert engine.firewall_rule_name(8877) == 'Mirage LAN share (8877)'
     add = engine.firewall_script('add', 8877)
-    assert "'Relay LAN share (8877)'" in add
+    assert "'Mirage LAN share (8877)'" in add
     assert 'New-NetFirewallRule' in add
     for want in ('-Direction Inbound', '-Action Allow', '-Protocol TCP',
                  '-LocalPort 8877', '-RemoteAddress LocalSubnet',
@@ -326,11 +326,17 @@ def test_firewall_rule_is_narrow_and_named_for_the_port():
     # Replaced, not stacked: the old rule of that name goes first.
     assert add.index('Remove-NetFirewallRule') < add.index('New-NetFirewallRule')
     gone = engine.firewall_script('remove', 8877)
-    assert "-DisplayName 'Relay LAN share (8877)'" in gone
+    assert "-DisplayName 'Mirage LAN share (8877)'" in gone
     assert 'Remove-NetFirewallRule' in gone and 'New-NetFirewallRule' not in gone
     assert '*' not in gone
+    # What the app made before it was called Mirage goes with it, and only that.
+    assert "-DisplayName 'Relay LAN share (8877)'" in gone
+    assert "-DisplayName 'Relay LAN share (8877)'" in add
+    assert "'Relay LAN share (8877)'" in engine.firewall_probe_script(8877)
+    assert engine.VIRTUAL_ADAPTERS.search('MirageTun')
+    assert engine.VIRTUAL_ADAPTERS.search('RelayTun')
     # Another port is another rule.
-    assert "'Relay LAN share (9050)'" in engine.firewall_script('add', 9050)
+    assert "'Mirage LAN share (9050)'" in engine.firewall_script('add', 9050)
     try:
         engine.firewall_script('flush', 8877)
     except ValueError:
@@ -342,7 +348,7 @@ def test_firewall_rule_is_narrow_and_named_for_the_port():
 def test_firewall_verdict():
     wifi = {'ip': '192.168.1.20', 'alias': 'Wi-Fi', 'category': 'Private'}
     pub = {'ip': '192.168.1.20', 'alias': 'Wi-Fi', 'category': 'Public'}
-    tun = {'ip': '172.19.0.1', 'alias': 'RelayTun', 'category': 'Private'}
+    tun = {'ip': '172.19.0.1', 'alias': 'MirageTun', 'category': 'Private'}
     assert engine.firewall_verdict({'rule': True, 'adapters': [wifi]}) == 'ok'
     assert engine.firewall_verdict({'rule': False, 'adapters': [wifi]}) == 'missing'
     # Public beats missing: the rule could not help there.
@@ -366,7 +372,7 @@ def test_addresses_offered_are_real_lan_ones():
     rows = [
         {'ip': '127.0.0.1', 'alias': 'Loopback', 'category': ''},
         {'ip': '169.254.3.4', 'alias': 'Ethernet 2', 'category': ''},
-        {'ip': '172.19.0.1', 'alias': 'RelayTun', 'category': 'Private'},
+        {'ip': '172.19.0.1', 'alias': 'MirageTun', 'category': 'Private'},
         {'ip': '172.28.64.1', 'alias': 'vEthernet (WSL)', 'category': 'Private'},
         {'ip': '192.168.56.1', 'alias': 'VirtualBox Host-Only', 'category': ''},
         {'ip': '100.100.1.1', 'alias': 'Tailscale', 'category': ''},

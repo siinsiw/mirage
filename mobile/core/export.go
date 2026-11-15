@@ -1,7 +1,7 @@
 package core
 
 // Configs for other devices: an iPhone, a friend's laptop - anything with a
-// V2Ray client and no Relay - reaching the user's own server, and through it
+// V2Ray client and no Mirage - reaching the user's own server, and through it
 // a provider location picked here.
 //
 // The server holds a handful of numbered locations ("slots"). Each is a
@@ -28,8 +28,8 @@ import (
 	"strings"
 )
 
-// RelayKeyExport is what a key says about the server's exported locations.
-type RelayKeyExport struct {
+// MirageKeyExport is what a key says about the server's exported locations.
+type MirageKeyExport struct {
 	ID    string `json:"id"`
 	Slots int    `json:"slots"`
 }
@@ -48,11 +48,17 @@ const MaxExportSlots = 32
 var namespaceURL = [16]byte{0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1,
 	0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8}
 
+// exportSeed begins the name each slot's UUID is made from. The server's
+// installer (tunnel/install-server.sh) makes the same UUIDs from the same
+// name, and servers installed before the app was called Mirage hold users
+// made from it, so it is a wire value and keeps its old spelling.
+const exportSeed = "relay-export:"
+
 // SlotUUID is slot k's user on the server.
 func SlotUUID(id string, k int) string {
 	h := sha1.New()
 	h.Write(namespaceURL[:])
-	h.Write([]byte("relay-export:" + id + ":" + strconv.Itoa(k)))
+	h.Write([]byte(exportSeed + id + ":" + strconv.Itoa(k)))
 	u := h.Sum(nil)[:16]
 	u[6] = u[6]&0x0f | 0x50
 	u[8] = u[8]&0x3f | 0x80
@@ -86,7 +92,7 @@ type ExportServer struct {
 	// up on a line that lies about it. Empty to use the name.
 	Edge string
 	ID   string // the key's x.id
-	SS   *RelayKeySS
+	SS   *MirageKeySS
 }
 
 // ExportLinks makes every slot's links.
@@ -156,7 +162,7 @@ func vmessLink(id, addr string, port int, host string, byIP bool, name string) s
 }
 
 // ssLink is SIP002: the method and password base64url'd, unpadded.
-func ssLink(host string, ss *RelayKeySS, name string) string {
+func ssLink(host string, ss *MirageKeySS, name string) string {
 	user := base64.RawURLEncoding.EncodeToString([]byte(ss.Method + ":" + ss.Password))
 	return "ss://" + user + "@" + net.JoinHostPort(host, strconv.Itoa(ss.Port)) + "#" + url.PathEscape(name)
 }

@@ -113,8 +113,8 @@ def test_the_connection():
 def test_auto_and_the_adapter():
     cfg = singbox.build(SB, port=18877, clash_port=19090, clash_secret='s',
                         auto=True, auto_limit=3, mode='tun',
-                        own=[r'C:\Relay\Relay.exe'],
-                        carriers=[r'C:\Relay\xray.exe'])
+                        own=[r'C:\Mirage\Mirage.exe'],
+                        carriers=[r'C:\Mirage\xray.exe'])
     auto = next(o for o in cfg['outbounds'] if o['tag'] == 'auto')
     assert auto['type'] == 'urltest' and len(auto['outbounds']) == 3
     assert auto['interval'] == '10m'

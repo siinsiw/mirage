@@ -662,9 +662,9 @@ function buildCountry(c) {
   const cities = c.cityList || [];
   const places = cities.length > 1 ? `${cities.length} cities`
     : (cities[0] && cities[0].name) || '';
-  // "11 relays" breaks before the number, never inside it, when the line has
+  // "11 servers" breaks before the number, never inside it, when the line has
   // to wrap.
-  const line = [places, `${c.count} relay${c.count === 1 ? '' : 's'}`]
+  const line = [places, `${c.count} server${c.count === 1 ? '' : 's'}`]
     .filter(Boolean).map((s) => s.replace(/ /g, ' ')).join(' · ');
   const count = document.createElement('span');
   count.className = 'row__count';
@@ -2426,7 +2426,7 @@ async function useTunnelKey() {
   const btn = $('tunnelKeyUse');
   const text = $('tunnelKey').value.trim();
   if (!text) {
-    said($('tunnelKeySaid'), 'Paste the relay:// line first.', 'bad');
+    said($('tunnelKeySaid'), 'Paste the mirage:// line first.', 'bad');
     return;
   }
   busy(btn, true);
@@ -5374,7 +5374,7 @@ const sharePane = (() => {
     const n = city ? city.count : c.count;
     const cities = (c.cityList || []).length;
     meta.textContent = (!city && cities > 1 ? `${cities} cities · ` : '')
-      + `${n || 0} relay${n === 1 ? '' : 's'}`;
+      + `${n || 0} server${n === 1 ? '' : 's'}`;
     b.append(flag, name, meta, icon('#i-check', 'ico runpop__check'));
     li.append(b);
 
@@ -7385,7 +7385,7 @@ function msSaid(ms) {
 
 /* What a row says about itself once it has been tested: nothing at all
    before, a time when it answered, and why not when it did not. Kept short -
-   this sits after the relay count on one line. */
+   this sits after the server count on one line. */
 /* "Blocked here" has to mean everything here was asked and nothing answered.
 
    Anything less is a guess wearing a fact's clothes: a country with three
@@ -7396,7 +7396,7 @@ function reachSaid(c) {
   if (!c || !c.tested) return '';
   // The ratio has moved to the sign, which is beside the name and coloured
   // by it. Saying it here as well cost the end of the line - "PL - 12
-  // relays - 139 ms - ..." with the number that mattered cut off - to
+  // servers - 139 ms - ..." with the number that mattered cut off - to
   // repeat what a green letter already said.
   if (!c.ok) return c.tested >= c.count ? ' · blocked' : '';
   return c.ping === null ? '' : ` · ${msSaid(c.ping)}`;
@@ -7800,7 +7800,7 @@ function starFor(code) {
 
 /* The sign that says who backs a place, and how that provider is doing there.
 
-   It replaces a row per provider. The row said "Surfshark - 23 relays" and
+   It replaces a row per provider. The row said "Surfshark - 23 servers" and
    nothing else, because nothing about those twenty-three had been measured;
    the sign says the same thing in one letter and says it beside the name,
    where the eye already is. Its colour is that provider's own tally and not
@@ -7819,7 +7819,7 @@ function providerTag(key, count, tested, ok, ping) {
     : ok ? `${ok} of ${tested} answered`
       + (ping !== undefined && ping !== null ? `, best ${msSaid(ping)}` : '')
       : `none of ${tested} answered`;
-  t.title = `${name} · ${count} relay${count === 1 ? '' : 's'} · ${said_}`;
+  t.title = `${name} · ${count} server${count === 1 ? '' : 's'} · ${said_}`;
   return t;
 }
 
@@ -7982,7 +7982,7 @@ function buildCity(c, city, via) {
   const meta = document.createElement('span');
   meta.className = 'row__meta';
   const n = via ? (city.by || {})[via] || 0 : city.count;
-  const bits = [`${n} relay${n === 1 ? '' : 's'}`];
+  const bits = [`${n} server${n === 1 ? '' : 's'}`];
   // The load down here, the time on the right: the time is what picks a
   // city, so it is the number that stands out.
   if (city.load !== null && city.load !== undefined) bits.push(`${loadSaid(city.load)} load`);
@@ -8005,7 +8005,7 @@ function buildCity(c, city, via) {
   // go without anyone missing it.
   if (nick) name.append(' ', nick);
 
-  // The phone's second line: whose relays, 10G and P2P, then the count and
+  // The phone's second line: whose servers, 10G and P2P, then the count and
   // the load - so the name line keeps its room for the name and the time.
   const lead = [];
   for (const key of Object.keys(city.by || {}).filter((k) => city.by[k] > 0).sort()) {

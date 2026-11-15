@@ -1,4 +1,4 @@
-# Relay — the desktop app
+# Mirage — the desktop app
 
 A window with one control, for someone who should never have to hear the word
 *proxy*. It picks an exit, starts the proxy, points Windows at it, and puts
@@ -9,26 +9,32 @@ python app/build.py       build it, and use the Desktop shortcut it makes
 python app/main.py        or run it straight from the repo, unbuilt
 ```
 
-The built app is `dist/Relay/Relay.exe`, and the build leaves a shortcut on
+The built app is `dist/Mirage/Mirage.exe`, and the build leaves a shortcut on
 the Desktop. It also copies in the servers, the credentials, the tunnel client
 and the sweep scripts, so what comes out is ready to run rather than ready to
 assemble.
 
-In the Windows build, `Relay.exe` and its scripts may be installed under
-`Program Files`. Relay keeps accounts, credentials, settings, server configs
-and logs in `%LOCALAPPDATA%\Relay`, so it runs as a normal user. On first use
+In the Windows build, `Mirage.exe` and its scripts may be installed under
+`Program Files`. Mirage keeps accounts, credentials, settings, server configs
+and logs in `%LOCALAPPDATA%\Mirage`, so it runs as a normal user. On first use
 it copies any existing data beside the exe into that folder without replacing
 files already there. The bundled starter configs are copied there too.
 
+The app used to be called Relay. On its first start a `%LOCALAPPDATA%\Relay`
+folder is renamed to `%LOCALAPPDATA%\Mirage` (if `Mirage` already exists it
+wins and `Relay` is left alone); a kill-switch hold, firewall rules or a
+Wi-Fi sharing rule the old version left are still lifted by this one, and a
+copy of the old version still running counts as the one copy allowed.
+
 For a downloadable build, use `python app/build.py --public-release`. It writes
-to `release-build/dist/Relay`, includes only configs tracked by git, and refuses
+to `release-build/dist/Mirage`, includes only configs tracked by git, and refuses
 to finish if credentials, account data, sessions, or other runtime state enter
 the output. It also renders five reviewed, credential-free pinned starters for
 each supported provider, so adding a provider account is enough for a normal
 first connection. It does not disturb the personal build under `dist/`.
 
 ```
-dist/Relay/Relay.exe --selftest     what this copy can see, and where it looked
+dist/Mirage/Mirage.exe --selftest     what this copy can see, and where it looked
 ```
 
 ---
@@ -85,7 +91,7 @@ password, so it reads as *no server accepted just now* and sends people
 looking at their servers folder. An address typed into the username field is
 refused here, out loud, for that reason.
 
-It writes `.ovpn-auth` under `%LOCALAPPDATA%\Relay` in a Windows build and
+It writes `.ovpn-auth` under `%LOCALAPPDATA%\Mirage` in a Windows build and
 takes the inherited permissions off it with `icacls` — `chmod` on NTFS returns success and changes nothing, which
 is worse than failing. If `.env` already carries credentials those are updated
 too, and the window says so: `.env` is the side the shell and PowerShell
@@ -132,12 +138,12 @@ still measures this line. From source that last rule covers every
 `python.exe`.
 
 The adapter needs administrator rights: Windows shows a UAC prompt each time it
-connects this way, unless Relay is already elevated. An elevated script
+connects this way, unless Mirage is already elevated. An elevated script
 (`.state/tun/run.ps1`) runs sing-box and is asked to stop through a file, the
 same way the sweep is; it also watches the worker and takes the adapter down if
 the worker goes, so the machine is never left pointed at nothing. Its files and
 `sing-box.log` are in `.state/tun/`. Builds put `sing-box.exe` beside
-`Relay.exe` (from `tunnel/` in the repo); without it the option is greyed out.
+`Mirage.exe` (from `tunnel/` in the repo); without it the option is greyed out.
 
 ### Split tunnel
 
@@ -187,13 +193,14 @@ The pane that turns the second and third ways out on. It wants three things —
 a domain and two passwords — and all three are printed by the server's
 installer when it finishes.
 
-**The key.** The installer's last line is `relay://…`: base64url of a JSON
+**The key.** The installer's last line is `mirage://…` (keys made
+before the rename say `relay://…` and still work): base64url of a JSON
 object with the server, its certificate's SHA-256 when it is reached by
 address, both passwords and its Shadowsocks settings. Pasted into *Have a
 key?* it sets the whole pane up at once — on the phone too, where the same
 field is at the top of Settings → Connection. The key's pin is checked even
 on the first contact, so a key also protects the first connection, which the
-"keep whatever answers first" rule cannot. `cat /etc/relay/key` on the
+"keep whatever answers first" rule cannot. `cat /etc/mirage/key` on the
 server shows it again. It holds passwords: treat it like one.
 
 **Another port.** On a server where something else already answers on 443 —
@@ -214,7 +221,7 @@ switches between them. On this machine gost carries it (`connector: ss`); on
 the phone the Go core does (`mobile/core/shadowsocks.go`). TCP only.
 
 **Share with other devices** makes configs for anything with a V2Ray client
-and no Relay — an iPhone in Shadowrocket, Streisand, V2Box, Hiddify or
+and no Mirage — an iPhone in Shadowrocket, Streisand, V2Box, Hiddify or
 sing-box. The server keeps numbered locations for them (`--slots`, 8 unless
 told): slot 0 exits at the server, and each other slot is a user on its
 sing-box routed to its own gost chain, `loc-<k>`. Pick locations, and for each
@@ -314,7 +321,7 @@ up and explain itself.
 
 ### The tunnel is a child process, and it outlives the window
 
-Relay does not speak WebSocket or multiplexing itself. It runs `gost`, which
+Mirage does not speak WebSocket or multiplexing itself. It runs `gost`, which
 does and which has been measured doing it, and points its own proxy at the
 local port that comes up. Reimplementing that in Python would mean re-earning
 numbers that already exist.
@@ -384,7 +391,7 @@ the proxy up, because that is what *connected* should mean. Quitting from the
 tray takes it down and restores the machine.
 
 **Minimising minimises.** To the taskbar, where the button says what it
-does. Putting Relay away in the tray is what the close button asks about the
+does. Putting Mirage away in the tray is what the close button asks about the
 first time it is pressed, and is remembered from the answer; minimising as
 well left no way to get the window off the screen and keep its taskbar
 button.
@@ -408,7 +415,7 @@ nearest monitor if the one it was on is gone. See `winwindow.py`.
 ## Checking a build
 
 ```
-dist/Relay/Relay.exe --selftest
+dist/Mirage/Mirage.exe --selftest
 ```
 
 says what that copy can see and where it looked — the page, the proxy script,

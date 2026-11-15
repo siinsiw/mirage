@@ -537,9 +537,9 @@ func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, destination M.Sock
 			// two it was. gomobile puts Go's stderr on logcat, so it lands
 			// beside the service's own lines.
 			if err != nil {
-				log.Printf("relay: dns through the exit: %v", err)
+				log.Printf("mirage: dns through the exit: %v", err)
 			} else {
-				log.Printf("relay: dns through the exit: empty answer")
+				log.Printf("mirage: dns through the exit: empty answer")
 			}
 			return
 		}
@@ -548,7 +548,7 @@ func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, destination M.Sock
 		// sees both halves.
 		h.names.learn(answer)
 		if err := writePacket(writer, answer, destination); err != nil {
-			log.Printf("relay: dns answer not written back: %v", err)
+			log.Printf("mirage: dns answer not written back: %v", err)
 		}
 	}()
 }

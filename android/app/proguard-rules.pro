@@ -4,13 +4,13 @@
 # R8 renaming or dropping any of it is a crash the first time Go reaches for
 # a method that is no longer there.
 -keep class go.** { *; }
--keep class relay.** { *; }
--keep class * implements relay.Progress { *; }
--keep class * implements relay.Protector { *; }
--keep class * implements relay.Namer { *; }
--keep class * implements relay.ReachProgress { *; }
--keep class * implements relay.PinProgress { *; }
--keep class * implements relay.ConfigsProgress { *; }
+-keep class mirage.** { *; }
+-keep class * implements mirage.Progress { *; }
+-keep class * implements mirage.Protector { *; }
+-keep class * implements mirage.Namer { *; }
+-keep class * implements mirage.ReachProgress { *; }
+-keep class * implements mirage.PinProgress { *; }
+-keep class * implements mirage.ConfigsProgress { *; }
 
 # Stack traces that still say where they came from.
 -keepattributes SourceFile,LineNumberTable

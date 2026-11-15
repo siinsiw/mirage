@@ -98,14 +98,14 @@ go vet -tags with_gvisor,with_quic,with_utls ./...
 # without the first sing-box has no Hysteria2 or TUIC, and without the second
 # no Reality and no browser fingerprints - both fail at connect, not here.
 gomobile bind -tags with_gvisor,with_quic,with_utls -target=android -androidapi 21 \
-    -o "$HERE/relay.aar" ./bind
+    -o "$HERE/mirage.aar" ./bind
 
 # Where Gradle reads it: android/app/libs, in the native app at the repo
 # root. Gitignored there as here; this is the copy step.
 NATIVE="$HERE/../android/app/libs"
 mkdir -p "$NATIVE"
-cp "$HERE/relay.aar" "$NATIVE/relay.aar"
+cp "$HERE/mirage.aar" "$NATIVE/mirage.aar"
 
 echo
-ls -la "$HERE/relay.aar" | awk '{printf "  relay.aar  %.1f MB\n", $5/1048576}'
-echo "  libs       ../android/app/libs/relay.aar"
+ls -la "$HERE/mirage.aar" | awk '{printf "  mirage.aar %.1f MB\n", $5/1048576}'
+echo "  libs       ../android/app/libs/mirage.aar"

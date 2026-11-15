@@ -18,8 +18,14 @@ import ctypes.wintypes as wintypes
 import os
 import threading
 
-MUTEX = 'Local\\Relay.SingleInstance'
-EVENT = 'Local\\Relay.ShowWindow'
+MUTEX = 'Local\\Mirage.SingleInstance'
+EVENT = 'Local\\Mirage.ShowWindow'
+# The same pair as the app named them when it was called Relay. A copy of the
+# old version still running is still a second copy with its hands on the
+# proxy setting, so it counts: it is brought forward and this one leaves.
+LEGACY_MUTEX = 'Local\\Relay.SingleInstance'
+LEGACY_EVENT = 'Local\\Relay.ShowWindow'
+SYNCHRONIZE = 0x00100000
 
 ERROR_ALREADY_EXISTS = 183
 EVENT_MODIFY_STATE = 0x0002
@@ -41,6 +47,8 @@ if os.name == 'nt':
     _CreateEventW = _proto(_kernel32, 'CreateEventW', wintypes.HANDLE,
                            ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL,
                            wintypes.LPCWSTR)
+    _OpenMutexW = _proto(_kernel32, 'OpenMutexW', wintypes.HANDLE,
+                         wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR)
     _OpenEventW = _proto(_kernel32, 'OpenEventW', wintypes.HANDLE,
                          wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR)
     _SetEvent = _proto(_kernel32, 'SetEvent', wintypes.BOOL, wintypes.HANDLE)
@@ -66,6 +74,10 @@ def claim():
     """
     if not _kernel32:
         return True
+    old = _OpenMutexW(SYNCHRONIZE, False, LEGACY_MUTEX)
+    if old:
+        _CloseHandle(old)
+        return not _bring_forward(LEGACY_EVENT)
     # The event first, so that it exists by the time anyone can see the
     # mutex and go looking for it.
     show = _CreateEventW(None, False, False, EVENT)
@@ -80,9 +92,15 @@ def claim():
     _CloseHandle(mutex)
     if show:
         _CloseHandle(show)
-    other = _OpenEventW(EVENT_MODIFY_STATE, False, EVENT)
+    return not _bring_forward(EVENT)
+
+
+def _bring_forward(event):
+    """Ask the copy waiting on `event` to come forward. False if there is
+    no such event to set, in which case this copy should start after all."""
+    other = _OpenEventW(EVENT_MODIFY_STATE, False, event)
     if not other:
-        return True
+        return False
     try:
         # Windows only lets a process take the foreground if the one that
         # has it says so. This copy has it - it was just launched - and is
@@ -91,7 +109,7 @@ def claim():
         _SetEvent(other)
     finally:
         _CloseHandle(other)
-    return False
+    return True
 
 
 def listen(on_show, stop):

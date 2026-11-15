@@ -236,7 +236,7 @@ func TestLANPasswordRequired(t *testing.T) {
 	}
 	// Wrong one.
 	c = dialLAN(t, addr)
-	bad := base64.StdEncoding.EncodeToString([]byte("relay:nope"))
+	bad := base64.StdEncoding.EncodeToString([]byte("mirage:nope"))
 	io.WriteString(c, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Basic "+bad+"\r\n\r\n")
 	if resp, err = http.ReadResponse(bufio.NewReader(c), nil); err != nil || resp.StatusCode != 407 {
 		t.Fatalf("wrong password: %v %v", resp, err)

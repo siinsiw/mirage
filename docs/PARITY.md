@@ -15,11 +15,11 @@ changes a feature updates its row.
 | Automatic fetch and pin right after sign-in | yes | yes | |
 | Pin from the account cards | part | yes | Windows: on the provider cards only |
 | Race the provider's exits, first to answer wins | yes | yes | |
-| Own server, and server + exit | yes | yes | by IP (self-signed: the first Test shows its sha256 and trusts nothing, a second Test that sees the same certificate keeps it; a relay:// key carries the pin) or domain; one install command from Settings with the app's own passwords; server + exit sends the picked location and its provider's account |
+| Own server, and server + exit | yes | yes | by IP (self-signed: the first Test shows its sha256 and trusts nothing, a second Test that sees the same certificate keeps it; a mirage:// key carries the pin) or domain; one install command from Settings with the app's own passwords; server + exit sends the picked location and its provider's account |
 | Exit check for server + exit, per server, with Iran notices | yes | yes | on by default; the server sends the exit's real name and checks its certificate (from Iran this is what keeps upload fast - without it about 10 KB/s); turning it off asks first. Server in Iran: "keep it on", plus a Surfshark-is-blocked-from-Iran notice when a Surfshark account is in use, and that reason in a failed server + exit through Surfshark |
 | Direct exits: Windscribe dialled with its real name (SNI), Surfshark without | yes | yes | certificate checked by hand against the pinned name either way; Windows core/ovpn-proxy.py sni_for, Android mobile/core/exit.go sniFor |
 | Every program through it, not only proxy-aware ones (TUN) | yes | yes | Windows: Settings → Connection → Tunnel, sing-box + UAC; Android: always, VpnService |
-| Own server set up from one pasted key (relay://…) | yes | yes | printed by install-server.sh, kept in /etc/relay/key; carries the pin, both passwords, Shadowsocks and the TLS port when it is not 443 (--port) |
+| Own server set up from one pasted key (mirage://…; an older relay://… key is still accepted) | yes | yes | printed by install-server.sh, kept in /etc/mirage/key; carries the pin, both passwords, Shadowsocks and the TLS port when it is not 443 (--port) |
 | Shadowsocks straight to your own server's address | yes | yes | the server's port exits there, the next port goes through the exit-chain (server + exit); Windows via gost, Android in the Go core |
 | Way out chosen from a dropdown, not a three-way strip | yes | yes | three labels side by side did not fit narrow phones |
 | Split tunnel: all except a list, or only a list | yes | yes | sites, addresses and ranges; Windows: sing-box rules with the adapter, the worker with the proxy setting; Android: the Go core, UDP included for what goes around |
@@ -49,7 +49,7 @@ changes a feature updates its row.
 | Live connection timer | yes | yes | Android: in the notification too |
 | Version in About | yes | yes | Windows: Settings → About this copy |
 | Check for a newer version, only when pressed | yes | yes | Windows: About this copy → Check (desktop-v* releases); Android: Settings → About → Check for a newer version (android-v* releases) |
-| Kill switch holds when the tunnel program itself dies | yes | n/a | Windows: Windows Firewall blocks all but Relay, sing-box, gost and the LAN until reconnect, Disconnect or reopening Relay; Android: Android's own always-on VPN / block-without-VPN settings |
+| Kill switch holds when the tunnel program itself dies | yes | n/a | Windows: Windows Firewall blocks all but Mirage, sing-box, gost and the LAN until reconnect, Disconnect or reopening Mirage; Android: Android's own always-on VPN / block-without-VPN settings |
 | Note before the Windscribe sign-in (extension-style login, account risk) | yes | yes | once per run on Windows, once ever on Android |
 | Neutral flag for Iran as a setting | no | yes | Android: Settings; the Lion and Sun stays the default |
 | Setup after sign-in picks its lookup route and logs failures | yes | n/a | Windows: direct DoH, else a local proxy that answers; `.state/setup.log` |
@@ -81,8 +81,8 @@ unless this section says so.
 
 Each app has its own tags, so releasing one never releases the other:
 
-- `desktop-v0.3.0` → `.github/workflows/desktop-release.yml` → `Relay-windows-x64-….zip`
-- `android-v0.2.0` → `.github/workflows/release.yml` → `relay-android-v0.2.0.apk`;
+- `desktop-v0.3.0` → `.github/workflows/desktop-release.yml` → `Mirage-windows-x64-….zip`
+- `android-v0.2.0` → `.github/workflows/release.yml` → `mirage-android-v0.2.0.apk`;
   the tag must match `versionName` in `android/app/build.gradle.kts`
 
 ## Working on either app
@@ -91,5 +91,5 @@ Each app has its own tags, so releasing one never releases the other:
   `android-<topic>` (a dash, not a slash: a branch named `android` already
   exists, and git cannot have both `android` and `android/…`).
 - Open a pull request into `main`. Its app's workflow builds and tests it;
-  Windows also runs the built `Relay.exe --selftest`.
+  Windows also runs the built `Mirage.exe --selftest`.
 - Try it on a real window or phone before merging.

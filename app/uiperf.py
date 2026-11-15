@@ -1,4 +1,4 @@
-"""Relay - how smoothly the window actually moves, measured rather than felt.
+"""Mirage - how smoothly the window actually moves, measured rather than felt.
 
     python app/main.py --ui-perf
 

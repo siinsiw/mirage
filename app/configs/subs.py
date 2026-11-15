@@ -27,7 +27,7 @@ MAX_BODY = 2 * 1024 * 1024
 MAX_URL = 2048
 MAX_REDIRECTS = 3
 TIMEOUT = 15
-USER_AGENT = 'Relay'
+USER_AGENT = 'Mirage'
 
 
 class Refused(ValueError):

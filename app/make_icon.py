@@ -25,7 +25,7 @@ Written from here:
   android res drawable/ic_launcher_fg.xml, ic_launcher_mono.xml
                                    the adaptive icon's mark, and the one-colour
                                    one Android 13 tints for themed icons
-  android res drawable/ic_relay.xml
+  android res drawable/ic_mirage.xml
                                    the status bar, notification and quick
                                    tile icon (white; Android tints it)
   android res values/ic_launcher.xml
@@ -281,7 +281,7 @@ def write_android():
             'later:\n    the launcher tints it, so only its shape counts.',
             108, 108, ADAPTIVE_GROUP,
             _paths('#FFFFFF', '#FFFFFF', simple=True)))
-    with open(os.path.join(drawable, 'ic_relay.xml'), 'w',
+    with open(os.path.join(drawable, 'ic_mirage.xml'), 'w',
               encoding='utf-8', newline='\n') as f:
         # The status bar's 24dp: the eye filling the width, simplified.
         f.write(_vector(

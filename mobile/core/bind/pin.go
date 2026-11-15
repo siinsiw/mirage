@@ -1,4 +1,4 @@
-package relay
+package mirage
 
 import "github.com/siinsiw/ovpn-pin/mobile/core"
 

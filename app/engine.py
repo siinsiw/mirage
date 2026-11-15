@@ -205,22 +205,31 @@ def lan_password_ok(text):
     return px.lan_password_valid(text)
 
 
-FIREWALL_RULE = 'Relay LAN share ({port})'
+FIREWALL_RULE = 'Mirage LAN share ({port})'
+# The same rule as the app made it when it was called Relay. Removed along
+# with the new one, and counted as the rule by the probe, so sharing that was
+# on before the rename stays on without another administrator prompt.
+LEGACY_FIREWALL_RULE = 'Relay LAN share ({port})'
 FIREWALL_STATES = ('ok', 'missing', 'public-network', 'unknown')
 
 # Adapters that are not "the Wi-Fi": the adapter this app creates, Hyper-V and
 # WSL's switches, VM hosts, other VPNs. An address on one of those would be
 # offered to the person as the thing to type into the phone, and a phone can
 # never reach it. ("Local Area Connection*" is Windows' own name for the
-# virtual Wi-Fi Direct adapters behind Mobile Hotspot.)
+# virtual Wi-Fi Direct adapters behind Mobile Hotspot.) RelayTun is this
+# adapter as the app named it before it was called Mirage.
 VIRTUAL_ADAPTERS = re.compile(
-    r'relaytun|sing-?tun|\btun\d*\b|local area connection\*|vethernet|hyper-v|wsl|virtualbox|vmware|vmnet|'
+    r'miragetun|relaytun|sing-?tun|\btun\d*\b|local area connection\*|vethernet|hyper-v|wsl|virtualbox|vmware|vmnet|'
     r'loopback|bluetooth|\btap\b|tap-|tailscale|wireguard|zerotier|docker|'
     r'npcap|openvpn|tunnel|vpn|isatap|teredo', re.I)
 
 
 def firewall_rule_name(port):
     return FIREWALL_RULE.format(port=int(port))
+
+
+def legacy_firewall_rule_name(port):
+    return LEGACY_FIREWALL_RULE.format(port=int(port))
 
 
 def firewall_script(action, port):
@@ -232,8 +241,10 @@ def firewall_script(action, port):
     """
     port = clean_port(port)
     name = _ps_string(firewall_rule_name(port))
-    gone = ('Get-NetFirewallRule -DisplayName ' + name +
-            ' -ErrorAction SilentlyContinue | Remove-NetFirewallRule\n')
+    gone = ''.join('Get-NetFirewallRule -DisplayName ' + n +
+                   ' -ErrorAction SilentlyContinue | Remove-NetFirewallRule\n'
+                   for n in (name,
+                             _ps_string(legacy_firewall_rule_name(port))))
     if action == 'remove':
         return gone
     if action != 'add':
@@ -245,7 +256,7 @@ def firewall_script(action, port):
         'New-NetFirewallRule -DisplayName ' + name + ' -Direction Inbound '
         '-Action Allow -Protocol TCP -LocalPort ' + str(port) + ' '
         '-RemoteAddress LocalSubnet -Profile Private -Enabled True '
-        "-Description 'Relay: lets devices on your own Wi-Fi use this PC as "
+        "-Description 'Mirage: lets devices on your own Wi-Fi use this PC as "
         "their proxy. Removed when Share on Wi-Fi is turned off.' | Out-Null\n")
 
 
@@ -258,7 +269,9 @@ def firewall_probe_script(port):
     return (
         "$ErrorActionPreference = 'SilentlyContinue'\n"
         '$name = ' + _ps_string(firewall_rule_name(port)) + '\n'
-        '$found = @(Get-NetFirewallRule -DisplayName $name)\n'
+        '$legacy = ' + _ps_string(legacy_firewall_rule_name(port)) + '\n'
+        '$found = @(Get-NetFirewallRule -DisplayName $name) + '
+        '@(Get-NetFirewallRule -DisplayName $legacy)\n'
         '$good = $false\n'
         'foreach ($r in $found) {\n'
         '  $pf = $r | Get-NetFirewallPortFilter\n'
@@ -663,7 +676,7 @@ class Engine:
             # Per provider as well as in total, because a country backed by
             # eleven Surfshark exits and one Windscribe one is a different
             # proposition from the reverse, and the row that says only "12
-            # relays" cannot tell you which you are about to get.
+            # servers" cannot tell you which you are about to get.
             c['by'][s.provider] = c['by'].get(s.provider, 0) + 1
             if s.seconds is not None and (c['best'] is None
                                           or s.seconds < c['best']):

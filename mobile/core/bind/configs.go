@@ -1,4 +1,4 @@
-package relay
+package mirage
 
 // The Configs section, as Android talks to it: servers bought or given from
 // anywhere, read, tested and connected through core's sing-box Way

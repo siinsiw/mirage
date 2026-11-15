@@ -26,7 +26,7 @@ import (
 //
 // An iPhone on the same Wi-Fi - or one joined to this phone's hotspot - has
 // a setting for an HTTP proxy, and nothing else it needs. Point it at the
-// phone's address and a port, and its traffic leaves by whatever Relay is
+// phone's address and a port, and its traffic leaves by whatever Mirage is
 // connected through, with no app installed on it and, above all, no
 // credential on it: the exit's sign-in, the user's own server's key and the
 // pinned addresses all stay in this process. The device being helped only
@@ -90,7 +90,7 @@ const (
 	// LANProxyUser is the user name an HTTP client must give when a password
 	// is set. SOCKS5 is not held to it: its RFC 1929 field is whatever the
 	// client's settings box calls it, and only the password is the secret.
-	LANProxyUser = "relay"
+	LANProxyUser = "mirage"
 
 	lanMaxConns    = 256
 	lanHandshake   = 30 * time.Second
@@ -435,7 +435,7 @@ func (p *LANProxy) accept(addr netip.Addr, ln net.Listener) {
 				failed++
 			}
 			if failed >= lanAcceptGiveUp {
-				log.Printf("relay: sharing on %s stopped: %v", addr, err)
+				log.Printf("mirage: sharing on %s stopped: %v", addr, err)
 				p.mu.Lock()
 				if p.lns[addr] == ln {
 					delete(p.lns, addr)
@@ -1006,7 +1006,7 @@ func (p *LANProxy) serveHTTP(conn *idleConn, br *bufio.Reader, clientIP string) 
 		return
 	}
 	if !p.authorised(req.Header) {
-		httpReply(conn, http.StatusProxyAuthRequired, "Proxy-Authenticate: Basic realm=\"Relay\"\r\n")
+		httpReply(conn, http.StatusProxyAuthRequired, "Proxy-Authenticate: Basic realm=\"Mirage\"\r\n")
 		return
 	}
 
