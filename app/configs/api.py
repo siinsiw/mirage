@@ -64,6 +64,12 @@ class Section:
         self._cancel = None
         self._fetching = set()
         self._reconnect = None
+        # The first time this section has settings of its own, they start
+        # as Mirage's; after that the two are apart.
+        try:
+            store.seed_settings(prefs.from_mirage(owner._engine))
+        except Exception:
+            self._log('seed: ' + traceback.format_exc())
 
     # -- the one door ------------------------------------------------------
 
@@ -175,9 +181,28 @@ class Section:
         if not isinstance(changes, dict) or not changes:
             raise ValueError('nothing to change')
         changed = store.set_settings(changes)
-        return {'values': store.settings(), 'changed': changed,
-                'reconnect': self.runner.alive()
+        values = store.settings()
+        self.runner.prefs_changed()
+        applied = self._apply_live(changed, values)
+        return {'values': values, 'changed': changed, 'applied': applied,
+                'reconnect': self.runner.alive() and not applied
                 and any(prefs.reconnects(k) for k in changed)}
+
+    def _apply_live(self, changed, values):
+        """What can follow a change on a connection that is up, does: the
+        kill switch's hold, and the system proxy put on or taken off. A
+        move between the proxy and the adapter connects the same config
+        again. True when the change is already in effect."""
+        if not self.runner.active():
+            return False
+        done = False
+        if 'kill_switch' in changed:
+            self.kill_switch_changed(bool(values.get('kill_switch')))
+            done = True
+        if 'mode' in changed:
+            out = self.reroute()
+            done = out is True or out == 'reconnect'
+        return done
 
     # -- subscriptions -----------------------------------------------------
 

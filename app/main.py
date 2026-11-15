@@ -1150,7 +1150,11 @@ class Api:
         except Exception:
             pass
         released = False
-        if not on and not self._engine.running() and (
+        # The firewall hold is one, but a hold a config connection raised is
+        # Configs' own kill switch's to let go of, not this one's.
+        configs_hold = bool(self._configs.runner.port
+                            and self._configs.runner.active())
+        if not on and not self._engine.running() and not configs_hold and (
                 self._engine.engaged()
                 or self._engine.tun.held_by_firewall()):
             try:
@@ -1159,14 +1163,8 @@ class Api:
             except Exception:
                 pass
             self._holding = False
-        # A config connection's adapter is on its own port: its hold is set,
-        # and let go of, by the Configs section.
-        try:
-            if self._configs.kill_switch_changed(on):
-                released = True
-                self._holding = False
-        except Exception:
-            pass
+        # A config connection follows Configs' own kill switch, set in its
+        # own settings, not this one.
         update_settings(self._settings,
                         lambda st: st.__setitem__('killSwitch', on))
         return {'ok': True, 'killSwitch': on, 'released': released}
@@ -1194,11 +1192,7 @@ class Api:
                 self._engine.set_system_proxy = was
                 return {'ok': False, 'systemProxy': was,
                         'error': tun.explain(e) or str(e)[:200]}
-        # And to a config connection, which the engine does not run.
-        try:
-            self._configs.reroute()
-        except Exception:
-            pass
+        # A config connection has its own (Configs > Settings > Connection).
         self._settings['systemProxy'] = on
         save_settings(self._settings)
         return {'ok': True, 'systemProxy': on}
@@ -1228,13 +1222,7 @@ class Api:
                     pass
                 return {'ok': False, 'routeWith': was,
                         'error': tun.explain(e) or str(e)[:200]}
-        # A config connection moves too: between the proxy setting and the
-        # adapter that is the same config connected again.
-        if way != was:
-            try:
-                self._configs.reroute()
-            except Exception:
-                pass
+        # A config connection has its own (Configs > Settings > Connection).
         self._settings['routeWith'] = way
         save_settings(self._settings)
         return {'ok': True, 'routeWith': way}

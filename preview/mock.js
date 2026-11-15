@@ -43,7 +43,8 @@
       tls: true, allowInsecure: false,
       last: ms ? { ms, country: cc, at: now() - 600 } : null })),
     selected: 'c1', auto: false, fragment: false,
-    settings: { fragment: false },
+    settings: { mode: 'system', kill_switch: true, split_mode: 'bypass', split_iran: true,
+      split_apps: [], split_domains: [], fragment: false },
     live: { on: false, current: null, auto: false, using: null, blocked: false },
   };
   const cfList = () => ({ groups: CF.groups, configs: CF.configs, selected: CF.selected,

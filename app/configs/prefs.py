@@ -22,6 +22,18 @@ reconnect: whether a live connection has to be made again for it to apply.
 import re
 
 SCHEMA = {
+    # -- connection ---------------------------------------------------------
+    # system: a local proxy, and Windows pointed at it; tun: the whole PC
+    # through an adapter; local: only the local port, Windows left alone.
+    'mode': (('choice', ('system', 'tun', 'local')), 'system', True),
+    'kill_switch': ('bool', True, False),
+
+    # -- routing (the split, kept apart from Mirage's own) ------------------
+    'split_mode': (('choice', ('off', 'bypass', 'only')), 'off', True),
+    'split_iran': ('bool', True, True),
+    'split_apps': (('apps', 200), [], True),
+    'split_domains': (('domains', 500), [], True),
+
     # -- anti-filtering ---------------------------------------------------
     'fragment': ('bool', False, True),
 }
@@ -74,6 +86,24 @@ def check(key, value):
         if text and (len(text) > kind[1] or not re.match(r'^https://[^\s/]+', text)):
             raise ValueError('an https:// address')
         return text
+    if name == 'domains':
+        import split
+        items = (value if isinstance(value, (list, tuple))
+                 else re.split(r'[\s,;]+', str(value or '')))
+        out = []
+        for item in items:
+            item = str(item).strip()
+            if not item:
+                continue
+            try:
+                norm = split.normalize(item)
+            except split.Invalid:
+                raise ValueError(f'"{item[:60]}" is not a name, address or prefix') from None
+            if norm not in out:
+                out.append(norm)
+        if len(out) > kind[1]:
+            raise ValueError(f'at most {kind[1]} entries')
+        return out
     if name == 'apps':
         items = value if isinstance(value, (list, tuple)) else \
             re.split(r'[\s,;]+', str(value or ''))
@@ -90,6 +120,39 @@ def check(key, value):
             raise ValueError(f'at most {kind[1]} programs')
         return out
     raise ValueError('not a setting')
+
+
+def split_of(values):
+    """The split in the shape split.py keeps it, from these settings."""
+    return {'mode': values.get('split_mode', 'off'),
+            'iran': bool(values.get('split_iran', True)),
+            'apps': list(values.get('split_apps') or []),
+            'domains': list(values.get('split_domains') or [])}
+
+
+def from_mirage(engine):
+    """The first values, copied from Mirage's own switches - after this
+    the two are apart."""
+    out = {}
+    try:
+        on = bool(engine.set_system_proxy)
+        out['mode'] = ('tun' if on and engine.route_with == 'tun'
+                       else ('system' if on else 'local'))
+        out['kill_switch'] = bool(engine.kill_switch)
+        sp = engine.split or {}
+        out['split_mode'] = sp.get('mode') or 'off'
+        out['split_iran'] = bool(sp.get('iran', True))
+        out['split_apps'] = list(sp.get('apps') or [])
+        out['split_domains'] = list(sp.get('domains') or [])
+    except Exception:
+        return {}
+    clean = {}
+    for k, v in out.items():
+        try:
+            clean[k] = check(k, v)
+        except ValueError:
+            pass
+    return clean
 
 
 def reconnects(key):

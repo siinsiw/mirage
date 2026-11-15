@@ -32,7 +32,7 @@ _LOCK = threading.RLock()
 
 DEFAULTS = {'v': 1, 'groups': [{'id': MANUAL, 'kind': 'manual', 'name': ''}],
             'configs': [], 'selected': None, 'auto': False,
-            'fragment': False, 'settings': {}}
+            'fragment': False, 'settings': {}, 'seeded': False}
 
 
 def _empty():
@@ -194,6 +194,18 @@ def settings(state=None):
     """Every setting of this section, saved or default (prefs.SCHEMA)."""
     state = state or load()
     return prefs.merged(state.get('settings'))
+
+
+def seed_settings(values, path=None):
+    """The first settings, once: copied from Mirage's own when this section
+    first has settings of its own. After that the two are apart."""
+    def go(state):
+        if state.get('seeded'):
+            return False
+        state['settings'] = dict(values or {}, **(state.get('settings') or {}))
+        state['seeded'] = True
+        return True
+    return _edit(go, path)
 
 
 def set_settings(changes, path=None):
