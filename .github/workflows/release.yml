@@ -146,6 +146,10 @@ jobs:
             Configs and the sign-in go in from inside the app; no cable is
             needed.
 
+            From 0.3.2 the app is Mirage, with a new package name (app.mirage):
+            it installs beside an older Relay rather than over it. Add your
+            accounts and configs in Mirage, then uninstall Relay.
+
             Signed with this repository's release key; a release is not
             built without it. A build signed with a different key cannot be
             installed over this one; it has to be uninstalled first, and that
