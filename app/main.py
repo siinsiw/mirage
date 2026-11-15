@@ -138,6 +138,35 @@ def _log_line(name, text, cap=64_000):
         pass
 
 
+def _last_setup_failures():
+    """The last setup that did not finish, per provider, out of setup.log:
+    {provider: {'at': epoch, 'why': text}}. A provider whose last line is a
+    finish has none. Never raises."""
+    out = {}
+    try:
+        with open(os.path.join(paths.STATE_DIR, 'setup.log'),
+                  encoding='utf-8', errors='replace') as f:
+            lines = f.read().splitlines()[-200:]
+    except OSError:
+        return out
+    for line in lines:
+        stamp, _, rest = line[:19], line[19:20], line[20:]
+        provider, sep, why = rest.partition(': ')
+        if not sep or provider not in ('surfshark', 'windscribe'):
+            continue
+        try:
+            at = int(time.mktime(time.strptime(stamp, '%Y-%m-%d %H:%M:%S')))
+        except ValueError:
+            continue
+        if why.strip() == 'finished':
+            out.pop(provider, None)
+        else:
+            # Without the bracketed route note the log keeps for whoever
+            # reads the file: the screen wants the sentence.
+            out[provider] = {'at': at, 'why': why.split(' [route=')[0][:300]}
+    return out
+
+
 def _diagnostics_to_file(name):
     """A --noconsole build has no stdout at all, so a diagnostic that prints
     is a diagnostic nobody can read. Everything goes to a file as well, and
@@ -611,14 +640,37 @@ class Api:
         counts = self._engine.counts_by_provider()
         waiting = self._unpinned_by_provider()
         roster = accounts.listing()
+        done = self._settings.get('setupAt') or {}
+        failed = _last_setup_failures()
         out = {}
         for name in accounts.PROVIDERS:
             servers = counts.get(name, 0)
             signed = any(a['provider'] == name and a['signedIn'] for a in roster)
+            at = done.get(name) if isinstance(done, dict) else None
+            fail = failed.get(name)
             out[name] = {'servers': servers, 'account': signed,
                          'waiting': waiting.get(name, 0),
-                         'usable': bool(servers) and signed}
+                         'usable': bool(servers) and signed,
+                         # When its servers were last set up whole, and the
+                         # last setup that did not finish - only if it came
+                         # after, since a later success answers it.
+                         'setupAt': at,
+                         'setupFail': (fail if fail and (not at or fail['at'] > at)
+                                       else None)}
         return out
+
+    def setupDone(self, provider=None):
+        """A setup that got to the end: fetched and pinned. Stamped so the
+        Servers screen can say when, and so an older failure stops showing."""
+        if provider not in accounts.PROVIDERS:
+            return {'ok': False}
+        done = self._settings.get('setupAt')
+        done = dict(done) if isinstance(done, dict) else {}
+        done[provider] = int(time.time())
+        self._settings['setupAt'] = done
+        save_settings(self._settings)
+        _log_line('setup.log', f'{provider}: finished')
+        return {'ok': True, 'at': done[provider]}
 
     @staticmethod
     def _unpinned_by_provider():

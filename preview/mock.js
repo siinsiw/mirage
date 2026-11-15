@@ -144,8 +144,9 @@
     surfshark: { servers: 0, account: false, waiting: 0, usable: false },
     windscribe: { servers: 0, account: false, waiting: 0, usable: false },
   } : {
-    surfshark: { servers: 84, account: true, waiting: 0, usable: true },
-    windscribe: { servers: 41, account: true, waiting: 12, usable: true },
+    surfshark: { servers: 84, account: true, waiting: 0, usable: true, setupAt: Math.floor(now() - 86400 * 2), setupFail: null },
+    windscribe: { servers: 41, account: true, waiting: 12, usable: true, setupAt: Math.floor(now() - 86400 * 5),
+                  setupFail: { at: Math.floor(now() - 3600), why: 'The server check stopped answering. Press Try again.' } },
   });
 
   const sources = () => ({
@@ -467,6 +468,8 @@
     setPinRoute: () => ({ ok: true, ...pinPlan() }),
     startPin,
     cancelPin: () => { pinTimers.forEach(clearTimeout); return { ok: true }; },
+    setupDone: () => ({ ok: true, at: Math.floor(now()) }),
+    logSetup: () => ({ ok: true }),
     surfsharkServers: () => new Promise((r) => later(1600, () => r({ ok: true, written: 96 }))),
     windscribeServers: () => new Promise((r) => later(1600, () => r({ ok: true, written: 41, pinFolder: '' }))),
     sweepPlan,

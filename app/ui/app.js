@@ -471,6 +471,10 @@ function drawList(query) {
     q ? state.fuse.search(q).map((r) => r.item) : state.countries);
   if (!found.length) {
     tally.textContent = '0';
+    if (!q) {
+      list.append(setupAgainNote('No servers here yet. A setup may not have finished.'));
+      return;
+    }
     const e = document.createElement('p');
     e.className = 'empty';
     e.textContent = `No country matches “${q}”.`;
@@ -502,6 +506,11 @@ function drawList(query) {
     if (rest.length) groups.push([starred.length ? 'All locations' : 'Locations', rest, said]);
     const dead = others.filter(deadHere).sort((a, b) => a.name.localeCompare(b.name));
     if (dead.length) groups.push(['Not answering', dead, 'Their exits turned the last test away']);
+    // Nothing left that answers: the list itself offers the way out.
+    if (!starred.length && !rest.length && dead.length) {
+      list.append(setupAgainNote('None of these answered the last test. '
+        + 'Setting the servers up again fetches fresh ones.'));
+    }
   }
 
   // Fastest first is only honest about the countries that were timed; within
@@ -2599,6 +2608,7 @@ function paintPrefs(info) {
   $('keepOnClose').setAttribute('aria-checked', String(!!info.keepOnClose));
   if (info.port) state.port = info.port;
   paintPort();
+  paintSetupCards(info);
   $('folderPath').textContent = info.folder || '—';
   $('folderCount').textContent =
     `${info.serverCount || 0} servers · ${state.countries.length} countries`;
@@ -3503,6 +3513,7 @@ async function bootSteps() {
   // had no starred places to put there.
   state.favourites = info.favourites || state.favourites;
   state.sortBy = info.sortBy || state.sortBy;
+  if (info.providerState) state.providerState = info.providerState;
   state.fuse = new Fuse(state.countries, {
     keys: ['name', 'code', 'alias'], threshold: 0.4, ignoreLocation: true,
   });
@@ -8237,6 +8248,78 @@ function paintDropList() {
   }
 }
 
+/* Settings › Servers › Your servers: one card per provider, with what it has,
+   when it was last set up, the last setup that did not finish, and the way to
+   do it again. */
+function paintSetupCards(info) {
+  const box = $('setupCards');
+  if (!box) return;
+  const per = (info && info.providerState) || state.providerState || {};
+  if (info && info.providerState) state.providerState = info.providerState;
+  box.replaceChildren();
+  for (const key of Object.keys(PROVIDER_NAMES)) {
+    const p = per[key] || {};
+    const li = document.createElement('li');
+    li.className = 'setupcard';
+    li.dataset.provider = key;
+    const head = document.createElement('p');
+    head.className = 'setupcard__head';
+    const nm = document.createElement('b');
+    nm.textContent = PROVIDER_NAMES[key];
+    head.append(providerMark(key, 'ico setupcard__mark'), nm);
+    const countries = (state.countries || []).filter((c) => (c.by || {})[key]).length;
+    const line = document.createElement('p');
+    line.className = 'setupcard__line';
+    line.textContent = !p.account ? 'Not signed in'
+      : !p.servers ? 'No servers yet'
+        : `${p.servers} servers · ${countries} countries`
+          + (p.setupAt ? ` · set up ${whenAgo(p.setupAt)}` : '');
+    li.append(head, line);
+    if (p.setupFail) {
+      const bad = document.createElement('p');
+      bad.className = 'setupcard__fail';
+      bad.textContent = `Last try, ${whenAgo(p.setupFail.at)}: ${p.setupFail.why}`;
+      li.append(bad);
+    }
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'btn btn--quiet btn--auto setupcard__go';
+    go.textContent = p.account ? 'Set up again' : 'Sign in first';
+    go.disabled = !p.account;
+    go.addEventListener('click', () => prepareServers(key));
+    li.append(go);
+    box.append(li);
+  }
+}
+
+/* The same, from the list itself, for when it has nothing worth picking:
+   no servers at all, or every one of them refused the last test. */
+function setupAgainNote(text) {
+  const signed = Object.entries(state.providerState || {})
+    .filter(([, p]) => p && p.account).map(([k]) => k);
+  const p = document.createElement('div');
+  p.className = 'empty empty--setup';
+  const t = document.createElement('p');
+  t.textContent = text;
+  p.append(t);
+  if (signed.length) {
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'btn btn--quiet btn--auto';
+    go.textContent = signed.length > 1 ? 'Set up all servers again' : 'Set up servers again';
+    go.addEventListener('click', async () => {
+      shut($('picker'));
+      for (const key of signed) {
+        // One after the other: they share the pinning run.
+        // eslint-disable-next-line no-await-in-loop
+        if (!(await prepareServers(key))) break;
+      }
+    });
+    p.append(go);
+  }
+  return p;
+}
+
 /* How long ago, in the words a person would use. Not a timestamp: the point
    of the sentence is whether the verdict is fresh enough to act on, and
    "1788752940" answers that for nobody. */
@@ -8933,6 +9016,10 @@ async function prepareServers(provider) {
   }
   if (p.error) { setupFail(p.error); return false; }
   if (!p.written) { setupFail('No server answered. Try again in a moment.'); return false; }
+  try {
+    await window.pywebview.api.setupDone(provider);
+    await refreshPrefs();
+  } catch (e) { /* the stamp is not worth failing a setup that worked */ }
   setupAt('pinning', 'done');
   $('setupTitle').textContent = 'Ready';
   $('setupSay').textContent = 'Mirage connects through whichever server answers first.';

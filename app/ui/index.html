@@ -1393,6 +1393,21 @@
 
     <section class="screen" data-screen="servers" hidden>
 
+    <!-- 4½ · the one most people need from this screen: get a provider's
+         servers again, whole, when a setup did not finish or some are missing. -->
+    <section class="pane" id="prefSetup">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg></span>
+        <h3 class="pane__title">Your servers</h3>
+      </div>
+      <p class="pane__why">Servers missing, or a setup that did not finish? Set them up
+        again: Mirage fetches that provider's list afresh and pins every server,
+        the same as the first time. Your account and starred places stay.</p>
+      <div class="pane__body">
+        <ul class="setupcards" id="setupCards" aria-label="Servers per provider"></ul>
+      </div>
+    </section>
+
     <!-- 5 · a folder in, a folder out, and the one decision in between.
          Shaped as the route it describes rather than as another form: three
          nodes on a line, which is what the operation is. -->
