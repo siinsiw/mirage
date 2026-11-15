@@ -20,6 +20,74 @@
     }
   };
 
+  /* -------------------------------------------------------------- configs */
+
+  // Configs' sample list: one subscription and two added by hand. Nothing
+  // here connects; connect answers as the real section does, by events.
+  const CF = {
+    groups: [
+      { id: 'manual', kind: 'manual', name: '' },
+      { id: 's-1', kind: 'sub', name: 'Night Owl VPN', host: 'sub.example.net',
+        info: { upload: 1.2e9, download: 18.4e9, total: 100e9, expire: now() + 86400 * 23 },
+        updated: now() - 3600 * 5 },
+    ],
+    configs: [
+      ['c1', 'manual', 'My Hetzner box', 'VLESS · Reality', 'de', 182],
+      ['c2', 'manual', 'Friend in Istanbul', 'Trojan', 'tr', 96],
+      ['c3', 's-1', '🇳🇱 Amsterdam 01', 'VMess · WS', 'nl', 231],
+      ['c4', 's-1', '🇫🇮 Helsinki 02', 'Hysteria2', 'fi', 205],
+      ['c5', 's-1', '🇺🇸 New York 05', 'VLESS · gRPC', null, null],
+    ].map(([id, group, name, label, cc, ms]) => ({
+      id, group, name, label, proto: label.split(' ')[0].toLowerCase(),
+      host: `${id}.example.net`, port: 443, warnings: [], engine: 'singbox',
+      tls: true, allowInsecure: false,
+      last: ms ? { ms, country: cc, at: now() - 600 } : null })),
+    selected: 'c1', auto: false, fragment: false,
+    settings: { fragment: false },
+    live: { on: false, current: null, auto: false, using: null, blocked: false },
+  };
+  const cfList = () => ({ groups: CF.groups, configs: CF.configs, selected: CF.selected,
+    auto: CF.auto, fragment: CF.settings.fragment, engines: { singbox: true, xray: true },
+    live: CF.live, testing: false });
+  function configsMock(action, p) {
+    switch (action) {
+      case 'list': return { ok: true, list: cfList() };
+      case 'pick': CF.selected = p.id; return { ok: true, list: cfList() };
+      case 'settings': return { ok: true, values: { ...CF.settings } };
+      case 'set':
+        Object.assign(CF.settings, p.values || {});
+        return { ok: true, values: { ...CF.settings }, changed: Object.keys(p.values || {}),
+          reconnect: CF.live.on };
+      case 'connect':
+      case 'switch': {
+        const id = p.id || CF.selected;
+        CF.selected = id;
+        later(500, () => emit('Progress', { phase: 'starting' }));
+        later(1300, () => {
+          CF.live = { on: true, current: id, auto: !!p.auto, using: id, blocked: false };
+          const c = CF.configs.find((x) => x.id === id) || {};
+          S.connected = true; S.since = now();
+          emit('Connected', { state: 'on', since: now(), configs: true,
+            exit: { host: c.name, country: (c.last && c.last.country) || '', ip: '203.0.113.7',
+              seen_as: { ip: '203.0.113.7', country: (c.last && c.last.country) || '' } } });
+          emit('Configs', { kind: 'list', list: cfList() });
+        });
+        return { ok: true };
+      }
+      case 'test': {
+        const ids = p.ids || CF.configs.map((c) => c.id);
+        ids.forEach((id, i) => later(250 * (i + 1), () => {
+          const c = CF.configs.find((x) => x.id === id);
+          c.last = { ms: 90 + Math.round(Math.random() * 300), country: (c.last && c.last.country) || 'us', at: now() };
+          emit('Configs', { kind: 'test', done: i + 1, total: ids.length, id, result: c.last });
+        }));
+        later(250 * (ids.length + 1), () => emit('Configs', { kind: 'tested', list: cfList() }));
+        return { ok: true, total: ids.length };
+      }
+      default: return { ok: true, list: cfList() };
+    }
+  }
+
   /* ------------------------------------------------------------ catalogue */
 
   // [code, name, continent, alias, [[city, surfshark, windscribe, ms|null|'x']]]
@@ -271,6 +339,7 @@
     connectTimers.forEach(clearTimeout);
     const minutes = S.connected ? Math.max(1, Math.round((now() - S.since) / 60)) : 0;
     S.connected = false;
+    CF.live = { on: false, current: null, auto: false, using: null, blocked: false };
     clearInterval(trafficTimer);
     return { ok: true, session: { minutes } };
   }
@@ -469,6 +538,8 @@
     startPin,
     cancelPin: () => { pinTimers.forEach(clearTimeout); return { ok: true }; },
     setupDone: () => ({ ok: true, at: Math.floor(now()) }),
+    setSection: (section) => ({ ok: true, section }),
+    configs: (action, p) => configsMock(action, p || {}),
     logSetup: () => ({ ok: true }),
     surfsharkServers: () => new Promise((r) => later(1600, () => r({ ok: true, written: 96 }))),
     windscribeServers: () => new Promise((r) => later(1600, () => r({ ok: true, written: 41, pinFolder: '' }))),

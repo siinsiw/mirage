@@ -21,7 +21,7 @@ import traceback
 
 import paths
 
-from . import links, probe, runner, store, subs
+from . import links, prefs, probe, runner, store, subs
 
 
 def clipboard_text(limit=links.MAX_TEXT):
@@ -151,9 +151,33 @@ class Section:
         key = str(p.get('key'))
         if key not in ('fragment',):
             raise ValueError('not an option')
-        store.set_option(key, bool(p.get('on')))
+        store.set_settings({key: bool(p.get('on'))})
         return {'list': self._listing(),
                 'reconnect': self.runner.alive()}
+
+    def do_pick(self, p):
+        """The one Connect will use, without connecting."""
+        cid = str(p.get('id') or '')
+        if not store.find(cid):
+            raise ValueError('that config is not there any more')
+        store.set_option('selected', cid)
+        return {'list': self._listing()}
+
+    # -- the section's own settings ------------------------------------------
+
+    def do_settings(self, p):
+        return {'values': store.settings()}
+
+    def do_set(self, p):
+        """One or more settings, {values: {key: value}}. Says whether the
+        connection that is up has to be made again for them to apply."""
+        changes = p.get('values')
+        if not isinstance(changes, dict) or not changes:
+            raise ValueError('nothing to change')
+        changed = store.set_settings(changes)
+        return {'values': store.settings(), 'changed': changed,
+                'reconnect': self.runner.alive()
+                and any(prefs.reconnects(k) for k in changed)}
 
     # -- subscriptions -----------------------------------------------------
 
@@ -240,7 +264,7 @@ class Section:
         if not configs:
             raise ValueError('nothing to test')
         cancel = self._cancel = threading.Event()
-        fragment = bool(state.get('fragment'))
+        fragment = bool(store.settings(state).get('fragment'))
 
         def work():
             try:

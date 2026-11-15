@@ -860,6 +860,7 @@ class Api:
                 'picked': self._settings.get('picked', 'auto'),
                 'favourites': self._settings.get('favourites') or [],
                 'sortBy': self._settings.get('sortBy', 'windscribe'),
+                'section': self._settings.get('section', 'main'),
                 'connected': bool(self._engine.running()),
                 'keepOnClose': bool(self._settings.get('keepOnClose')),
                 'window': self._window_options(),
@@ -2815,6 +2816,15 @@ class Api:
             save_settings(self._settings)
         self._retray()
         return {'ok': True, 'codes': codes, 'on': on}
+
+    def setSection(self, section=None):
+        """Which of the two sections was open last - Mirage or Configs -
+        so the window opens on it next time."""
+        section = 'configs' if section == 'configs' else 'main'
+        if self._settings.get('section') != section:
+            self._settings['section'] = section
+            save_settings(self._settings)
+        return {'ok': True, 'section': section}
 
     def setSort(self, kind=None):
         """How the list is ordered. Answering-first stays underneath every

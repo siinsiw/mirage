@@ -233,7 +233,7 @@ class Runner:
             held = self.holding()
             self.disconnect(quiet=True, hold=held)
             progress({'phase': 'starting', 'country': '', 'city': cfg['name']})
-            fragment = bool(state.get('fragment'))
+            fragment = bool(store.settings(state).get('fragment'))
             mode = ('tun' if self.engine.set_system_proxy
                     and self.engine.route_with == 'tun' else 'proxy')
             port = self.port if (self.port and mode == self.mode

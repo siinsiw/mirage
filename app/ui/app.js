@@ -268,6 +268,8 @@ function nameOf(code) {
 let shownConn = null;
 
 function render() {
+  // Configs' own home reads the same state, so it is repainted with this.
+  if (window.cfgSync) window.cfgSync();
   const act = $('act');
   const visualState = state.mode === 'fail' ? 'fail' : state.mode;
   document.documentElement.dataset.conn = visualState;
@@ -3575,6 +3577,12 @@ async function bootSteps() {
   // is the DOM work that is being moved, and the flags are being fetched
   // alongside it by the line above.
   drawList('');
+  // Back in Configs if that is where the window was left - unless a setup
+  // or another sheet is already in front.
+  if (info.section === 'configs' && window.cfgShell
+      && !document.querySelector('dialog[open]')) {
+    window.cfgShell.enter(true);
+  }
 }
 
 /* --------------------------------------------------------------- wiring */
