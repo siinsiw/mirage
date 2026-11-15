@@ -149,12 +149,14 @@ class Runner:
         """Configs' settings, read once and kept until they change - this is
         asked every second by the status and the drop watch, and the file is
         sealed."""
-        if self._prefs is None:
+        got = self._prefs
+        if got is None:
             try:
-                self._prefs = store.settings()
+                got = store.settings()
             except Exception:
                 return _prefs.defaults()
-        return self._prefs
+            self._prefs = got
+        return got
 
     def prefs_changed(self):
         self._prefs = None
@@ -213,7 +215,7 @@ class Runner:
             else ('broken' if on else 'off')
         out = {'state': state, 'port': self.port or 0,
                'systemProxy': self.points_windows(),
-               'routeWith': self.want_mode(),
+               'routeWith': (self.mode if on and self.mode else self.want_mode()),
                'tun': self.mode == 'tun' and on,
                'blocked': self.blocked() if self.port else False,
                'killSwitch': self.kill_switch(),
@@ -317,6 +319,13 @@ class Runner:
                         self.sysproxy.engage('127.0.0.1', port)
                         if self.engine.tun.held_by_firewall():
                             self.engine.tun.release_firewall()
+                    # An adapter still up for another port - Mirage's, held
+                    # across the handoff, or this section's own from before a
+                    # move off the whole-PC mode - is not this connection's,
+                    # and would go on carrying the whole machine past it.
+                    if (self.engine.tun.running()
+                            and not self.engine.tun.engaged_for(port)):
+                        self.engine.tun.stop()
                 else:
                     progress({'phase': 'adapter'})
                     self.engine.tun.start(port, watch=os.getpid(),

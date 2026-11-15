@@ -217,7 +217,9 @@ function setStatus(word, kind, where, host) {
   s.dataset.state = kind;
   // As text: these carry an exit's name and place, and this page holds
   // the whole Python bridge - markup taken from a hostname would be script
-  // with every pywebview.api call in reach. A no-break space keeps the
+  // with every pywebview.api call in reach. Configs' home hears it too.
+  setTimeout(() => { if (window.cfgSync) window.cfgSync(); }, 0);
+  // A no-break space keeps the
   // line's height when there is nothing to say.
   $('statusWhere').textContent = where || ' ';
   $('statusHost').textContent = host || ' ';
@@ -885,7 +887,7 @@ window.onConnected = (status) => {
         ? 'Connected, but the independent check did not answer. If pages load, it is fine.'
         : (status.tun
             ? 'Every program on this PC now goes through this connection, including the ones that ignore the proxy setting.'
-            : (state.systemProxy
+            : ((status.configs ? !!status.systemProxy : state.systemProxy)
                 ? 'Everything on this PC now goes through this connection.'
                 : `Serving on 127.0.0.1:${state.port}. Windows was left alone, so point what you want at it.`)))),
   !!warn);

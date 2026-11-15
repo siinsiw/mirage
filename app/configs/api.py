@@ -197,12 +197,18 @@ class Section:
         kill switch's hold, and the system proxy put on or taken off. A
         move between the proxy and the adapter connects the same config
         again. True when the change is already in effect."""
-        if not self.runner.active():
-            return False
         done = False
         if 'kill_switch' in changed:
-            self.kill_switch_changed(bool(values.get('kill_switch')))
-            done = True
+            # Held is exactly when nothing is active - so this goes first,
+            # and on its own: turned off while holding, the hold goes.
+            on = bool(values.get('kill_switch'))
+            if self.kill_switch_changed(on):
+                self.owner._holding = False
+                self.owner._emit('Disconnected', {'minutes': 0})
+                return True
+            done = self.runner.active()
+        if not self.runner.active():
+            return done
         if 'mode' in changed:
             out = self.reroute()
             done = out is True or out == 'reconnect'
@@ -458,7 +464,11 @@ class Section:
         r.set_kill_switch(on)
         if on or r.alive() or not r.port:
             return False
-        if r.engaged() or self.owner._engine.tun.held_by_firewall():
+        eng = self.owner._engine
+        # A hold Mirage's own connection raised is Mirage's kill switch's.
+        if eng.running() or eng.engaged():
+            return False
+        if r.engaged() or eng.tun.held_by_firewall():
             r.disconnect(quiet=True)
             self._reconnect = None
             return True
@@ -479,6 +489,7 @@ class Section:
                 self.do_connect({'id': cid, 'auto': r.auto})
             except ValueError as e:
                 self._log(f'reroute: {e}')
+                return 'failed'
         return out
 
     def take_reconnect(self):

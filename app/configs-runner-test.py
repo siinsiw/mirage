@@ -58,6 +58,12 @@ class Engine:
         self.set_system_proxy = system_proxy
         self.route_with = route
 
+    def running(self):
+        return False
+
+    def engaged(self):
+        return False
+
 
 class SysProxy:
     def __init__(self, port=None):
@@ -186,6 +192,19 @@ def test_turning_the_kill_switch_off_while_held_lets_go():
     assert not r.blocked()
 
 
+def test_configs_own_kill_switch_turned_off_while_held_lets_go():
+    r = _proxy_runner()
+    r.box.alive = False           # held: nothing active, Windows still points here
+    s = _section(r)
+    sent = []
+    s.owner._emit = lambda name, payload=None: sent.append(name)
+    s.owner._holding = True
+    r._prefs['kill_switch'] = False
+    assert s._apply_live(['kill_switch'], {'kill_switch': False}) is True
+    assert not r.sysproxy.engaged_for(PORT) and not s.owner._holding
+    assert sent == ['Disconnected']
+
+
 def test_turning_the_kill_switch_on_or_off_while_up_lets_nothing_go():
     r = _proxy_runner()
     s = _section(r)
@@ -252,7 +271,7 @@ def test_settings_start_as_mirages_once():
 
 
 def test_a_setting_out_of_range_is_refused():
-    for key, bad in (('mode', 'vpn'), ('split_apps', 'not a program'),
+    for key, bad in (('mode', 'vpn'), ('split_apps', 'bad|name'),
                      ('split_domains', 'exa mple..com')):
         try:
             store.set_settings({key: bad})

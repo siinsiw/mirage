@@ -199,9 +199,15 @@
     n.dataset.bad = bad ? '1' : '0';
   }
 
-  async function set(key, value) {
+  async function set(key, value, typed) {
     const r = await call('set', { values: { [key]: value } });
-    if (!r.ok) { say(r.error, true); draw(); return; }
+    if (!r.ok) {
+      say(r.error, true);
+      // A switch or a pill goes back to what is saved; a field keeps what
+      // was typed in it, so it can be put right rather than typed again.
+      if (!typed) draw();
+      return;
+    }
     view.values = r.values;
     say(r.reconnect ? 'Saved. It applies when you connect again.'
       : (r.changed && r.changed.length ? 'Saved.' : ''));
@@ -245,7 +251,7 @@
     if (f.type === 'apps') input.rows = 3;
     const commit = () => {
       const was = Array.isArray(v) ? v.join('\n') : String(v ?? '');
-      if (input.value !== was) set(f.key, f.type === 'int' ? Number(input.value) : input.value);
+      if (input.value !== was) set(f.key, f.type === 'int' ? Number(input.value) : input.value, true);
     };
     input.addEventListener('change', commit);
     input.addEventListener('keydown', (e) => {
@@ -322,7 +328,13 @@
   $('cfgPrefsOpen').addEventListener('click', open);
   $('cfgPrefsBack').addEventListener('click', back);
   $('cfgPrefsClose').addEventListener('click', () => shut($('cfgPrefs')));
-  $('cfgPrefs').addEventListener('cancel', (e) => { e.preventDefault(); back(); });
+  // Capturing, so Esc on a screen steps back to the menu before app.js's
+  // handler for every sheet shuts the whole window.
+  $('cfgPrefs').addEventListener('cancel', (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    back();
+  }, { capture: true });
 
   window.cfgPrefs = { open, SCREENS, FIELDS };
 }());

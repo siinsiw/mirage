@@ -468,6 +468,15 @@
         <span class="cfghero__sub mono" id="cfgNowSub">Pick one below</span>
       </span>
     </div>
+    <!-- The whole system through the config (the adapter), or only what
+         follows Windows' proxy setting. The same as Settings > Connection,
+         here because it is the one people change. -->
+    <label class="cfghero__tun">
+      <span class="cfghero__tuntext"><b>Whole system (TUN)</b>
+        <i id="cfgTunWhy">Every program, not only the ones that follow the proxy setting</i></span>
+      <button class="toggle" id="cfgTun" type="button" role="switch" aria-checked="false"
+              aria-label="Whole system (TUN)"><span></span></button>
+    </label>
     <button class="go cfghero__go" id="cfgGo" type="button" data-mode="off" disabled>
       <span class="go__word" data-for="off">Connect</span>
       <span class="go__word" data-for="busy">Cancel</span>

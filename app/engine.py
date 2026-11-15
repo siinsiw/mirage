@@ -1653,6 +1653,11 @@ class Engine:
             # its job; no adapter is coming to lift it, so it is lifted here.
             if self.tun.held_by_firewall():
                 self.tun.release_firewall()
+            # And an adapter still up for another port - a config's, held
+            # across the handoff to this connection - would go on carrying
+            # the whole machine through that config.
+            if self.tun.running() and not self.tun.engaged_for(self.port):
+                self.tun.stop()
 
     def hand_split(self, adapter=None):
         """Give the split rules to whichever is deciding: the worker, by its

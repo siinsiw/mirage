@@ -317,6 +317,9 @@
      of the main home, so the two never disagree. */
   function heroState() {
     const live = (view.list && view.list.live) || {};
+    // Held by a kill switch, whichever section raised it: said here, with
+    // its way out, rather than only on Mirage's page behind this one.
+    if (state.blocked) return 'held';
     if (state.mode === 'busy' && view.mine) return 'busy';
     if (state.mode === 'on' && live.on) return 'on';
     if (state.mode === 'fail' && view.mine) return 'fail';
@@ -328,10 +331,16 @@
     const live = view.list.live || {};
     const hs = heroState();
     if (state.mode === 'off' || (state.mode === 'on' && !live.on)) view.mine = false;
-    $('cfgHero').dataset.state = hs;
+    $('cfgHero').dataset.state = hs === 'held' ? 'fail' : hs;
+    // A drop, a tray Disconnect, a hold: the list's own idea of what is up
+    // is asked for again rather than left saying connected.
+    if (live.on && state.mode !== 'on' && state.mode !== 'busy' && !view.asking) {
+      view.asking = true;
+      refresh().finally(() => { view.asking = false; });
+    }
     const id = live.on ? (live.using || live.current) : view.list.selected;
     const c = id && id !== 'auto' ? find(id) : null;
-    const word = { off: 'Disconnected', busy: 'Connecting', on: 'Connected' }[hs]
+    const word = { off: 'Disconnected', busy: 'Connecting', on: 'Connected', held: 'Blocked' }[hs]
       || ($('status').textContent || 'Not connected');
     $('cfgState').textContent = word;
     $('cfgClock').textContent = hs === 'on' && state.since
@@ -350,14 +359,17 @@
       $('cfgNowName').textContent = view.list.configs.length ? 'No config picked' : 'No configs yet';
       $('cfgNowSub').textContent = view.list.configs.length ? 'Pick one below' : 'Paste links or add a subscription below';
     }
+    $('cfgTun').setAttribute('aria-checked', view.list.mode === 'tun' ? 'true' : 'false');
     const go = $('cfgGo');
-    go.dataset.mode = hs === 'fail' ? 'off' : hs;
+    go.dataset.mode = hs === 'fail' ? 'off' : (hs === 'held' ? 'on' : hs);
     // Busy with a connect that is not this section's: wait for it.
     go.disabled = (hs === 'off' && (!c || state.mode === 'busy'));
     const provider = !live.on && (state.mode === 'on' || (state.mode === 'busy' && !view.mine));
-    $('cfgNote').textContent = provider
-      ? 'Mirage is connected through a provider. Connecting here takes over from it.'
-      : (hs === 'fail' ? ($('hint').textContent || '') : '');
+    $('cfgNote').textContent = hs === 'held'
+      ? 'The connection dropped and the kill switch is holding: nothing leaves on your normal line. Disconnect to use it again, or pick a config to reconnect.'
+      : provider
+        ? 'Mirage is connected through a provider. Connecting here takes over from it.'
+        : (hs === 'fail' ? ($('hint').textContent || '') : '');
   }
   window.cfgSync = () => { if ($('configsDlg').open) sync(); };
   setInterval(() => { if ($('configsDlg').open && heroState() === 'on') sync(); }, 1000);
@@ -425,9 +437,20 @@
     if (r.ok) draw(r.list); else say(r.error, true);
   }
 
+  $('cfgTun').addEventListener('click', async () => {
+    const on = $('cfgTun').getAttribute('aria-checked') !== 'true';
+    const r = await call('set', { values: { mode: on ? 'tun' : 'system' } });
+    if (!r.ok) { say(r.error, true); return; }
+    say(r.applied ? (on ? 'Moving the whole system onto the config… Windows may ask for administrator approval.'
+      : 'Back to the proxy setting…')
+      : (on ? 'The whole system goes through the config from the next connect. It asks for administrator approval.'
+        : 'Only what follows the proxy setting goes through it from the next connect.'));
+    refresh();
+  });
+
   $('cfgGo').addEventListener('click', async () => {
     const hs = heroState();
-    if (hs === 'on' || hs === 'busy') {
+    if (hs === 'on' || hs === 'busy' || hs === 'held') {
       setStatus(hs === 'busy' ? 'Cancelling' : 'Disconnecting', 'off', 'Putting Windows back', '');
       const r = await window.pywebview.api.disconnect();
       view.mine = false;
@@ -582,6 +605,7 @@
     const live = (view.list && view.list.live) || {};
     if (live.on && view.list.selected) {
       // A different shape of connection, so it is made again.
+      view.mine = true;
       state.mode = 'busy';
       render();
       setStatus('Connecting', 'busy', on ? 'Fastest, automatically' : 'The one you picked', '');

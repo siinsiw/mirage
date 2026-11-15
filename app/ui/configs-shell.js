@@ -102,7 +102,13 @@
   $('configsOpen').addEventListener('click', () => enter(false));
   $('cfgToMain').addEventListener('click', leave);
   // Esc goes back to Mirage, the way the switch does.
-  dlg.addEventListener('cancel', (e) => { e.preventDefault(); leave(); });
+  // Capturing, so it runs before app.js's handler for every sheet, which
+  // would shut this one by the CSS way and fight the timeline.
+  dlg.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    leave();
+  }, { capture: true });
 
   window.cfgShell = { enter, leave, isOpen: () => dlg.open };
 }());

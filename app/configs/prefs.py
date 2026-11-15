@@ -190,15 +190,19 @@ def check(key, value):
             raise ValueError(f'at most {kind[1]} entries')
         return out
     if name == 'apps':
-        items = value if isinstance(value, (list, tuple)) else \
-            re.split(r'[\s,;]+', str(value or ''))
+        import split
+        # One per line (or comma): a program's name may have spaces in it.
+        items = (value if isinstance(value, (list, tuple))
+                 else re.split(r'[\r\n,;]+', str(value or '')))
         out = []
         for item in items:
             item = str(item).strip()
             if not item:
                 continue
-            if not _APP.match(item):
-                raise ValueError(f'"{item[:40]}" is not a program name like chrome.exe')
+            try:
+                item = split.normalize_app(item)
+            except split.Invalid:
+                raise ValueError(f'"{item[:40]}" is not a program name like chrome.exe') from None
             if item.lower() not in (x.lower() for x in out):
                 out.append(item)
         if len(out) > kind[1]:

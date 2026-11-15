@@ -348,5 +348,7 @@ def listing(state=None):
             'last': c.get('last')})
     return {'groups': [_public_group(g) for g in state['groups']],
             'configs': configs, 'selected': state.get('selected'),
+            # The one setting the home shows: whole PC or not.
+            'mode': settings(state).get('mode'),
             'auto': bool(state.get('auto')),
             'fragment': bool(state.get('fragment'))}

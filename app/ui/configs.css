@@ -422,7 +422,8 @@
 
 /* The list under the home scrolls with it rather than in a box of its own. */
 .cfgapp { overflow-y: auto; }
-.cfgapp .cfglist { overflow: visible; }
+.cfgapp .cfglist { overflow: visible; flex: none; min-height: auto; }
+.cfgapp > * { flex-shrink: 0; }
 
 /* A picked row that is not the live one: a quieter mark than the live bar. */
 .cfg[data-picked='1']:not([data-on='1']) { box-shadow: inset 2px 0 0 var(--text-3); }
@@ -479,3 +480,7 @@
 }
 .cfgapp[open] { overflow-y: auto; animation: none; }
 .cfgopt[data-off='1'] { pointer-events: none; }
+.cfghero__tun { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.cfghero__tuntext { display: grid; gap: 2px; min-width: 0; }
+.cfghero__tuntext b { font-size: 13.5px; font-weight: 500; color: var(--text); }
+.cfghero__tuntext i { font-style: normal; font-size: 12px; color: var(--text-2); }
