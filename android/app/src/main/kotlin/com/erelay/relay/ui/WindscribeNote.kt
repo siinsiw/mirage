@@ -62,7 +62,7 @@ fun rememberWindscribeGate(
                     .padding(20.dp),
             ) {
                 Text("Before you sign in", style = Type.strong.copy(color = Tone.text))
-                Text("Relay signs in the way Windscribe's browser extension does. Windscribe " +
+                Text("Mirage signs in the way Windscribe's browser extension does. Windscribe " +
                     "may not allow this, and your account could be blocked.",
                     style = Type.caption.copy(color = Tone.text2),
                     modifier = Modifier.padding(top = 8.dp))

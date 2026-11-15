@@ -1,4 +1,4 @@
-"""Relay — the window, the tray icon, and the promise to put Windows back.
+"""Mirage — the window, the tray icon, and the promise to put Windows back.
 
 Three things here are not UI, and they are what separate an app from a page
 in a box:
@@ -54,7 +54,7 @@ _DEV_FLAGS = [f for f in ('--ui-drive', '--ui-layout', '--ui-perf')
 if _DEV_FLAGS and paths.FROZEN:
     # Development tools, left out of the built exe (build.DEV_ONLY): said,
     # rather than a crash on the first line or a thread that dies quietly.
-    print(f'{_DEV_FLAGS[0]} needs Relay run from source (python app/main.py); '
+    print(f'{_DEV_FLAGS[0]} needs Mirage run from source (python app/main.py); '
           'this build does not include it.', file=sys.stderr)
     raise SystemExit(2)
 if '--ui-drive' in sys.argv:
@@ -74,7 +74,7 @@ if paths.FROZEN and '--ui-drive' not in sys.argv:
     paths.prepare_data()
 
 APP_ID = 'ovpnpin.relay'
-APP_NAME = 'Relay'
+APP_NAME = 'Mirage'
 
 
 def run_as_worker():
@@ -3704,7 +3704,7 @@ class Api:
                     for i, pick in enumerate(picks, 1):
                         label = str(pick.get('label') or pick.get('country')
                                     or f'Location {i}')[:60]
-                        name = f'Relay · {label}'
+                        name = f'Mirage · {label}'
                         if stop.is_set():
                             rows.append({'k': i, 'name': name,
                                          'error': 'cancelled'})
@@ -3759,7 +3759,7 @@ class Api:
                 edges = client.edges() or []
                 made = export.links(
                     st['tunnelDomain'], x['id'],
-                    [{'k': 0, 'name': 'Relay · server'}]
+                    [{'k': 0, 'name': 'Mirage · server'}]
                     + [{'k': r['k'], 'name': r['name']} for r in rows
                        if not r.get('error')],
                     edge=edges[0] if edges else None, ss=st.get('tunnelSs'),
@@ -4098,7 +4098,7 @@ class Tray:
             # what" without opening the window.
             Item(lambda _: self._status_line(), lambda: None, enabled=False),
             Menu.SEPARATOR,
-            Item('Show Relay', self._show, default=True),
+            Item('Show Mirage', self._show, default=True),
             Item(lambda _: self._act_label(), self._act),
             Item('Favourites', Menu(self._favourite_items)),
             Menu.SEPARATOR,
@@ -4200,7 +4200,7 @@ class Tray:
                      # the same reason.
                      seen.get('ip')]
         elif state == 'broken':
-            parts = ['Connection broken - open Relay']
+            parts = ['Connection broken - open Mirage']
         else:
             parts = ['Not connected', api._real_ip]
         return short(' · '.join(p for p in parts if p))

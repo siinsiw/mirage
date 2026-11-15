@@ -2156,7 +2156,7 @@ class RelayCore(private val app: Application) {
         .put("exitPort", prefs.getInt(Keys.TUNNEL_SS_EXIT_PORT, 0))
         .toString()
 
-    private fun slotName(place: String) = "Relay · $place"
+    private fun slotName(place: String) = "Mirage · $place"
 
     /** A link as a QR code, for another phone's camera. Null when the core could not draw it. */
     suspend fun qrBitmap(text: String, px: Int): Bitmap? = withContext(io) {
@@ -2174,7 +2174,7 @@ class RelayCore(private val app: Application) {
      * instead of the link, and keeps it out of the keyboard's suggestions.
      */
     fun copy(text: String, sensitive: Boolean = false) {
-        val clip = ClipData.newPlainText("Relay", text)
+        val clip = ClipData.newPlainText("Mirage", text)
         if (sensitive) {
             // ClipDescription.EXTRA_IS_SENSITIVE, by its value: the constant
             // is Android 13's, and older ones ignore the extra.
@@ -2214,4 +2214,4 @@ private const val EXIT_CHAIN = "exit-chain"
 private const val EXPORT_API_MS = 15_000L
 
 /** What another device lists the server's own slot as. */
-const val SERVER_SLOT = "Relay · server"
+const val SERVER_SLOT = "Mirage · server"

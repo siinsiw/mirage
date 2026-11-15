@@ -92,23 +92,23 @@ import kotlinx.coroutines.withContext
  */
 
 private val MODE_NOTE = mapOf(
-    SplitMode.OFF to "Everything goes through Relay",
+    SplitMode.OFF to "Everything goes through Mirage",
     SplitMode.BYPASS to "The list goes straight out",
-    SplitMode.ONLY to "Only the list goes through Relay",
+    SplitMode.ONLY to "Only the list goes through Mirage",
 )
 
 private val MODE_SAID = mapOf(
-    SplitMode.OFF to "Everything on the phone goes through Relay.",
-    SplitMode.BYPASS to "Everything goes through Relay except what is on the list below, which goes " +
+    SplitMode.OFF to "Everything on the phone goes through Mirage.",
+    SplitMode.BYPASS to "Everything goes through Mirage except what is on the list below, which goes " +
         "straight out over your own connection.",
-    SplitMode.ONLY to "Only what is on the list below goes through Relay. Everything else goes " +
+    SplitMode.ONLY to "Only what is on the list below goes through Mirage. Everything else goes " +
         "straight out over your own connection.",
 )
 
 private const val SPLIT_HELP = "Split tunnelling decides what the tunnel carries. Except these " +
     "sends the list straight out over your own line - Iranian banks, shops and government sites " +
     "that turn foreign addresses away, or are simply quicker from home. Only these is the other " +
-    "way round: only the list goes through Relay. Apps are matched by app; sites by name or " +
+    "way round: only the list goes through Mirage. Apps are matched by app; sites by name or " +
     "address, whichever app opens them. A change applies the next time the tunnel comes up."
 
 private const val LIST_HELP_OUT = "These skip the tunnel. An app on the list never enters it, and " +
@@ -127,7 +127,7 @@ private const val LIST_HELP_IN = "Only these use the tunnel. Everything an app o
  */
 private const val OLD_ANDROID = "On Android 9 and older the list cannot hold apps and sites at " +
     "once. While any app is on it - one you picked, or an Iranian app the preset covers - only " +
-    "those apps go through Relay, and the sites and ranges are not used."
+    "those apps go through Mirage, and the sites and ranges are not used."
 
 private fun mixesOnOldAndroid(s: SplitPlan) =
     Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && s.hasDestinations && (s.apps.isNotEmpty() || s.iran)
@@ -145,7 +145,7 @@ fun SplitScreen(core: RelayCore, onApps: () -> Unit) {
     LaunchedEffect(split.mode) { if (split.mode != SplitMode.OFF) lastOn = split.mode }
     val listMode = if (split.mode == SplitMode.OFF) lastOn else split.mode
 
-    Section("What goes through Relay", help = SPLIT_HELP) {
+    Section("What goes through Mirage", help = SPLIT_HELP) {
         // A field that opens into the three rather than three side by side:
         // "Except these" and "Only these" did not fit across a narrow phone
         // with a large font, which is what Dropdown is for.
@@ -155,11 +155,11 @@ fun SplitScreen(core: RelayCore, onApps: () -> Unit) {
             modifier = Modifier.padding(top = Space.x3, start = Space.x1, end = Space.x1))
         when {
             split.mode == SplitMode.ONLY && split.empty -> SaidLine(
-                "Nothing is on the list yet, so everything still goes through Relay. Turn on " +
+                "Nothing is on the list yet, so everything still goes through Mirage. Turn on " +
                     "Iranian sites and apps, pick some apps, or add a site below.", bad = true)
             split.mode == SplitMode.ONLY && mixesOnOldAndroid(split) -> SaidLine(OLD_ANDROID, bad = true)
             split.mode == SplitMode.BYPASS && split.empty ->
-                SaidLine("Nothing is on the list yet, so nothing goes around Relay.")
+                SaidLine("Nothing is on the list yet, so nothing goes around Mirage.")
         }
         if (pending) SaidLine("Applies when you reconnect.")
     }
@@ -181,7 +181,7 @@ private fun SplitList(core: RelayCore, split: SplitPlan, mode: SplitMode, iranCo
     var busy by remember { mutableStateOf(false) }
     val out = mode == SplitMode.BYPASS
 
-    Section(if (out) "Goes straight out" else "Goes through Relay",
+    Section(if (out) "Goes straight out" else "Goes through Mirage",
         help = if (out) LIST_HELP_OUT else LIST_HELP_IN) {
         Group {
             SwitchRow("Iranian sites and apps",
@@ -327,8 +327,8 @@ fun SplitAppsSheet(open: Boolean, core: RelayCore, onClose: () -> Unit) {
 
 /** What a tick means in the mode that is set, and what the preset has ticked already. */
 private fun appsSaid(s: SplitPlan): String {
-    val tick = if (s.mode == SplitMode.ONLY) "Ticked apps go through Relay."
-        else "Ticked apps go straight out, not through Relay."
+    val tick = if (s.mode == SplitMode.ONLY) "Ticked apps go through Mirage."
+        else "Ticked apps go straight out, not through Mirage."
     return if (s.iran) "$tick Iranian apps are ticked while Iranian sites and apps is on." else tick
 }
 
