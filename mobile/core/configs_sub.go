@@ -152,7 +152,7 @@ func fetchWith(raw string, timeout time.Duration, tlsConf *tls.Config) ([]*Confi
 		return nil
 	}
 	req, _ := http.NewRequest(http.MethodGet, addr, nil)
-	req.Header.Set("User-Agent", "Relay")
+	req.Header.Set("User-Agent", "Mirage")
 	req.Header.Set("Accept", "*/*")
 	resp, err := client.Do(req)
 	if err != nil {

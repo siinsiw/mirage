@@ -15,8 +15,8 @@ PW_RENDERFULLCONTENT, because WebView2 draws through DWM and the plain call
 comes back with the page missing.
 
 A caption is not an identity. FindWindowW hands back the first window with
-that title, and a built Relay open on the same desktop answers to exactly the
-same one - so a check run while somebody has Relay open photographed *their*
+that title, and a built Mirage open on the same desktop answers to exactly the
+same one - so a check run while somebody has Mirage open photographed *their*
 window and reported the size it meant to capture rather than the size it got.
 Every picture in one such run came back 237x39 and said 600x1110.
 

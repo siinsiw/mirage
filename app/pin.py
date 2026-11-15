@@ -100,7 +100,7 @@ SCRIPT_DIRECTIVES = frozenset((
     'config', 'cd', 'chroot', 'log', 'log-append', 'status', 'writepid',
     'tmp-dir', 'management', 'replay-persist', 'iproute', 'daemon',
     'askpass'))
-STRIPPED_NOTE = '# relay: removed script directives:'
+STRIPPED_NOTE = '# mirage: removed script directives:'
 
 # Inline blocks whose contents are data - certificates, keys, a password
 # file - and pass through untouched. <connection> is not among them: what is

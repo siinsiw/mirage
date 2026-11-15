@@ -100,7 +100,7 @@ func EdgeProbe(ctx context.Context, domain, ip string, port int, timeout time.Du
 
 	req := "GET /api/config HTTP/1.1\r\n" +
 		"Host: " + domain + "\r\n" +
-		"User-Agent: Relay (ovpn-pin)\r\n" +
+		"User-Agent: Mirage (ovpn-pin)\r\n" +
 		"Connection: close\r\n\r\n"
 	if _, err := conn.Write([]byte(req)); err != nil {
 		return EdgeBlocked, time.Since(started)

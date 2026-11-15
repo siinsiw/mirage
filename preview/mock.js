@@ -1,4 +1,4 @@
-/* A stand-in for the Python side of Relay, so the real window (app/ui) runs
+/* A stand-in for the Python side of Mirage, so the real window (app/ui) runs
    in a browser with nothing behind it. Every answer here is sample data:
    nothing connects, nothing is written, no account is real.
 
@@ -6,7 +6,7 @@
    pane that asks for something unexpected still opens instead of throwing.
 
    It also takes orders from the review page around it (postMessage
-   {relay: 'go', to: '<section>'}) and puts the window into that state. */
+   {mirage: 'go', to: '<section>'}) and puts the window into that state. */
 
 (function () {
   'use strict';
@@ -190,7 +190,7 @@
     port: 10808,
     mode: 'surfshark',
     up: 0, down: 0,
-    tunnelDomain: 'relay.example.net',
+    tunnelDomain: 'mirage.example.net',
     window: { onTop: false, lockWindow: false, startHidden: false, startWithWindows: false },
     keepOnClose: true,
     onClose: '',
@@ -232,8 +232,8 @@
   const describe = () => ({
     countries: COUNTRIES,
     serverCount: SERVERS,
-    folder: 'C:\\Users\\you\\AppData\\Local\\Relay\\pinned',
-    folders: ['C:\\Users\\you\\AppData\\Local\\Relay\\pinned'],
+    folder: 'C:\\Users\\you\\AppData\\Local\\Mirage\\pinned',
+    folders: ['C:\\Users\\you\\AppData\\Local\\Mirage\\pinned'],
     sources: sources(),
     providers: ['surfshark', 'windscribe'],
     providerState: providerState(),
@@ -266,7 +266,7 @@
     hasCredentials: true,
     username: 'kQ7v2mXr9pLs',
     version: '0.3.0',
-    about: 'Relay 0.3.0  -  port 10808\nC:\\Users\\you\\AppData\\Local\\Relay',
+    about: 'Mirage 0.3.0  -  port 10808\nC:\\Users\\you\\AppData\\Local\\Mirage',
   });
 
   const status = () => {
@@ -380,11 +380,11 @@
       ['in-mum.prod.surfshark.com_tcp.ovpn', 'in', 'Mumbai', 'surfshark', '103.108.117.4', 'TLS reset by the filter'],
       ['HK-Victoria-TCP.ovpn', 'hk', 'Hong Kong', 'windscribe', '103.10.197.50', 'no answer in 6 s'],
     ].map(([file, country, cityName, provider, ip, why]) => ({
-      file, folder: 'C:\\Users\\you\\AppData\\Local\\Relay\\pinned', tag: 'pinned',
+      file, folder: 'C:\\Users\\you\\AppData\\Local\\Mirage\\pinned', tag: 'pinned',
       country, city: cityName, provider, ip, why, at: now() - 3600,
     }));
     return {
-      ok: true, folders: [{ path: 'C:\\Users\\you\\AppData\\Local\\Relay\\pinned', tag: 'pinned', name: 'Pinned', count: 4 }],
+      ok: true, folders: [{ path: 'C:\\Users\\you\\AppData\\Local\\Mirage\\pinned', tag: 'pinned', name: 'Pinned', count: 4 }],
       exits: rows, dead: 4, shelved: [{ tag: 'pinned', name: 'Pinned', count: 7, at: now() - 86400 * 2 }], aside: 7,
     };
   }
@@ -439,9 +439,9 @@
     return { ok: true };
   }
 
-  const PINNED = 'C:\\Users\\you\\AppData\\Local\\Relay\\pinned';
+  const PINNED = 'C:\\Users\\you\\AppData\\Local\\Mirage\\pinned';
   const pinPlan = () => ({
-    ok: true, folder: 'C:\\Users\\you\\AppData\\Local\\Relay\\configs', out: PINNED,
+    ok: true, folder: 'C:\\Users\\you\\AppData\\Local\\Mirage\\configs', out: PINNED,
     total: 12, most: 36, minutes: 1, existing: 118, checked: false, blockers: [],
     route: 'direct', port: 10809, maxIps: 3, test: true, outIsStandard: true,
   });
@@ -465,8 +465,8 @@
     ],
     untraced: 6,
     siteFolders: [
-      { folder: 'C:\\Users\\you\\AppData\\Local\\Relay\\sitetest\\web-telegram-org', tag: 'web.telegram.org', count: 22 },
-      { folder: 'C:\\Users\\you\\AppData\\Local\\Relay\\sitetest\\www-instagram-com', tag: 'www.instagram.com', count: 15 },
+      { folder: 'C:\\Users\\you\\AppData\\Local\\Mirage\\sitetest\\web-telegram-org', tag: 'web.telegram.org', count: 22 },
+      { folder: 'C:\\Users\\you\\AppData\\Local\\Mirage\\sitetest\\www-instagram-com', tag: 'www.instagram.com', count: 15 },
     ],
     blockers: [], count: 118, total: 118, minutes: 9,
   });
@@ -550,7 +550,7 @@
     serverInIran: () => ({ ok: true, inIran: false }),
     installCommand: () => ({
       ok: true,
-      command: "mkdir -p /opt/relay && echo '…installer…' | base64 -d > /opt/relay/install-server.sh && bash /opt/relay/install-server.sh relay.example.net --password '••••' --api-password '••••'",
+      command: "mkdir -p /opt/mirage && echo '…installer…' | base64 -d > /opt/mirage/install-server.sh && bash /opt/mirage/install-server.sh mirage.example.net --password '••••' --api-password '••••'",
       status: "systemctl --no-pager --lines=0 status gost sing-box nginx | grep -E '^. |Active:'",
       uninstall: 'systemctl disable --now gost sing-box',
     }),
@@ -701,7 +701,7 @@
   let going = Promise.resolve();
   window.addEventListener('message', (e) => {
     const m = e.data;
-    if (!m || m.relay !== 'go') return;
+    if (!m || m.mirage !== 'go') return;
     const fn = GO[m.to];
     if (!fn) return;
     going = going.then(async () => {
@@ -711,16 +711,16 @@
         try { await acctRefresh(); } catch (_) { /* the pane is not up yet */ }
       }
       try { await fn(); } catch (err) { console.error('[mock] go', m.to, err); }
-      try { parent.postMessage({ relay: 'at', to: m.to }, '*'); } catch (_) { /* alone */ }
+      try { parent.postMessage({ mirage: 'at', to: m.to }, '*'); } catch (_) { /* alone */ }
     });
   });
 
-  window.__relayPreview = { go: (to) => window.postMessage({ relay: 'go', to }, '*'), S };
+  window.__miragePreview = { go: (to) => window.postMessage({ mirage: 'go', to }, '*'), S };
 
   // Tell the page around this one when the window is up and taking orders.
   window.addEventListener('load', () => {
     later(400, () => {
-      try { parent.postMessage({ relay: 'ready' }, '*'); } catch (_) { /* alone */ }
+      try { parent.postMessage({ mirage: 'ready' }, '*'); } catch (_) { /* alone */ }
     });
   });
 })();

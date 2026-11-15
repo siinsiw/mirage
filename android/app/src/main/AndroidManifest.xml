@@ -24,19 +24,19 @@
         Nothing of this app leaves the phone in a backup or a transfer.
         allowBackup="false" turns off the cloud backup, but from Android 12
         a device-to-device transfer ignores it and copies the app's data
-        anyway - shared_prefs/relay.secrets included, sealed with a keystore
+        anyway - shared_prefs/mirage.secrets included, sealed with a keystore
         key that does not come along, which leaves a store that cannot be
         opened on the new phone. dataExtractionRules (12 and up) and
         fullBackupContent (older) exclude every domain from both.
     -->
     <application
-        android:name=".RelayApp"
+        android:name=".MirageApp"
         android:label="Mirage"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
-        android:theme="@style/Theme.Relay"
+        android:theme="@style/Theme.Mirage"
         tools:targetApi="31">
 
         <activity
@@ -58,9 +58,9 @@
 
         <!-- The quick-settings tile: one press to connect, one to stop. -->
         <service
-            android:name=".RelayTile"
+            android:name=".MirageTile"
             android:exported="true"
-            android:icon="@drawable/ic_relay"
+            android:icon="@drawable/ic_mirage"
             android:label="Mirage"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
@@ -74,7 +74,7 @@
             does not take the tunnel with it.
         -->
         <service
-            android:name=".RelayVpnService"
+            android:name=".MirageVpnService"
             android:exported="false"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:foregroundServiceType="specialUse">

@@ -10,7 +10,7 @@ package core
 // the plain no: no tun of its own, no interface monitoring, no binding.
 //
 // Its sockets need no protecting either: the app leaves itself out of its
-// own VPN in every split mode (RelayVpnService.splitInto), so nothing this
+// own VPN in every split mode (MirageVpnService.splitInto), so nothing this
 // process dials falls back into the tunnel it is carrying.
 
 import (
@@ -26,7 +26,7 @@ import (
 	"github.com/sagernet/sing/common/x/list"
 )
 
-var errNotHere = errors.New("not available inside Relay")
+var errNotHere = errors.New("not available inside Mirage")
 
 type platformStub struct{}
 

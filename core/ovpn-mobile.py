@@ -201,7 +201,7 @@ def gather(paths, limit, check=None, every_address=False):
 # Named rather than inlined because three places have to agree on them and a
 # typo in any of them is a config that loads and routes nowhere.
 TUNNEL_TAG = 'tunnel'
-GROUP_TAG = 'relay'
+GROUP_TAG = 'mirage'
 
 
 # Where the phone's way into the server is remembered.

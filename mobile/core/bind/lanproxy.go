@@ -1,4 +1,4 @@
-package relay
+package mirage
 
 import (
 	"encoding/json"
@@ -22,7 +22,7 @@ type lanState struct {
 // other device: {"addrs":["192.168.1.23", ...],"port":8877}.
 //
 // The password is required: 8 to 128 printable ASCII characters (0x20-0x7E,
-// see core.CheckLANPassword). HTTP clients give it as the proxy password for the user "relay";
+// see core.CheckLANPassword). HTTP clients give it as the proxy password for the user "mirage";
 // SOCKS5 clients as their password, with any user name.
 //
 // It listens only on the phone's Wi-Fi, hotspot, USB/Bluetooth tether and

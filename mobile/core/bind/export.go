@@ -1,4 +1,4 @@
-package relay
+package mirage
 
 import (
 	"encoding/json"
@@ -81,7 +81,7 @@ func PersistServer(cfg *ServerConfig, apiPassword string, timeoutMs int) error {
 //	port      its TLS port, 0 for 443
 //	edge      a measured Cloudflare address for a server by name, or ""
 //	exportID  the key's export id
-//	slots     JSON: [{"k":0,"name":"Relay · server"}, {"k":1,"name":"Relay · Germany"}]
+//	slots     JSON: [{"k":0,"name":"Mirage · server"}, {"k":1,"name":"Mirage · Germany"}]
 //	ss        JSON of the key's ss object, or "" - the server's own slot
 //	          gets a Shadowsocks link too when it is given
 //
@@ -93,7 +93,7 @@ func ExportLinksJSON(host string, port int, edge, exportID, slots, ss string) (s
 	}
 	srv := core.ExportServer{Host: host, Port: port, Edge: edge, ID: exportID}
 	if ss != "" {
-		var s core.RelayKeySS
+		var s core.MirageKeySS
 		if err := json.Unmarshal([]byte(ss), &s); err == nil && s.Password != "" && s.Port > 0 {
 			srv.SS = &s
 		}

@@ -42,7 +42,7 @@ import (
 //	        exit.go, for the opposite reason, and the two live side by side.
 //	WS      an ordinary upgrade to wss://<domain><path>, binary messages
 //	smux    version 1, keepalive 10s, everything else smux's own defaults
-//	CONNECT one per stream, Basic relay:<password>
+//	CONNECT one per stream, Basic ServerUser:<password>
 //
 // The bulk path is the same without smux: one websocket per connection, so a
 // single heavy transfer cannot stall everything sharing a session with it.
@@ -77,10 +77,16 @@ func (m TunnelMode) path() string {
 	return tunnelPaths[ModeSingle]
 }
 
+// ServerUser is the user name the server's proxies and its API were installed
+// with (tunnel/install-server.sh). It is the server's name on the wire, from
+// before the app was called Mirage, and servers already out there check it,
+// so it keeps its old spelling.
+const ServerUser = "relay"
+
 // TunnelServer is one server, reachable through some set of edge addresses.
 type TunnelServer struct {
 	Domain   string   // the name the certificate serves and the Host header carries
-	Password string   // the CONNECT credential, sent as relay:<this>
+	Password string   // the CONNECT credential, sent as ServerUser:<this>
 	Edges    []string // Cloudflare addresses to dial, quickest first
 
 	// Port is where the server (or its Cloudflare edge) takes TLS. 0 means
@@ -432,7 +438,7 @@ func (t *TunnelServer) connect(conn net.Conn, target string) ([]byte, error) {
 	if err := checkTarget(target); err != nil {
 		return nil, err
 	}
-	auth := base64.StdEncoding.EncodeToString([]byte("relay:" + t.Password))
+	auth := base64.StdEncoding.EncodeToString([]byte(ServerUser + ":" + t.Password))
 	req := "CONNECT " + target + " HTTP/1.1\r\n" +
 		"Host: " + target + "\r\n" +
 		"Proxy-Authorization: Basic " + auth + "\r\n\r\n"

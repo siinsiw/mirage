@@ -303,7 +303,7 @@
     }
     $('cfgAuto').setAttribute('aria-checked', list.auto ? 'true' : 'false');
     if (list.engines && !list.engines.singbox) {
-      say('sing-box.exe is not beside Relay, so configs cannot connect or be tested.', true);
+      say('sing-box.exe is not beside Mirage, so configs cannot connect or be tested.', true);
     }
     if (view.fresh) { view.fresh = false; reveal(host); }
     sync();

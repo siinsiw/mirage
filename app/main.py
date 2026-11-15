@@ -73,7 +73,7 @@ if '--ui-drive' in sys.argv:
 if paths.FROZEN and '--ui-drive' not in sys.argv:
     paths.prepare_data()
 
-APP_ID = 'ovpnpin.relay'
+APP_ID = 'ovpnpin.mirage'
 APP_NAME = 'Mirage'
 
 
@@ -1124,7 +1124,7 @@ class Api:
             self._emit('Dropped', {'status': self._engine.status()})
 
     def _release_firewall_after_crash(self):
-        """Relay opened again onto a firewall hold it did not make in this
+        """Mirage opened again onto a firewall hold it did not make in this
         run: the last window went while holding, and opening again is what
         the hold waits for. One UAC prompt; refused, it stays held and the
         page keeps saying so."""
@@ -3164,21 +3164,44 @@ class Api:
                                  f'{engine.px.SECRET_RULE}. Set a new one.'}
         q = engine.px.shell_quote
         return {'ok': True,
-                'command': " mkdir -p /opt/relay && echo '" + blob + "' | base64 -d "
-                           "> /opt/relay/install-server.sh && bash "
-                           f"/opt/relay/install-server.sh {q(host)} "
+                'command': " mkdir -p /opt/mirage && echo '" + blob + "' | base64 -d "
+                           "> /opt/mirage/install-server.sh && bash "
+                           f"/opt/mirage/install-server.sh {q(host)} "
                            f"--password {q(pw)} --api-password {q(api)}",
                 'status': "systemctl --no-pager --lines=0 status gost sing-box nginx"
                           " | grep -E '^. |Active:'; ss -lnt | grep -E "
                           "':443 |:838[89] |127.0.0.1:(1000[0-3]|18080) '",
+                # Takes the server's own names and, from a server set up
+                # before the app was called Mirage, the relay-* leftovers
+                # too. /etc/relay is a symlink to /etc/mirage on a server
+                # the installer has moved over, so both go. The accounts go
+                # only if they are the installer's (a system account with no
+                # home and no shell), never a person's account of that name.
                 'uninstall': "systemctl disable --now gost sing-box;"
                              " rm -f /etc/systemd/system/gost.service"
                              " /etc/systemd/system/sing-box.service"
                              " /usr/local/bin/gost /usr/local/bin/sing-box"
-                             f" {q(f'/etc/nginx/sites-enabled/relay-{host}.conf')}"
-                             f" {q(f'/etc/nginx/sites-available/relay-{host}.conf')};"
-                             " rm -rf /etc/gost /etc/sing-box /etc/relay /opt/relay;"
-                             " systemctl daemon-reload; systemctl reload nginx"}
+                             + ''.join(
+                                 f" {q(f'/etc/nginx/sites-{d}/{n}-{host}.conf')}"
+                                 for n in ('mirage', 'relay')
+                                 for d in ('enabled', 'available'))
+                             + ";"
+                             # The rate-limit zone and the renewal hook are
+                             # shared by every Mirage site on the box: they go
+                             # only when no site left still names the zone, or
+                             # nginx would refuse to load at its next restart.
+                             " for z in mirage relay; do"
+                             " grep -qs \"zone=${z}_api\" /etc/nginx/sites-enabled/*"
+                             " || rm -f \"/etc/nginx/conf.d/${z}-api-limit.conf\""
+                             " \"/etc/letsencrypt/renewal-hooks/deploy/${z}-nginx-reload.sh\";"
+                             " done;"
+                             " rm -rf /etc/gost /etc/sing-box /etc/mirage /opt/mirage"
+                             " /etc/relay /opt/relay;"
+                             " systemctl daemon-reload; systemctl reload nginx;"
+                             " for u in mirage relay; do"
+                             " getent passwd \"$u\" | grep -q ':/nonexistent:/usr/sbin/nologin$'"
+                             " && [ \"$(id -u \"$u\")\" -lt 1000 ] && userdel \"$u\";"
+                             " done; true"}
 
     def saveTunnel(self, domain=None, password=None, apiPassword=None):
         """Keep what was typed. Blank means unchanged, not cleared: the page
@@ -4401,7 +4424,7 @@ def ui_check(window):
     def our_window():
         """This process's own top-level window, by process id.
 
-        The caption is not an identity: a built Relay open beside the one
+        The caption is not an identity: a built Mirage open beside the one
         being checked answers to the same name, and whichever Windows hands
         back first is the one that gets photographed.
         """
@@ -4431,7 +4454,7 @@ def ui_check(window):
         layout audit takes the same photographs rather than its own.
 
         The process id goes with it. Finding the window by caption alone is
-        what main fixed: a built Relay open beside the one being checked
+        what main fixed: a built Mirage open beside the one being checked
         answers to the same name, and whichever Windows hands back first is
         the one that gets photographed - every picture in one such run came
         back 237x39 and said 600x1110.
@@ -5451,7 +5474,7 @@ def main():
     # file: a second copy that got that far would already be fighting the
     # first. It has asked the first to come forward, and that is all it does.
     if not oneinstance.claim():
-        # The UI checks drive a copy of their own, so with Relay already open
+        # The UI checks drive a copy of their own, so with Mirage already open
         # they never ran - and exiting 0 here read as a pass. Say so instead.
         testing = [a for a in ('--ui-check', '--ui-layout', '--ui-drive', '--ui-perf')
                    if a in sys.argv]
@@ -5557,7 +5580,7 @@ def main():
             traceback.print_exc()
 
     # Minimise minimises - to the taskbar, where the button says what it
-    # does. Putting Relay away in the tray is the close button's question
+    # does. Putting Mirage away in the tray is the close button's question
     # (closeRequest), and a minimise that vanished into the tray as well
     # left no way to get the window off the screen and keep it on the
     # taskbar.

@@ -18,7 +18,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
 APK="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
-APP_ID="com.erelay.relay.debug"
+APP_ID="app.mirage.debug"
 FILES="/sdcard/Android/data/$APP_ID/files"
 
 [ -f "$APK" ] || {
@@ -70,9 +70,9 @@ fi
 adb shell rm -f "$FILES/auth" "$FILES/auth-windscribe" >/dev/null 2>&1 || true
 
 echo
-echo "  open Relay and press connect. Watching the log - ctrl-c to stop:"
+echo "  open Mirage and press connect. Watching the log - ctrl-c to stop:"
 echo
 adb logcat -c
 # GoLog carries anything the core panics with, which is the half that would
 # otherwise close the app in silence.
-adb logcat -v time Relay:V GoLog:V '*:S'
+adb logcat -v time Mirage:V GoLog:V '*:S'

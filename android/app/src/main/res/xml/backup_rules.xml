@@ -3,7 +3,7 @@
     Android 11 and below: the same as data_extraction_rules.xml, for the
     backup those versions know. allowBackup="false" already turns it off;
     this is for the day somebody turns that on without reading why it was
-    off - relay.xml and relay.secrets still stay on the phone.
+    off - mirage.xml and mirage.secrets still stay on the phone.
 -->
 <full-backup-content>
     <exclude domain="root" path="." />

@@ -1,6 +1,6 @@
 """The tunnel to your own server: the client half, run as a child process.
 
-Relay does not speak WebSocket or multiplexing itself. It runs `gost`, which
+Mirage does not speak WebSocket or multiplexing itself. It runs `gost`, which
 does, and points its own proxy at the local port that comes up - the same
 arrangement it already uses for openvpn.exe during a sweep, and for the same
 reason: the thing that was measured is the thing that should carry the bytes.
@@ -15,7 +15,7 @@ which path on the server they ask for:
              the server's API - no restart at either end.
     bulk     no multiplexing, so one heavy transfer cannot stall the rest.
 
-What Relay has to know is small and comes from the installer's summary: the
+What Mirage has to know is small and comes from the installer's summary: the
 domain, the tunnel password and the API password. Everything else - the
 paths, the ports, the bypass list - is written from here.
 """
@@ -73,14 +73,20 @@ class PinUnconfirmed(PinChanged):
         self.fingerprint = fingerprint
 
 
-KEY_PREFIX = 'relay://'
+KEY_PREFIX = 'mirage://'
+# What keys started with before the app was called Mirage. Every key already
+# handed out says relay://, and only the prefix differs, so both are read -
+# for good, not for a while.
+LEGACY_KEY_PREFIX = 'relay://'
+KEY_PREFIXES = (KEY_PREFIX, LEGACY_KEY_PREFIX)
 SS_METHODS = ('chacha20-ietf-poly1305', 'aes-256-gcm', 'aes-128-gcm')
 
 
 def parse_key(text):
     """What the installer's key says, checked, as a dict - or ValueError.
 
-    The key is relay:// and then base64url of a JSON object: the server, its
+    The key is mirage:// (or relay://, from before the rename - the same
+    key) and then base64url of a JSON object: the server, its
     certificate's pin when it is reached by address, the two passwords and,
     when the server offers it, Shadowsocks. Checked field by field rather
     than trusted, because it arrives pasted out of a chat message, and a
@@ -88,8 +94,10 @@ def parse_key(text):
     gost config that will not parse or a password that is a number.
     """
     raw = (text or '').strip()
-    if raw.lower().startswith(KEY_PREFIX):
-        raw = raw[len(KEY_PREFIX):]
+    for prefix in KEY_PREFIXES:
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix):]
+            break
     # Chat apps wrap long lines; a key is one token, so whitespace is noise.
     raw = ''.join(raw.split())
     if not raw:
@@ -97,7 +105,7 @@ def parse_key(text):
     try:
         body = json.loads(base64.urlsafe_b64decode(raw + '=' * (-len(raw) % 4)))
     except (ValueError, TypeError):
-        raise ValueError('that is not a Mirage key - it should start with relay://')
+        raise ValueError('that is not a Mirage key - it should start with mirage://')
     if not isinstance(body, dict) or body.get('v') != 1:
         raise ValueError('that key is from a newer Mirage than this one')
 
@@ -226,7 +234,7 @@ class Tunnel:
     # -- a server by address, and its own certificate ---------------------
     #
     # No CA vouches for an address, so the installer makes the server its own
-    # certificate. With the server's key (relay://...) the pin comes with it.
+    # certificate. With the server's key (mirage://...) the pin comes with it.
     # Without one it is SSH's rule for a host met for the first time, asked
     # out loud: the first Test shows the certificate's SHA-256 and trusts
     # nothing, the person compares it with the "certificate sha256" line the
@@ -286,7 +294,7 @@ class Tunnel:
                     f'certificate sha256 {got}. Check that this is the '
                     '"certificate sha256" line the server installer printed, '
                     'then press Test again to trust it - or paste the '
-                    "server's key (relay://...), which carries it.", got)
+                    "server's key (mirage://...), which carries it.", got)
             with open(self.cert_path, 'w', encoding='ascii') as f:
                 f.write(pem)
             try:
@@ -436,7 +444,7 @@ class Tunnel:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler(
             {'https': f'http://127.0.0.1:{PORTS[mode]}'}))
         req = urllib.request.Request('https://api.ipify.org',
-                                     headers={'User-Agent': 'Relay'})
+                                     headers={'User-Agent': 'Mirage'})
         return opener.open(req, timeout=timeout).read().decode().strip()
 
     def upload_rate(self, mode='multi', size=256 << 10, timeout=4):
@@ -461,7 +469,7 @@ class Tunnel:
             {'https': f'http://127.0.0.1:{PORTS[mode]}'}))
         req = urllib.request.Request('https://speed.cloudflare.com/__up',
                                      data=os.urandom(size), method='POST',
-                                     headers={'User-Agent': 'Relay',
+                                     headers={'User-Agent': 'Mirage',
                                               'Content-Type': 'application/octet-stream'})
         start = time.monotonic()
         try:
@@ -492,12 +500,15 @@ class Tunnel:
         url = f'https://{self.origin}/api/{path}'
         data = json.dumps(payload).encode() if payload is not None else None
         req = urllib.request.Request(url, data=data, method=method)
+        # "relay" is the API's user name, not the app's: the server checks
+        # it, and every copy already out there logs in with it (the
+        # installer keeps it for that reason), so it outlived the rename.
         token = base64.b64encode(f'relay:{self.api_password}'.encode()).decode()
         req.add_header('Authorization', f'Basic {token}')
         # Named, because the default is not. Cloudflare answers 403 to
         # `Python-urllib/3.12` before the request ever reaches the server,
         # which reads exactly like the API refusing us and is not.
-        req.add_header('User-Agent', 'Relay (ovpn-pin desktop)')
+        req.add_header('User-Agent', 'Mirage (ovpn-pin desktop)')
         if data:
             req.add_header('Content-Type', 'application/json')
         ctx = None

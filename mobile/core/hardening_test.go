@@ -242,7 +242,7 @@ func TestCheckTarget(t *testing.T) {
 
 	// And the server's CONNECT refuses one before writing a byte.
 	var rec recordConn
-	srv := NewTunnelServer("relay.example.com", "pw", nil, ModeSingle)
+	srv := NewTunnelServer("mirage.example.com", "pw", nil, ModeSingle)
 	if _, err := srv.connect(&rec, "a.com\r\nHost: b:443"); err == nil || rec.Len() != 0 {
 		t.Fatalf("a CRLF target was written: %v %q", err, rec.String())
 	}
@@ -419,7 +419,7 @@ func TestServerAPIPinnedAndReused(t *testing.T) {
 	var bodies []string
 	var mu sync.Mutex
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if u, p, ok := r.BasicAuth(); !ok || u != "relay" || p != "apw" {
+		if u, p, ok := r.BasicAuth(); !ok || u != ServerUser || p != "apw" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -729,7 +729,7 @@ func TestPinnedConfigsCarryNoScripts(t *testing.T) {
 		"",
 	}, "\n")
 	out := pinnedText(in, "de-fra.prod.surfshark.com", "146.70.194.221")
-	if !strings.HasPrefix(out, "# pinned by Relay on ") {
+	if !strings.HasPrefix(out, "# pinned by Mirage on ") {
 		t.Fatalf("the pinning header is not first:\n%s", out)
 	}
 	for _, gone := range []string{"up.sh", "Script-Security", "route-up", "setenv FOO", "SETENV-SAFE",
@@ -745,7 +745,7 @@ func TestPinnedConfigsCarryNoScripts(t *testing.T) {
 	for _, kept := range []string{"remote 146.70.194.221 1443", "upper-case-is-not-up 1",
 		"up this line is certificate text and stays", "config this one too",
 		"management 127.0.0.1 7505 inside a block stays", "auth-user-pass\n", "verb 3",
-		"# removed by Relay: up, script-security"} {
+		"# removed by Mirage: up, script-security"} {
 		if !strings.Contains(out, kept) {
 			t.Errorf("%q is missing:\n%s", kept, out)
 		}
@@ -922,9 +922,9 @@ func TestClosedServerDoesNotDialAgain(t *testing.T) {
 	other.Close()
 }
 
-// ------------------------------------------------------ relay key rules
+// ------------------------------------------------------ mirage key rules
 
-func TestRelayKeySharedRules(t *testing.T) {
+func TestMirageKeySharedRules(t *testing.T) {
 	base := func(host, pw, apw, ss string) string {
 		j := `{"v":1,"host":"` + host + `","pw":` + strconv.Quote(pw) + `,"apw":` + strconv.Quote(apw)
 		if ss != "" {
@@ -933,26 +933,26 @@ func TestRelayKeySharedRules(t *testing.T) {
 		return key(j + "}")
 	}
 	alnum := "Ab3dE6gH9jK2mN5pQ8sT" // what install-server.sh makes: 20 letters and digits
-	if _, err := ParseRelayKey(base("relay.example.com", alnum, alnum, alnum)); err != nil {
+	if _, err := ParseMirageKey(base("mirage.example.com", alnum, alnum, alnum)); err != nil {
 		t.Fatalf("an installer key was refused: %v", err)
 	}
-	if _, err := ParseRelayKey(base("203.0.113.7", "p!%&()*+,-./:;<=>?@[]^_|~", strings.Repeat("x", 128), "")); err != nil {
+	if _, err := ParseMirageKey(base("203.0.113.7", "p!%&()*+,-./:;<=>?@[]^_|~", strings.Repeat("x", 128), "")); err != nil {
 		t.Fatalf("allowed punctuation and 128 characters were refused: %v", err)
 	}
 	for _, bad := range []string{"a'b", `a"b`, "a`b", "a$b", `a\b`, "a{b", "a}b", "a#b", "a b", "a\tb", "é",
 		strings.Repeat("x", 129)} {
 		for i, k := range []string{
-			base("relay.example.com", bad, alnum, ""),
-			base("relay.example.com", alnum, bad, ""),
-			base("relay.example.com", alnum, alnum, bad),
+			base("mirage.example.com", bad, alnum, ""),
+			base("mirage.example.com", alnum, bad, ""),
+			base("mirage.example.com", alnum, alnum, bad),
 		} {
-			if _, err := ParseRelayKey(k); err == nil {
+			if _, err := ParseMirageKey(k); err == nil {
 				t.Errorf("password %q in field %d was accepted", bad, i)
 			}
 		}
 	}
 	for host, ok := range map[string]bool{
-		"relay.example.com": true, "203.0.113.7": true, "localhost": true, "xn--mgba3a4f16a.ir": true,
+		"mirage.example.com": true, "203.0.113.7": true, "localhost": true, "xn--mgba3a4f16a.ir": true,
 		"-bad.example.com": false, "bad-.example.com": false, "a..b": false, "a_b.com": false,
 		"::1": false, "2001:db8::1": false, "a.com.": false, strings.Repeat("a", 64) + ".com": false,
 		strings.Repeat("a.", 127) + "aa": false,

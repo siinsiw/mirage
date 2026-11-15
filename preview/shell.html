@@ -1,13 +1,13 @@
-<title>Relay Review Desk</title>
+<title>Mirage Review Desk</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
 /* Layout: a light table. The real 400 × 740 window sits on the desk in the
    middle; the index of its sections runs down the start side (right, RTL),
    and what the chosen section is, and where it lives in code, down the end
    side. Narrow screens stack the three. */
-@font-face { font-family: "Estedad Relay"; src: url("app/fonts/Estedad-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
-@font-face { font-family: "Geist Relay"; src: url("app/fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
-@font-face { font-family: "Geist Mono Relay"; src: url("app/fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Estedad Mirage"; src: url("app/fonts/Estedad-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Geist Mirage"; src: url("app/fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Geist Mono Mirage"; src: url("app/fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 
 :root {
   --desk: #E3E5E8;
@@ -20,9 +20,9 @@
   --accent: #139A48;
   --accent-soft: rgba(19, 154, 72, 0.12);
   --frame-shadow: 0 34px 70px -28px rgba(12, 14, 20, 0.45), 0 0 0 1px rgba(12, 14, 20, 0.10);
-  --fa: "Estedad Relay", Tahoma, system-ui, sans-serif;
-  --latin: "Geist Relay", "Segoe UI", system-ui, sans-serif;
-  --mono: "Geist Mono Relay", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --fa: "Estedad Mirage", Tahoma, system-ui, sans-serif;
+  --latin: "Geist Mirage", "Segoe UI", system-ui, sans-serif;
+  --mono: "Geist Mono Mirage", "Cascadia Mono", Consolas, ui-monospace, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -242,7 +242,7 @@ button { font: inherit; color: inherit; }
 <div class="desk">
   <header class="top">
     <div class="brand">
-      <span class="brand__name latin">Relay</span>
+      <span class="brand__name latin">Mirage</span>
       <span class="brand__what">میز بازبینی</span>
       <span class="brand__note">خودِ رابط ویندوز با دادهٔ نمونه؛ اتصال و همهٔ دکمه‌ها فقط شبیه‌سازی‌اند و روی سیستم اجرا نمی‌شوند</span>
     </div>
@@ -256,7 +256,7 @@ button { font: inherit; color: inherit; }
 
   <main class="stage" id="stage">
     <div class="frame" id="frame" data-ready="0">
-      <iframe id="app" src="app/index.html" title="پنجرهٔ Relay"></iframe>
+      <iframe id="app" src="app/index.html" title="پنجرهٔ Mirage"></iframe>
       <div class="frame__wait" id="wait">پنجره دارد بالا می‌آید…</div>
     </div>
     <div class="measure mono" aria-hidden="true"><span id="size">400 × 740</span><span id="scale"></span></div>
@@ -285,7 +285,7 @@ button { font: inherit; color: inherit; }
 (function () {
   'use strict';
 
-  const DROID = 'android/…/relay/ui/';
+  const DROID = 'android/…/mirage/ui/';
   const GROUPS = [
     ['home', 'صفحهٔ اصلی'],
     ['sheets', 'برگه‌های روی صفحهٔ اصلی'],
@@ -362,7 +362,7 @@ button { font: inherit; color: inherit; }
     { id: 'captcha', group: 'forms', fa: 'پازل Windscribe', en: 'Puzzle',
       desc: 'پازل کشویی که Windscribe موقع ورود می‌خواهد و روی فرم افزودن حساب باز می‌شود. تصویرهایش اینجا نمونه‌اند.',
       win: ['index.html #wsCapDlg', 'app.js wsShowCaptcha()'], droid: ['Accounts.kt'] },
-    { id: 'ask-close', group: 'forms', fa: 'پرسش هنگام بستن', en: 'Close Relay?',
+    { id: 'ask-close', group: 'forms', fa: 'پرسش هنگام بستن', en: 'Close Mirage?',
       desc: 'وقتی پنجره بسته می‌شود: برود توی سینی و اتصال بماند، یا کامل خارج شود؛ با گزینهٔ به‌خاطر سپردن جواب.',
       win: ['index.html #askClose', 'app.js askClose()'], droid: [] },
   ];
@@ -432,7 +432,7 @@ button { font: inherit; color: inherit; }
       b.setAttribute('aria-current', String(id === s.id));
     }
     items[s.id].scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    document.title = `${s.en} · Relay Review Desk`;
+    document.title = `${s.en} · Mirage Review Desk`;
   }
 
   $('prev').addEventListener('click', () => step(-1));
@@ -447,7 +447,7 @@ button { font: inherit; color: inherit; }
   let current = null;
 
   function send(msg) {
-    try { app.contentWindow.postMessage(Object.assign({ relay: 'go' }, msg), '*'); } catch (_) { /* not up */ }
+    try { app.contentWindow.postMessage(Object.assign({ mirage: 'go' }, msg), '*'); } catch (_) { /* not up */ }
   }
 
   function go(id) {
@@ -459,7 +459,7 @@ button { font: inherit; color: inherit; }
 
   window.addEventListener('message', (e) => {
     if (e.source !== app.contentWindow || !e.data) return;
-    if (e.data.relay === 'ready') {
+    if (e.data.mirage === 'ready') {
       ready = true;
       frame.dataset.ready = '1';
       send({ to: current });
