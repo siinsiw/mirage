@@ -1,15 +1,15 @@
 # Privacy policy
 
-Relay has no analytics, advertising, crash-reporting service, or background
-telemetry, on Windows or on Android. Nothing is sent to the Relay project or
-its developers: there is no Relay server, and no account, usage or diagnostic
+Mirage has no analytics, advertising, crash-reporting service, or background
+telemetry, on Windows or on Android. Nothing is sent to the Mirage project or
+its developers: there is no Mirage server, and no account, usage or diagnostic
 data is collected or retained by the project. The app transfers information
 to networked systems only when the user requests or enables a feature that
 needs that transfer, and only to the services listed below.
 
 ## What is sent where
 
-When the user connects, Relay sends network traffic and the chosen provider's
+When the user connects, Mirage sends network traffic and the chosen provider's
 service credentials to that provider's proxy or VPN endpoints. If the user
 configures their own tunnel server, traffic and tunnel credentials are also
 sent to that server and, when it is behind one, its CDN.
@@ -45,7 +45,7 @@ can be contacted, each only by the feature named:
 Site tests contact the sites the user names, through the connection being
 tested.
 
-Before a Windscribe sign-in, both apps say once that Relay signs in the way
+Before a Windscribe sign-in, both apps say once that Mirage signs in the way
 Windscribe's own browser extension does, which Windscribe may not allow, and
 that the account could be blocked for it.
 
@@ -58,9 +58,11 @@ asks Let's Encrypt for a certificate for it.
 
 Settings, logs, state, account records, server lists and generated
 configurations are kept in the user's own data folder,
-`%LOCALAPPDATA%\Relay` (for example `C:\Users\<name>\AppData\Local\Relay`),
+`%LOCALAPPDATA%\Mirage` (for example `C:\Users\<name>\AppData\Local\Mirage`),
 not in the folder the app was extracted to. On first start, files an older
-portable copy had kept beside the exe are copied there. Run from the source
+portable copy had kept beside the exe are copied there, and a data folder
+left by a copy from before the app was renamed (`%LOCALAPPDATA%\Relay`) is
+moved there when no `Mirage` folder exists yet. Run from the source
 repository instead, the same files are kept in the repository folder.
 
 Account passwords are sealed with the current Windows user's own key (DPAPI)
@@ -70,12 +72,12 @@ Windows access controls restricted to that user. Some generated mobile or
 inline-auth configurations can contain credentials in clear text; the app
 labels this behavior and does not publish those files.
 
-Relay changes the Windows system proxy only when the user enables routing all
+Mirage changes the Windows system proxy only when the user enables routing all
 of Windows. It saves the previous configuration before making the change and
 restores it on disconnect, exit, failed connection, or recovery after an
 unclean shutdown.
 
-When the user chooses Tunnel instead of the proxy setting, Relay asks Windows
+When the user chooses Tunnel instead of the proxy setting, Mirage asks Windows
 for administrator rights and runs sing-box to add a temporary network adapter
 and its routes, so that every program's traffic reaches the same connection.
 DNS lookups are then sent over HTTPS to Cloudflare's 1.1.1.1 through that
@@ -85,16 +87,16 @@ also removed when the connection's proxy process stops.
 
 With the kill switch on (the default), a connection that drops leaves the
 adapter in place so that nothing reaches the internet on the user's normal
-line, until the user reconnects, presses Disconnect, or opens Relay again.
-If sing-box itself stops, which removes the adapter, Relay changes Windows
-Firewall to block outgoing traffic for every program except Relay, sing-box,
+line, until the user reconnects, presses Disconnect, or opens Mirage again.
+If sing-box itself stops, which removes the adapter, Mirage changes Windows
+Firewall to block outgoing traffic for every program except Mirage, sing-box,
 gost and the local network, with DNS blocked as well, until the user
-reconnects, presses Disconnect, or opens Relay again. It saves the previous
-firewall setting under `HKLM\SOFTWARE\Relay\KillSwitch` and puts it back
+reconnects, presses Disconnect, or opens Mirage again. It saves the previous
+firewall setting under `HKLM\SOFTWARE\Mirage\KillSwitch` and puts it back
 exactly when the block is lifted. This block stays across a restart of
-Windows; README explains how to lift it by hand if Relay has been deleted.
+Windows; README explains how to lift it by hand if Mirage has been deleted.
 
-Relay writes short diagnostic logs in `%LOCALAPPDATA%\Relay\.state`:
+Mirage writes short diagnostic logs in `%LOCALAPPDATA%\Mirage\.state`:
 `proxy.log` (connection failures), `connect-errors.log`, `setup.log` (a
 server setup after sign-in that did not finish, with the lookup route that
 was in use), and `settings.log`. The names and addresses of the sites being
@@ -105,9 +107,10 @@ is capped in size and keeps only its latest part. Setting the environment
 variable `OVPN_LOG_HOSTS=1` keeps the names, for chasing a fault on one's
 own machine.
 
-To erase Relay's data on Windows: quit it from the tray, then delete the
-`%LOCALAPPDATA%\Relay` folder and the folder the app was extracted to. If a
-kill switch firewall block is still in place, opening Relay once before
+To erase Mirage's data on Windows: quit it from the tray, then delete the
+`%LOCALAPPDATA%\Mirage` folder (and `%LOCALAPPDATA%\Relay`, if a copy from
+before the rename left one) and the folder the app was extracted to. If a
+kill switch firewall block is still in place, opening Mirage once before
 deleting it lifts the block.
 
 ## Android
@@ -120,7 +123,7 @@ connected.
 On the device it keeps:
 
 - server configurations and the cached lists it builds from them, in the
-  app's own folder on shared storage (`Android/data/com.erelay.relay/files`),
+  app's own folder on shared storage (`Android/data/app.mirage/files`),
   which a file manager or a USB cable can read. No credential is kept there.
 - settings in the app's private preferences.
 - account passwords, sessions and provider service credentials, and the
@@ -134,7 +137,7 @@ Android's cloud backup and device-to-device transfer are turned off for the
 app, so none of this is copied off the phone by them. Nothing is sent to the
 developers.
 
-To erase Relay's data on Android: Settings, Apps, Relay, Storage, Clear
+To erase Mirage's data on Android: Settings, Apps, Mirage, Storage, Clear
 storage - or uninstall the app, which removes all of the above.
 
 ## Linux scripts
@@ -152,19 +155,19 @@ installed with `--install-service` also leaves
 ## The user's own server
 
 Sharing configs with other devices is done only when the user asks for it.
-For each location chosen, Relay sends the user's own server the address of a
+For each location chosen, Mirage sends the user's own server the address of a
 provider exit and that provider's account credentials, through the server's
 API, and asks the server to save them to its configuration file so the
 location keeps working after a restart. The credentials stay on the user's
 server until the location is pointed elsewhere or the installer is run
-again. The links Relay then shows give whoever holds them use of that
+again. The links Mirage then shows give whoever holds them use of that
 server.
 
 ## Configs (servers from anywhere)
 
 The Configs section connects through servers the user adds by hand or by a
 subscription address, from whoever sold or gave them. Whoever runs such a
-server sees the traffic that goes through it, as with any VPN; Relay cannot
+server sees the traffic that goes through it, as with any VPN; Mirage cannot
 vouch for them. When connected, traffic goes to that server, and the
 section's DNS questions are asked of Cloudflare (`1.1.1.1`) over HTTPS,
 through it.
@@ -200,6 +203,6 @@ use them.
 
 ## Erasing everything
 
-There is nothing to erase anywhere else: the Relay project keeps no copy of
+There is nothing to erase anywhere else: the Mirage project keeps no copy of
 anything. Data sent to a provider, to the user's own server, or to the
 services listed above is subject to that party's own policy.

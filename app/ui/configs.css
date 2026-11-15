@@ -368,3 +368,119 @@
 
 .cfgfoot .toggle[aria-checked='true'] span { background: #fff; }
 
+
+/* ---------------------------------------------------------------------------
+   Configs as an app of its own: its header with the way back, its home, its
+   settings, and the veil the two sections pass through.
+   ------------------------------------------------------------------------ */
+
+.cfgtop {
+  display: flex; align-items: center; gap: 12px;
+  padding: 2px 16px 12px;
+}
+.cfgtop__mark { display: flex; align-items: center; height: 32px; }
+.cfgtop__mark .bar__logo--eye { width: 34px; height: 24px; }
+
+/* Two sections, one track: the one you are in carries the red. */
+.cfgswitch {
+  display: inline-flex; gap: 2px; padding: 3px; margin-right: auto;
+  border-radius: 999px; background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.cfgswitch__opt {
+  height: 28px; padding: 0 14px; border-radius: 999px;
+  font-size: 13px; color: var(--text-2);
+}
+.cfgswitch__opt:hover { color: var(--text); }
+.cfgswitch__opt[aria-selected='true'] {
+  background: var(--accent); color: #fff; box-shadow: var(--accent-glow);
+  cursor: default;
+}
+
+/* The home: state and clock on one line, the picked config under it, the
+   one button. Left-aligned like Mirage's own, and smaller - the list under
+   it is what this section is mostly about. */
+.cfghero {
+  display: grid; gap: 12px;
+  margin: 0 16px 14px; padding: 16px;
+  border-radius: 18px; background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.cfghero__top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.cfghero__state { margin: 0; font-size: 20px; font-weight: 600; color: var(--text); }
+.cfghero[data-state='busy'] .cfghero__state { color: var(--work); }
+.cfghero[data-state='fail'] .cfghero__state { color: var(--fail); }
+.cfghero__clock { margin: 0; font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.cfghero__pick { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 12px; }
+.cfghero__flag { width: 28px; height: 28px; }
+.cfghero__text { display: grid; gap: 2px; min-width: 0; }
+.cfghero__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; color: var(--text); }
+.cfghero__sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-2); }
+.cfghero__go { height: 48px; }
+.cfghero__note { margin: 0; }
+.cfghero__note:empty { display: none; }
+
+/* The list under the home scrolls with it rather than in a box of its own. */
+.cfgapp { overflow-y: auto; }
+.cfgapp .cfglist { overflow: visible; flex: none; min-height: auto; }
+.cfgapp > * { flex-shrink: 0; }
+
+/* A picked row that is not the live one: a quieter mark than the live bar. */
+.cfg[data-picked='1']:not([data-on='1']) { box-shadow: inset 2px 0 0 var(--text-3); }
+
+/* The settings sheet. */
+.cfgprefs__body { padding: 0 16px 16px; display: grid; gap: 10px; align-content: start; }
+.cfgmenu { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.cfgmenu__item {
+  display: grid; grid-template-columns: 20px minmax(0, 1fr) 16px; align-items: center; gap: 12px;
+  width: 100%; padding: 12px 14px; border-radius: 14px; text-align: left;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke); color: var(--text);
+}
+.cfgmenu__item:hover { background: var(--surface-2); }
+.cfgmenu__item .ico { width: 16px; height: 16px; color: var(--text-2); }
+.cfgmenu__text { display: grid; gap: 2px; min-width: 0; }
+.cfgmenu__name { font-size: 14px; }
+.cfgmenu__sub { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cfgopt {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px;
+  padding: 12px 14px; border-radius: 14px; background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.cfgopt__text { display: grid; gap: 2px; min-width: 0; }
+.cfgopt__name { font-size: 14px; color: var(--text); }
+.cfgopt__why { font-size: 12px; line-height: 1.45; color: var(--text-2); }
+.cfgopt[data-off='1'] { opacity: 0.45; }
+.cfgopt__in {
+  width: 132px; height: 32px; padding: 0 10px; border-radius: 10px;
+  background: var(--bg); color: var(--text); box-shadow: inset 0 0 0 1px var(--stroke);
+  font-family: var(--font-mono); font-size: 12px;
+}
+.cfgopt__in--wide { grid-column: 1 / -1; width: 100%; }
+.cfgopt__seg { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.cfgopt__segopt {
+  height: 28px; padding: 0 12px; border-radius: 999px; font-size: 12.5px;
+  color: var(--text-2); box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.cfgopt__segopt[aria-pressed='true'] { color: #fff; background: var(--accent); box-shadow: none; }
+.cfgprefs__group { margin: 8px 2px 0; font-size: 12px; color: var(--text-3); letter-spacing: 0.02em; }
+
+/* The veil between the two sections. Still background; the eye's parts move
+   by transform and the ring by its dash, nothing else. */
+.cfgveil {
+  position: fixed; inset: 0; z-index: 60;
+  display: grid; place-content: center; justify-items: center; gap: 14px;
+}
+.cfgveil[hidden] { display: none; }
+.cfgveil__eye { width: 132px; height: 132px; overflow: visible; }
+.cfgveil__lid, .cfgveil__iris { transform-box: fill-box; transform-origin: 50% 100%; will-change: transform; }
+.cfgveil__iris { transform-origin: 50% 50%; }
+.cfgveil__word {
+  margin: 0; font-family: 'Cinzel Mirage', serif; font-size: 22px; letter-spacing: 0.12em;
+  color: var(--mi-ink);
+}
+.cfgapp[open] { overflow-y: auto; animation: none; }
+.cfgopt[data-off='1'] { pointer-events: none; }
+.cfghero__tun { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.cfghero__tuntext { display: grid; gap: 2px; min-width: 0; }
+.cfghero__tuntext b { font-size: 13.5px; font-weight: 500; color: var(--text); }
+.cfghero__tuntext i { font-style: normal; font-size: 12px; color: var(--text-2); }

@@ -1,5 +1,5 @@
 """Configs for other devices: an iPhone, a friend's laptop - anything with a
-V2Ray client and no Relay - reaching the user's own server, and through it a
+V2Ray client and no Mirage - reaching the user's own server, and through it a
 provider location picked here.
 
 The server keeps a handful of numbered locations ("slots"). Slot k is a
@@ -27,6 +27,9 @@ MAX_SLOTS = 32
 
 
 def slot_uuid(export_id, k):
+    # "relay-export:" is a wire value, not the app's name: the installer and
+    # the phone derive the same UUIDs from it, and links already handed out
+    # were made with it, so it outlived the rename.
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f'relay-export:{export_id}:{k}'))
 
 

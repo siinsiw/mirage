@@ -21,7 +21,7 @@ import uuid
 import paths
 import settingsfile
 
-from . import links
+from . import links, prefs
 
 PATH = os.path.join(paths.STATE_DIR, 'configs.json')
 MANUAL = 'manual'
@@ -32,7 +32,7 @@ _LOCK = threading.RLock()
 
 DEFAULTS = {'v': 1, 'groups': [{'id': MANUAL, 'kind': 'manual', 'name': ''}],
             'configs': [], 'selected': None, 'auto': False,
-            'fragment': False}
+            'fragment': False, 'settings': {}, 'seeded': False}
 
 
 def _empty():
@@ -67,6 +67,11 @@ def load(path=None):
         out.update({k: state[k] for k in DEFAULTS if k in state})
         if not any(g.get('id') == MANUAL for g in out['groups']):
             out['groups'].insert(0, {'id': MANUAL, 'kind': 'manual', 'name': ''})
+        if not isinstance(out.get('settings'), dict):
+            out['settings'] = {}
+        # The one switch this section had before it had settings of its own.
+        if 'fragment' not in out['settings'] and out.get('fragment'):
+            out['settings']['fragment'] = True
         return out
 
 
@@ -185,6 +190,39 @@ def set_option(key, value, path=None):
     return _edit(go, path)
 
 
+def settings(state=None):
+    """Every setting of this section, saved or default (prefs.SCHEMA)."""
+    state = state or load()
+    return prefs.merged(state.get('settings'))
+
+
+def seed_settings(values, path=None):
+    """The first settings, once: copied from Mirage's own when this section
+    first has settings of its own. After that the two are apart."""
+    def go(state):
+        if state.get('seeded'):
+            return False
+        state['settings'] = dict(values or {}, **(state.get('settings') or {}))
+        state['seeded'] = True
+        return True
+    return _edit(go, path)
+
+
+def set_settings(changes, path=None):
+    """Several settings at once, each checked against prefs.SCHEMA; all or
+    none. Returns the keys that changed."""
+    clean = {k: prefs.check(k, v) for k, v in (changes or {}).items()}
+
+    def go(state):
+        have = prefs.merged(state.get('settings'))
+        changed = [k for k, v in clean.items() if have.get(k) != v]
+        state['settings'] = dict(state.get('settings') or {}, **clean)
+        if 'fragment' in clean:
+            state['fragment'] = clean['fragment']
+        return changed
+    return _edit(go, path)
+
+
 def add_group(url, name='', path=None):
     def go(state):
         for g in state['groups']:
@@ -289,7 +327,13 @@ def listing(state=None):
     """What the page draws: no id, password or subscription address."""
     state = state or load()
     configs = []
-    for c in state['configs']:
+    how = settings(state).get('sort')
+    rows = state['configs']
+    if how == 'speed':
+        rows = ordered(rows)
+    elif how == 'name':
+        rows = sorted(rows, key=lambda c: (c.get('name') or '').lower())
+    for c in rows:
         configs.append({
             'id': c['id'], 'group': c.get('group') or MANUAL,
             'name': c.get('name') or '', 'label': links.label(c),
@@ -304,5 +348,7 @@ def listing(state=None):
             'last': c.get('last')})
     return {'groups': [_public_group(g) for g in state['groups']],
             'configs': configs, 'selected': state.get('selected'),
+            # The one setting the home shows: whole PC or not.
+            'mode': settings(state).get('mode'),
             'auto': bool(state.get('auto')),
             'fragment': bool(state.get('fragment'))}

@@ -5,7 +5,7 @@ written from it.
     python app/key-test.py
 
 The key is made by tunnel/install-server.sh and read here and in the phone's
-Go core (mobile/core/relaykey.go). Both readers refuse the same keys; this
+Go core (mobile/core/miragekey.go). Both readers refuse the same keys; this
 holds the desktop's half to that, and checks that a key with Shadowsocks in
 it becomes a gost config that dials the server's address on the right port.
 """
@@ -20,7 +20,7 @@ import tunnel                                                # noqa: E402
 
 def key(body, pad=False):
     raw = base64.urlsafe_b64encode(json.dumps(body).encode()).decode()
-    return 'relay://' + (raw if pad else raw.rstrip('='))
+    return 'mirage://' + (raw if pad else raw.rstrip('='))
 
 
 PIN = 'ab' * 32
@@ -37,13 +37,32 @@ def test_reads_a_full_key():
 
 
 def test_reads_a_wrapped_padded_key():
-    text = key({'v': 1, 'host': 'relay.example.com', 'pin': '', 'pw': 'p',
+    text = key({'v': 1, 'host': 'mirage.example.com', 'pin': '', 'pw': 'p',
                 'apw': 'a'}, pad=True)
     wrapped = text[:20] + '\n   ' + text[20:]
     k = tunnel.parse_key(wrapped)
-    assert k['host'] == 'relay.example.com' and k['ss'] is None
+    assert k['host'] == 'mirage.example.com' and k['ss'] is None
     # No port in the key is every key made before there could be one.
     assert k['port'] == 443
+
+
+def test_reads_both_prefixes():
+    # mirage:// is what keys say now; relay:// is every key made before the
+    # rename. Only the prefix differs, so both read to the same thing.
+    body = {'v': 1, 'host': '203.0.113.7', 'pin': PIN, 'pw': 'p', 'apw': 'a'}
+    new = key(body)
+    assert new.startswith('mirage://')
+    old = 'relay://' + new[len('mirage://'):]
+    assert tunnel.parse_key(new) == tunnel.parse_key(old)
+    assert tunnel.parse_key('MIRAGE://' + new[len('mirage://'):]) == \
+        tunnel.parse_key(new)
+    assert tunnel.KEY_PREFIX == 'mirage://'
+    try:
+        tunnel.parse_key('mirage://!!!')
+    except ValueError as e:
+        assert 'mirage://' in str(e) and 'relay' not in str(e)
+    else:
+        raise AssertionError('accepted junk')
 
 
 def test_reads_a_port():
@@ -55,8 +74,8 @@ def test_reads_a_port():
 def test_refuses_what_the_phone_refuses():
     bad = {
         'empty': '  ',
-        'not base64': 'relay://!!!',
-        'not json': 'relay://' + base64.urlsafe_b64encode(b'hello').decode(),
+        'not base64': 'mirage://!!!',
+        'not json': 'mirage://' + base64.urlsafe_b64encode(b'hello').decode(),
         'newer': key({'v': 2, 'host': 'h', 'pw': 'p', 'apw': 'a'}),
         'no host': key({'v': 1, 'pw': 'p', 'apw': 'a'}),
         'no pw': key({'v': 1, 'host': 'h', 'apw': 'a'}),
@@ -113,7 +132,7 @@ def test_ss_config_dials_the_address():
 
 
 def test_ws_config_is_unchanged():
-    text = tunnel.config_text('relay.example.com', 'pw', ['1.2.3.4'])
+    text = tunnel.config_text('mirage.example.com', 'pw', ['1.2.3.4'])
     assert 'type: ss' not in text and 'mwss' in text
     assert 'addr: "1.2.3.4:443"' in text
 
@@ -137,7 +156,7 @@ def test_refuses_keys_whose_values_could_escape_where_they_land():
              'p#c', 'p q', '', 'x' * 129, 'pä', 'p\tq')
     for pw in nasty:
         for field in ('pw', 'apw'):
-            body = {'v': 1, 'host': 'relay.example.com', 'pw': 'ok', 'apw': 'ok'}
+            body = {'v': 1, 'host': 'mirage.example.com', 'pw': 'ok', 'apw': 'ok'}
             body[field] = pw
             try:
                 tunnel.parse_key(key(body))
@@ -171,7 +190,7 @@ def test_yaml_and_shell_quoting_hold_whatever_they_are_given():
     # Whatever got past validation (or never met it) still cannot break out:
     # YAML scalars are JSON strings, shell words are single-quoted.
     weird = 'a"b\\c\'d}e{f#g: h\n- i'
-    text = tunnel.config_text('relay.example.com', weird, ['1.2.3.4'])
+    text = tunnel.config_text('mirage.example.com', weird, ['1.2.3.4'])
     assert json.dumps(weird) in text
     try:
         import yaml
@@ -182,7 +201,7 @@ def test_yaml_and_shell_quoting_hold_whatever_they_are_given():
         node = cfg['chains'][0]['hops'][0]['nodes'][0]
         assert node['connector']['auth']['password'] == weird
         assert node['dialer']['tls'] == {'secure': True,
-                                         'serverName': 'relay.example.com'}
+                                         'serverName': 'mirage.example.com'}
     assert px.shell_quote("it's") == "'it'\\''s'"
     assert px.shell_quote('$(id)`x`') == "'$(id)`x`'"
 
@@ -190,14 +209,14 @@ def test_yaml_and_shell_quoting_hold_whatever_they_are_given():
 def test_every_path_verifies_the_servers_certificate():
     # By name through an edge, by name with no edges, and by address with
     # the kept certificate: secure every time, never gost's unchecked default.
-    edged = tunnel.config_text('relay.example.com', 'pw', ['1.2.3.4'])
-    plain = tunnel.config_text('relay.example.com', 'pw', [])
+    edged = tunnel.config_text('mirage.example.com', 'pw', ['1.2.3.4'])
+    plain = tunnel.config_text('mirage.example.com', 'pw', [])
     by_ip = tunnel.config_text('203.0.113.7', 'pw', [], ca_file=r'C:\x\c.pem')
     for text in (edged, plain, by_ip):
         tls = [l for l in text.splitlines() if 'tls:' in l]
         assert len(tls) == len(tunnel.PORTS), text
         assert all('secure: true' in l for l in tls), tls
-    assert all('serverName: "relay.example.com"' in l
+    assert all('serverName: "mirage.example.com"' in l
                for l in edged.splitlines() + plain.splitlines() if 'tls:' in l)
     assert 'caFile: "C:/x/c.pem"' in by_ip
 

@@ -27,7 +27,7 @@ MAX_BODY = 2 * 1024 * 1024
 MAX_URL = 2048
 MAX_REDIRECTS = 3
 TIMEOUT = 15
-USER_AGENT = 'Relay'
+USER_AGENT = 'Mirage'
 
 
 class Refused(ValueError):
@@ -94,7 +94,7 @@ def title(value):
     return links.clean_name(urllib.parse.unquote(value))
 
 
-def fetch(url, proxy=None, opener=None):
+def fetch(url, proxy=None, opener=None, user_agent=None):
     """(configs, problems, info, name). proxy is 'host:port' of an HTTP proxy
     to go through - the connection that is up - or None for straight out."""
     url = check_url(url)
@@ -104,7 +104,7 @@ def fetch(url, proxy=None, opener=None):
                         {'http': f'http://{proxy}', 'https': f'http://{proxy}'}
                         if proxy else {})]
         opener = urllib.request.build_opener(*handlers)
-    req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT,
+    req = urllib.request.Request(url, headers={'User-Agent': user_agent or USER_AGENT,
                                                'Accept': '*/*'})
     try:
         with opener.open(req, timeout=TIMEOUT) as r:

@@ -17,6 +17,17 @@ by program, as gost's are.
 from . import links
 
 
+def _local_doh(url):
+    """A DoH address as Xray's straight-out form, https+local://."""
+    url = url or 'https://1.1.1.1/dns-query'
+    if not url.startswith('https://'):
+        url = 'https://1.1.1.1/dns-query'
+    rest = url[len('https://'):]
+    if '/' not in rest:
+        rest += '/dns-query'
+    return 'https+local://' + rest
+
+
 def _server_name(cfg):
     if cfg.get('sni'):
         return cfg['sni']
@@ -103,8 +114,11 @@ def outbound(cfg, tag, fragment=False):
             'streamSettings': _stream(cfg, fragment)}
 
 
-def build(entries, fragment=False, log_path=None):
-    """entries: (cfg, port, user, password) for each config Xray carries."""
+def build(entries, fragment=False, log_path=None, opts=None):
+    """entries: (cfg, port, user, password) for each config Xray carries.
+    opts: Configs' settings - the fragment's packets, sizes and gaps, and the
+    direct resolver."""
+    o = opts or {}
     inbounds, outbounds, rules = [], [], []
     for n, (cfg, port, user, password) in enumerate(entries):
         inbounds.append({'tag': f'in-{n}', 'listen': '127.0.0.1',
@@ -120,14 +134,15 @@ def build(entries, fragment=False, log_path=None):
     outbounds.insert(0, {'tag': 'block', 'protocol': 'blackhole'})
     if fragment:
         outbounds.append({'tag': 'fragment', 'protocol': 'freedom',
-                          'settings': {'fragment': {'packets': 'tlshello',
-                                                    'length': '100-200',
-                                                    'interval': '10-20'}}})
+                          'settings': {'fragment': {
+                              'packets': o.get('fragment_packets') or 'tlshello',
+                              'length': o.get('fragment_length') or '100-200',
+                              'interval': o.get('fragment_interval') or '10-20'}}})
     log = {'loglevel': 'warning', 'access': 'none'}
     if log_path:
         log['error'] = log_path
     return {'log': log,
-            'dns': {'servers': ['https+local://1.1.1.1/dns-query'],
+            'dns': {'servers': [_local_doh(o.get('direct_dns'))],
                     'queryStrategy': 'UseIPv4'},
             'inbounds': inbounds, 'outbounds': outbounds,
             'routing': {'domainStrategy': 'AsIs', 'rules': rules}}

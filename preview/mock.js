@@ -1,4 +1,4 @@
-/* A stand-in for the Python side of Relay, so the real window (app/ui) runs
+/* A stand-in for the Python side of Mirage, so the real window (app/ui) runs
    in a browser with nothing behind it. Every answer here is sample data:
    nothing connects, nothing is written, no account is real.
 
@@ -6,7 +6,7 @@
    pane that asks for something unexpected still opens instead of throwing.
 
    It also takes orders from the review page around it (postMessage
-   {relay: 'go', to: '<section>'}) and puts the window into that state. */
+   {mirage: 'go', to: '<section>'}) and puts the window into that state. */
 
 (function () {
   'use strict';
@@ -19,6 +19,74 @@
       try { fn(payload || {}); } catch (e) { console.error('[mock] on' + name, e); }
     }
   };
+
+  /* -------------------------------------------------------------- configs */
+
+  // Configs' sample list: one subscription and two added by hand. Nothing
+  // here connects; connect answers as the real section does, by events.
+  const CF = {
+    groups: [
+      { id: 'manual', kind: 'manual', name: '' },
+      { id: 's-1', kind: 'sub', name: 'Night Owl VPN', host: 'sub.example.net',
+        info: { upload: 1.2e9, download: 18.4e9, total: 100e9, expire: now() + 86400 * 23 },
+        updated: now() - 3600 * 5 },
+    ],
+    configs: [
+      ['c1', 'manual', 'My Hetzner box', 'VLESS · Reality', 'de', 182],
+      ['c2', 'manual', 'Friend in Istanbul', 'Trojan', 'tr', 96],
+      ['c3', 's-1', '🇳🇱 Amsterdam 01', 'VMess · WS', 'nl', 231],
+      ['c4', 's-1', '🇫🇮 Helsinki 02', 'Hysteria2', 'fi', 205],
+      ['c5', 's-1', '🇺🇸 New York 05', 'VLESS · gRPC', null, null],
+    ].map(([id, group, name, label, cc, ms]) => ({
+      id, group, name, label, proto: label.split(' ')[0].toLowerCase(),
+      host: `${id}.example.net`, port: 443, warnings: [], engine: 'singbox',
+      tls: true, allowInsecure: false,
+      last: ms ? { ms, country: cc, at: now() - 600 } : null })),
+    selected: 'c1', auto: false, fragment: false,
+    settings: {"mode": "system", "kill_switch": true, "auto_connect": "off", "reconnect_on_drop": false, "split_mode": "bypass", "split_iran": true, "split_apps": [], "split_domains": [], "fragment": false, "fragment_style": "both", "fragment_engine": "singbox", "fragment_packets": "tlshello", "fragment_length": "100-200", "fragment_interval": "10-20", "remote_dns": "https://1.1.1.1/dns-query", "direct_dns": "https://1.1.1.1/dns-query", "ipv6": "off", "sub_auto_hours": 12, "sub_on_launch": false, "sub_user_agent": "", "test_kind": "real", "test_url": "https://www.cloudflare.com/cdn-cgi/trace", "test_timeout": 8, "test_parallel": 8, "sort": "speed", "auto_interval": 10, "auto_tolerance": 50, "mux": false, "mux_protocol": "h2mux", "mux_streams": 8, "mux_padding": false, "tun_stack": "auto", "tun_mtu": 9000, "strict_route": true},
+    live: { on: false, current: null, auto: false, using: null, blocked: false },
+  };
+  const cfList = () => ({ groups: CF.groups, configs: CF.configs, selected: CF.selected, mode: CF.settings.mode,
+    auto: CF.auto, fragment: CF.settings.fragment, engines: { singbox: true, xray: true },
+    live: CF.live, testing: false });
+  function configsMock(action, p) {
+    switch (action) {
+      case 'list': return { ok: true, list: cfList() };
+      case 'pick': CF.selected = p.id; return { ok: true, list: cfList() };
+      case 'settings': return { ok: true, values: { ...CF.settings } };
+      case 'set':
+        Object.assign(CF.settings, p.values || {});
+        return { ok: true, values: { ...CF.settings }, changed: Object.keys(p.values || {}),
+          reconnect: CF.live.on };
+      case 'connect':
+      case 'switch': {
+        const id = p.id || CF.selected;
+        CF.selected = id;
+        later(500, () => emit('Progress', { phase: 'starting' }));
+        later(1300, () => {
+          CF.live = { on: true, current: id, auto: !!p.auto, using: id, blocked: false };
+          const c = CF.configs.find((x) => x.id === id) || {};
+          S.connected = true; S.since = now();
+          emit('Connected', { state: 'on', since: now(), configs: true,
+            exit: { host: c.name, country: (c.last && c.last.country) || '', ip: '203.0.113.7',
+              seen_as: { ip: '203.0.113.7', country: (c.last && c.last.country) || '' } } });
+          emit('Configs', { kind: 'list', list: cfList() });
+        });
+        return { ok: true };
+      }
+      case 'test': {
+        const ids = p.ids || CF.configs.map((c) => c.id);
+        ids.forEach((id, i) => later(250 * (i + 1), () => {
+          const c = CF.configs.find((x) => x.id === id);
+          c.last = { ms: 90 + Math.round(Math.random() * 300), country: (c.last && c.last.country) || 'us', at: now() };
+          emit('Configs', { kind: 'test', done: i + 1, total: ids.length, id, result: c.last });
+        }));
+        later(250 * (ids.length + 1), () => emit('Configs', { kind: 'tested', list: cfList() }));
+        return { ok: true, total: ids.length };
+      }
+      default: return { ok: true, list: cfList() };
+    }
+  }
 
   /* ------------------------------------------------------------ catalogue */
 
@@ -113,7 +181,7 @@
     exit: null,
     picked: 'auto',
     favourites: ['nl', 'de'],
-    sortBy: 'ping',
+    sortBy: 'windscribe',
     theme: 'black',
     killSwitch: false,
     systemProxy: true,
@@ -122,7 +190,7 @@
     port: 10808,
     mode: 'surfshark',
     up: 0, down: 0,
-    tunnelDomain: 'relay.example.net',
+    tunnelDomain: 'mirage.example.net',
     window: { onTop: false, lockWindow: false, startHidden: false, startWithWindows: false },
     keepOnClose: true,
     onClose: '',
@@ -144,8 +212,9 @@
     surfshark: { servers: 0, account: false, waiting: 0, usable: false },
     windscribe: { servers: 0, account: false, waiting: 0, usable: false },
   } : {
-    surfshark: { servers: 84, account: true, waiting: 0, usable: true },
-    windscribe: { servers: 41, account: true, waiting: 12, usable: true },
+    surfshark: { servers: 84, countries: 26, account: true, waiting: 0, usable: true, setupAt: Math.floor(now() - 86400 * 2), setupFail: null },
+    windscribe: { servers: 41, countries: 24, account: true, waiting: 12, usable: true, setupAt: Math.floor(now() - 86400 * 5),
+                  setupFail: { at: Math.floor(now() - 3600), why: 'The server check stopped answering. Press Try again.' } },
   });
 
   const sources = () => ({
@@ -163,8 +232,8 @@
   const describe = () => ({
     countries: COUNTRIES,
     serverCount: SERVERS,
-    folder: 'C:\\Users\\you\\AppData\\Local\\Relay\\pinned',
-    folders: ['C:\\Users\\you\\AppData\\Local\\Relay\\pinned'],
+    folder: 'C:\\Users\\you\\AppData\\Local\\Mirage\\pinned',
+    folders: ['C:\\Users\\you\\AppData\\Local\\Mirage\\pinned'],
     sources: sources(),
     providers: ['surfshark', 'windscribe'],
     providerState: providerState(),
@@ -185,8 +254,6 @@
     picked: S.picked,
     favourites: S.favourites,
     sortBy: S.sortBy,
-    quickAt: Math.floor(now() - 3600 * 2),
-    autoQuick: true,
     connected: S.connected,
     keepOnClose: S.keepOnClose,
     window: S.window,
@@ -199,7 +266,7 @@
     hasCredentials: true,
     username: 'kQ7v2mXr9pLs',
     version: '0.3.0',
-    about: 'Relay 0.3.0  -  port 10808\nC:\\Users\\you\\AppData\\Local\\Relay',
+    about: 'Mirage 0.3.0  -  port 10808\nC:\\Users\\you\\AppData\\Local\\Mirage',
   });
 
   const status = () => {
@@ -272,6 +339,7 @@
     connectTimers.forEach(clearTimeout);
     const minutes = S.connected ? Math.max(1, Math.round((now() - S.since) / 60)) : 0;
     S.connected = false;
+    CF.live = { on: false, current: null, auto: false, using: null, blocked: false };
     clearInterval(trafficTimer);
     return { ok: true, session: { minutes } };
   }
@@ -312,11 +380,11 @@
       ['in-mum.prod.surfshark.com_tcp.ovpn', 'in', 'Mumbai', 'surfshark', '103.108.117.4', 'TLS reset by the filter'],
       ['HK-Victoria-TCP.ovpn', 'hk', 'Hong Kong', 'windscribe', '103.10.197.50', 'no answer in 6 s'],
     ].map(([file, country, cityName, provider, ip, why]) => ({
-      file, folder: 'C:\\Users\\you\\AppData\\Local\\Relay\\pinned', tag: 'pinned',
+      file, folder: 'C:\\Users\\you\\AppData\\Local\\Mirage\\pinned', tag: 'pinned',
       country, city: cityName, provider, ip, why, at: now() - 3600,
     }));
     return {
-      ok: true, folders: [{ path: 'C:\\Users\\you\\AppData\\Local\\Relay\\pinned', tag: 'pinned', name: 'Pinned', count: 4 }],
+      ok: true, folders: [{ path: 'C:\\Users\\you\\AppData\\Local\\Mirage\\pinned', tag: 'pinned', name: 'Pinned', count: 4 }],
       exits: rows, dead: 4, shelved: [{ tag: 'pinned', name: 'Pinned', count: 7, at: now() - 86400 * 2 }], aside: 7,
     };
   }
@@ -371,9 +439,9 @@
     return { ok: true };
   }
 
-  const PINNED = 'C:\\Users\\you\\AppData\\Local\\Relay\\pinned';
+  const PINNED = 'C:\\Users\\you\\AppData\\Local\\Mirage\\pinned';
   const pinPlan = () => ({
-    ok: true, folder: 'C:\\Users\\you\\AppData\\Local\\Relay\\configs', out: PINNED,
+    ok: true, folder: 'C:\\Users\\you\\AppData\\Local\\Mirage\\configs', out: PINNED,
     total: 12, most: 36, minutes: 1, existing: 118, checked: false, blockers: [],
     route: 'direct', port: 10809, maxIps: 3, test: true, outIsStandard: true,
   });
@@ -397,8 +465,8 @@
     ],
     untraced: 6,
     siteFolders: [
-      { folder: 'C:\\Users\\you\\AppData\\Local\\Relay\\sitetest\\web-telegram-org', tag: 'web.telegram.org', count: 22 },
-      { folder: 'C:\\Users\\you\\AppData\\Local\\Relay\\sitetest\\www-instagram-com', tag: 'www.instagram.com', count: 15 },
+      { folder: 'C:\\Users\\you\\AppData\\Local\\Mirage\\sitetest\\web-telegram-org', tag: 'web.telegram.org', count: 22 },
+      { folder: 'C:\\Users\\you\\AppData\\Local\\Mirage\\sitetest\\www-instagram-com', tag: 'www.instagram.com', count: 15 },
     ],
     blockers: [], count: 118, total: 118, minutes: 9,
   });
@@ -441,7 +509,7 @@
       if (i >= 0) S.favourites.splice(i, 1); else S.favourites.push(code);
       return { ok: true, codes: S.favourites, on: i < 0 };
     },
-    setSort: (kind) => { S.sortBy = kind || 'ping'; return { ok: true }; },
+    setSort: (kind) => { S.sortBy = kind || 'windscribe'; return { ok: true }; },
     setTheme: (key) => { S.theme = key; return { ok: true, theme: key }; },
     setKillSwitch: (on) => { S.killSwitch = !!on; return { ok: true, killSwitch: !!on }; },
     setSystemProxy: (on) => { S.systemProxy = !!on; return { ok: true, systemProxy: !!on }; },
@@ -469,6 +537,10 @@
     setPinRoute: () => ({ ok: true, ...pinPlan() }),
     startPin,
     cancelPin: () => { pinTimers.forEach(clearTimeout); return { ok: true }; },
+    setupDone: () => ({ ok: true, at: Math.floor(now()) }),
+    setSection: (section) => ({ ok: true, section }),
+    configs: (action, p) => configsMock(action, p || {}),
+    logSetup: () => ({ ok: true }),
     surfsharkServers: () => new Promise((r) => later(1600, () => r({ ok: true, written: 96 }))),
     windscribeServers: () => new Promise((r) => later(1600, () => r({ ok: true, written: 41, pinFolder: '' }))),
     sweepPlan,
@@ -478,12 +550,11 @@
     serverInIran: () => ({ ok: true, inIran: false }),
     installCommand: () => ({
       ok: true,
-      command: "mkdir -p /opt/relay && echo '…installer…' | base64 -d > /opt/relay/install-server.sh && bash /opt/relay/install-server.sh relay.example.net --password '••••' --api-password '••••'",
+      command: "mkdir -p /opt/mirage && echo '…installer…' | base64 -d > /opt/mirage/install-server.sh && bash /opt/mirage/install-server.sh mirage.example.net --password '••••' --api-password '••••'",
       status: "systemctl --no-pager --lines=0 status gost sing-box nginx | grep -E '^. |Active:'",
       uninstall: 'systemctl disable --now gost sing-box',
     }),
     exportState: () => ({ ready: true, slots: 4, why: '', host: S.tunnelDomain, running: false, last: null }),
-    quickTest: () => ({ ok: false, error: 'This is a preview: nothing is timed here.' }),
     testReach: () => ({ ok: false, error: 'This is a preview: nothing is timed here.' }),
     testTunnel: () => new Promise((r) => later(1200, () => r({ ok: true, ms: 214, ip: '91.107.233.18' }))),
     chooseFolder: () => ({ ok: false }),
@@ -630,7 +701,7 @@
   let going = Promise.resolve();
   window.addEventListener('message', (e) => {
     const m = e.data;
-    if (!m || m.relay !== 'go') return;
+    if (!m || m.mirage !== 'go') return;
     const fn = GO[m.to];
     if (!fn) return;
     going = going.then(async () => {
@@ -640,16 +711,16 @@
         try { await acctRefresh(); } catch (_) { /* the pane is not up yet */ }
       }
       try { await fn(); } catch (err) { console.error('[mock] go', m.to, err); }
-      try { parent.postMessage({ relay: 'at', to: m.to }, '*'); } catch (_) { /* alone */ }
+      try { parent.postMessage({ mirage: 'at', to: m.to }, '*'); } catch (_) { /* alone */ }
     });
   });
 
-  window.__relayPreview = { go: (to) => window.postMessage({ relay: 'go', to }, '*'), S };
+  window.__miragePreview = { go: (to) => window.postMessage({ mirage: 'go', to }, '*'), S };
 
   // Tell the page around this one when the window is up and taking orders.
   window.addEventListener('load', () => {
     later(400, () => {
-      try { parent.postMessage({ relay: 'ready' }, '*'); } catch (_) { /* alone */ }
+      try { parent.postMessage({ mirage: 'ready' }, '*'); } catch (_) { /* alone */ }
     });
   });
 })();

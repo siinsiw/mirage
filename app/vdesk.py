@@ -2,10 +2,10 @@
 
 For the UI checks. They open a real window and photograph it, and on the
 desktop someone is working at, that window keeps landing on top of what
-they are doing. Set RELAY_TEST_DESKTOP to a desktop's number, counting
+they are doing. Set MIRAGE_TEST_DESKTOP to a desktop's number, counting
 from 1 as Task View does, and a check runs over there instead:
 
-    set RELAY_TEST_DESKTOP=2
+    set MIRAGE_TEST_DESKTOP=2
     python app/main.py --ui-check
 
 Windows only lets a process move its own windows between desktops - asked
@@ -20,7 +20,7 @@ import os
 import uuid
 import winreg
 
-ENV = 'RELAY_TEST_DESKTOP'
+ENV = 'MIRAGE_TEST_DESKTOP'
 
 _CLSID_MANAGER = uuid.UUID('aa509086-5ca9-4c25-8f95-589d3c07b48a')
 _IID_MANAGER = uuid.UUID('a5cd92ff-29be-454c-8d04-d82879fb3f1b')

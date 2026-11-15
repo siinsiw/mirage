@@ -1,10 +1,10 @@
 """One connection through a config: up, switched, watched, down.
 
 The machine is pointed at it the way the rest of the app points it at the
-provider worker - the same system proxy object, the same adapter (tun.Tun,
-started here with this section's own sing-box configuration), the same kill
-switch setting and the same split lists - so the person has one set of
-switches, whichever section they connect from. Only one connection is up at
+provider worker - the same system proxy object and the same adapter
+(tun.Tun, started here with this section's own sing-box configuration) -
+but by this section's own settings (configs/prefs.py): its own mode, kill
+switch and split, set in Configs' settings and apart from Mirage's. Only one connection is up at
 a time: main.py takes the other one down before this one comes up, and the
 other way round.
 
@@ -39,6 +39,7 @@ import split
 import tun as tunmod
 
 from . import links, procs, singbox, store, xray
+from . import prefs as _prefs
 
 PREFERRED_PORT = 10808
 RECORD = os.path.join(procs.DIR, 'running.json')
@@ -140,6 +141,40 @@ class Runner:
         self.meter = Meter()
         self._poll_stop = threading.Event()
         self._poll = None
+        self._prefs = None
+        # Whether a hold that is up now was raised by this section - a
+        # handoff held, or its connection dropped with the kill switch on.
+        self.owns_hold = False
+
+    # -- this section's own settings -------------------------------------------
+
+    def prefs(self):
+        """Configs' settings, read once and kept until they change - this is
+        asked every second by the status and the drop watch, and the file is
+        sealed."""
+        got = self._prefs
+        if got is None:
+            try:
+                got = store.settings()
+            except Exception:
+                return _prefs.defaults()
+            self._prefs = got
+        return got
+
+    def prefs_changed(self):
+        self._prefs = None
+
+    def kill_switch(self):
+        return bool(self.prefs().get('kill_switch'))
+
+    def want_mode(self):
+        """'tun' or 'proxy': what the programs run as."""
+        return 'tun' if self.prefs().get('mode') == 'tun' else 'proxy'
+
+    def points_windows(self):
+        """Whether Windows is pointed here - the adapter, or the system
+        proxy; 'local' leaves Windows alone and only serves the port."""
+        return self.prefs().get('mode') in ('system', 'tun')
 
     # -- what state are we in -----------------------------------------------
 
@@ -170,23 +205,23 @@ class Runner:
     def blocked(self):
         if self.alive():
             return False
-        return bool((self.engine.kill_switch and self.engaged())
+        return bool((self.kill_switch() and self.engaged())
                     or self.engine.tun.held_by_firewall())
 
     def holding(self):
-        return bool(self.engine.kill_switch
+        return bool(self.kill_switch()
                     and (self.engaged() or self.engine.tun.held_by_firewall()))
 
     def status(self):
         on = self.alive()
-        state = 'on' if on and (self.engaged() or not self.engine.set_system_proxy) \
+        state = 'on' if on and (self.engaged() or not self.points_windows()) \
             else ('broken' if on else 'off')
         out = {'state': state, 'port': self.port or 0,
-               'systemProxy': self.engine.set_system_proxy,
-               'routeWith': self.engine.route_with,
+               'systemProxy': self.points_windows(),
+               'routeWith': (self.mode if on and self.mode else self.want_mode()),
                'tun': self.mode == 'tun' and on,
                'blocked': self.blocked() if self.port else False,
-               'killSwitch': self.engine.kill_switch,
+               'killSwitch': self.kill_switch(),
                'owed_restore': bool(self.sysproxy.stashed()),
                'configs': True}
         if self.info:
@@ -212,6 +247,7 @@ class Runner:
         """Up through config `cid` (its whole group loaded), or with auto,
         through whichever of the group answers fastest."""
         with self.lock:
+            self.prefs_changed()
             state = store.load()
             cfg = store.find(cid, state) if cid else None
             if cfg is None:
@@ -220,12 +256,13 @@ class Runner:
             sb = paths.singbox_exe()
             if not sb:
                 raise RuntimeError('engine-missing: sing-box.exe was not found')
+            opts = self.prefs()
             xbin = paths.xray_exe()
             if not xbin:
-                if links.engine_for(cfg) == 'xray':
+                if _prefs.engine_for(cfg, opts) == 'xray':
                     raise RuntimeError('xray-missing: this config needs Xray '
                                        '(xray.exe), which was not found')
-                group = [c for c in group if links.engine_for(c) != 'xray']
+                group = [c for c in group if _prefs.engine_for(c, opts) != 'xray']
 
             # A switch with the kill switch on keeps the machine pointed here
             # while the old programs go and the new ones come up - and if the
@@ -233,25 +270,25 @@ class Runner:
             held = self.holding()
             self.disconnect(quiet=True, hold=held)
             progress({'phase': 'starting', 'country': '', 'city': cfg['name']})
-            fragment = bool(state.get('fragment'))
-            mode = ('tun' if self.engine.set_system_proxy
-                    and self.engine.route_with == 'tun' else 'proxy')
-            port = self.port if (self.port and mode == self.mode
-                                 and procs.port_free(self.port)) \
+            fragment = bool(opts.get('fragment'))
+            mode = self.want_mode()
+            # The same port when it is free, whatever the mode was: a new
+            # one would leave whatever still points at the old one there.
+            port = self.port if (self.port and procs.port_free(self.port)) \
                 else self._pick_port()
             clash_port = procs.free_ports(1)[0]
             secret = procs.token()
 
             hops = {}
-            for_xray = [c for c in group if links.engine_for(c) == 'xray']
+            for_xray = [c for c in group if _prefs.engine_for(c, opts) == 'xray']
             try:
                 if for_xray:
                     ports = procs.free_ports(len(for_xray))
-                    entries = [(c, ports[n], 'relay', procs.token())
+                    entries = [(c, ports[n], 'mirage', procs.token())
                                for n, c in enumerate(for_xray)]
                     hops = {c['id']: (p, u, pw) for c, p, u, pw in entries}
-                    path = procs.write_config(xray.build(entries, fragment),
-                                              'xray')
+                    path = procs.write_config(xray.build(entries, fragment,
+                                                         opts=opts), 'xray')
                     try:
                         self.xray, xlog = procs.start(xbin, ['run', '-c', path],
                                                       'xray.log')
@@ -262,14 +299,14 @@ class Runner:
                     finally:
                         procs.forget(path)
 
-                split_rules = split.rules(self.engine.split)
+                split_rules = split.rules(_prefs.split_of(self.prefs()))
                 config = singbox.build(
                     group, port=port, clash_port=clash_port,
                     clash_secret=secret, selected=cid, auto=auto, mode=mode,
                     split_rules=split_rules,
                     line_resolver=tunmod.line_dns() if split_rules else None,
                     xray=hops, fragment=fragment, own=[sys.executable],
-                    carriers=[xbin, sb])
+                    carriers=[xbin, sb], opts=opts)
                 self.clash = procs.Clash(clash_port, secret)
                 if mode == 'proxy':
                     path = procs.write_config(config, 'run')
@@ -281,25 +318,41 @@ class Runner:
                                 procs.tail(log, 400) or 'sing-box did not start'))
                     finally:
                         procs.forget(path)
-                    if self.engine.set_system_proxy:
+                    if self.points_windows():
                         progress({'phase': 'routing'})
                         self.sysproxy.engage('127.0.0.1', port)
-                        if self.engine.tun.held_by_firewall():
-                            self.engine.tun.release_firewall()
+                    elif self.sysproxy.stashed():
+                        # Local port only: Windows is left alone - which
+                        # means put back, not left on the last one's port.
+                        self.sysproxy.restore()
+                    if self.engine.tun.held_by_firewall():
+                        self.engine.tun.release_firewall()
+                    # An adapter still up for another port - Mirage's, held
+                    # across the handoff, or this section's own from before a
+                    # move off the whole-PC mode - is not this connection's,
+                    # and would go on carrying the whole machine past it.
+                    if (self.engine.tun.running()
+                            and not self.engine.tun.engaged_for(port)):
+                        self.engine.tun.stop()
                 else:
                     progress({'phase': 'adapter'})
                     self.engine.tun.start(port, watch=os.getpid(),
-                                          hold=self.engine.kill_switch,
+                                          hold=self.kill_switch(),
                                           config=config)
                     if not procs.wait(_Never(), self.clash.up, 10):
                         raise RuntimeError('did-not-start: the adapter came up '
                                            'but sing-box did not answer')
+                    # The adapter carries everything now; a proxy setting the
+                    # connection before left pointed at its dead port goes.
+                    if self.sysproxy.stashed():
+                        self.sysproxy.restore()
             except Exception:
                 self.mode, self.port = mode, port
                 self._teardown(release=not held)
                 raise
 
             self.mode, self.port = mode, port
+            self.owns_hold = False
             self.group = group
             self.auto = bool(auto)
             self.current = 'auto' if auto else cid
@@ -382,12 +435,11 @@ class Runner:
         with self.lock:
             if not self.alive():
                 return False
-            want = ('tun' if self.engine.set_system_proxy
-                    and self.engine.route_with == 'tun' else 'proxy')
+            want = self.want_mode()
             if want != self.mode:
                 return 'reconnect'
             if self.mode == 'proxy':
-                if self.engine.set_system_proxy:
+                if self.points_windows():
                     if not self.sysproxy.engaged_for(self.port):
                         self.sysproxy.engage('127.0.0.1', self.port)
                 elif self.sysproxy.engaged_for(self.port):
@@ -411,6 +463,7 @@ class Runner:
 
     def _teardown(self, release=True):
         self._poll_stop.set()
+        self.owns_hold = not release
         if release and self.port:
             try:
                 if self.engine.tun.engaged_for(self.port):

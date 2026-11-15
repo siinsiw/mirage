@@ -1,5 +1,5 @@
 /* ============================================================================
-   Relay — "Night room". Tokens first: three themes, an accent that is the
+   Mirage — "Night room". Tokens first: three themes, an accent that is the
    connection state, 4-pt spacing, 28/24/14/12/999 radii, Geist + Estedad.
    Spec: .claude/DESIGN-NIGHT.md
    ========================================================================= */
@@ -42,7 +42,7 @@
   /* Type */
   --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "Geist Mono Relay", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --font-mono: "Geist Mono Mirage", "Cascadia Mono", Consolas, ui-monospace, monospace;
 
   /* Motion: decel for arrivals, point-to-point for moves. */
   --decel: cubic-bezier(0, 0, 0, 1);
@@ -527,7 +527,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
    ====================================================================== */
 
 @font-face {
-  font-family: 'Geist Mono Relay';
+  font-family: 'Geist Mono Mirage';
   src: url('fonts/GeistMono-Variable.woff2') format('woff2');
   font-weight: 100 900;
   font-style: normal;
@@ -535,7 +535,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 }
 
 @font-face {
-  font-family: 'Geist Relay';
+  font-family: 'Geist Mirage';
   src: url('fonts/Geist-Variable.woff2') format('woff2');
   font-weight: 100 900;
   font-style: normal;
@@ -2074,7 +2074,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 /* ------------------------------------------------------------ split tunnel
 
-   What goes round Relay rather than through it. The switch at the top is
+   What goes round Mirage rather than through it. The switch at the top is
    the same three-position strip as the way out; under it, one list, read
    two ways depending on where the switch is. Motion is GSAP's (splitPane in
    app.js); this only says where things sit and what they look like at rest. */
@@ -4356,13 +4356,6 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 :root[data-boot='wait'] .app > :not(.bar) { visibility: hidden; }
 
-.quick__row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-
-.quick__cap { flex: 1; display: grid; gap: 2px; font-size: 12px; color: var(--text); }
-
-.quick__sub { font-size: 12px; color: var(--text-off); }
-
-#prefQuick .note:empty { display: none; }
 
 /* ------------------------------------------------- a window made wide */
 
@@ -5249,7 +5242,7 @@ button.gh:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; 
 
 .exit {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto auto 28px;
   align-items: center;
   column-gap: 12px;
   width: 100%;
@@ -5271,6 +5264,11 @@ button.gh:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; 
 .exit__ping { font-family: var(--font-mono); font-size: 12px; line-height: 16px; color: var(--text-2); font-variant-numeric: tabular-nums; min-width: 3.5em; text-align: right; }
 
 .exit[data-state='untested'] .exit__ping { color: var(--text-3); }
+
+/* The bolt waits under the pointer, as on the rows above it; its column is
+   kept so the times do not shift sideways when it shows. A running one
+   stays in sight. */
+.exit:not(:hover):not(:focus-within) .rowtest:not([data-busy='true']) { visibility: hidden; }
 
 .exit__why { display: inline-grid; place-items: center; position: relative; color: var(--fail); }
 
@@ -5314,7 +5312,7 @@ button.gh:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; 
   /* Only for Arabic-script glyphs, after Segoe UI Variable: country names,
      provider strings, user-entered names and the Persian domains in the split
      tunnel list. */
-  font-family: 'Estedad Relay';
+  font-family: 'Estedad Mirage';
   src: url('fonts/Estedad-Variable.woff2') format('woff2');
   font-weight: 100 900;
   font-style: normal;
@@ -5323,8 +5321,8 @@ button.gh:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; 
 }
 
 :root {
-  --font-ui: "Geist Relay", "Estedad Relay", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  --font-display: "Geist Relay", "Estedad Relay", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-ui: "Geist Mirage", "Estedad Mirage", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Geist Mirage", "Estedad Mirage", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   --seg-on: color-mix(in srgb, var(--surface-2), var(--text) 12%);
 }
 
@@ -6296,7 +6294,7 @@ body::after {
 }
 
 /* Persian is set in Estedad with room for its marks. */
-:lang(fa), [dir='rtl'] { font-family: 'Estedad Relay', var(--font-ui); line-height: 1.9; }
+:lang(fa), [dir='rtl'] { font-family: 'Estedad Mirage', var(--font-ui); line-height: 1.9; }
 
 :focus-visible { outline-color: var(--focus); }
 
@@ -6727,6 +6725,15 @@ body::after {
 #sortBy .pair__opt { height: 34px; padding: 0 14px; border-radius: var(--r-pill); box-shadow: none; }
 
 #sortBy .pair__opt[aria-selected='true'] { background: var(--surface-2); box-shadow: none; font-weight: 500; }
+
+/* Four sorts and the source button on one line in a 400px window: only the
+   chosen one says its name, the others are their icon, with the name in the
+   tooltip and the accessible label. */
+#sortBy .pair__opt[aria-selected='false'] { padding: 0 10px; }
+#sortBy .pair__opt[aria-selected='false'] > span {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
 
 .listhead { height: 34px; padding: 0 10px 0 14px; border-radius: var(--r-pill); box-shadow: inset 0 0 0 1px var(--edge); }
 

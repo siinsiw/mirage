@@ -10,7 +10,7 @@ checks the folders afterwards. Run with:
 
     python app/main.py --ui-drive
 
-Nothing here connects and nothing here touches the real folders - RELAY_DATA
+Nothing here connects and nothing here touches the real folders - DATA_DIR
 points the whole app at a temporary tree built by _fixture(), which is thrown
 away at the end.
 """
@@ -188,7 +188,7 @@ def fixture():
     import tempfile
 
     real = paths.DATA_DIR
-    root = tempfile.mkdtemp(prefix='relay-drive-')
+    root = tempfile.mkdtemp(prefix='mirage-drive-')
     for rel in ('pinned', 'success', '.state'):
         os.makedirs(os.path.join(root, rel), exist_ok=True)
 

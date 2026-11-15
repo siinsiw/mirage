@@ -21,7 +21,7 @@ import traceback
 
 import paths
 
-from . import links, probe, runner, store, subs
+from . import links, prefs, probe, runner, store, subs
 
 
 def clipboard_text(limit=links.MAX_TEXT):
@@ -64,6 +64,16 @@ class Section:
         self._cancel = None
         self._fetching = set()
         self._reconnect = None
+        # The first time this section has settings of its own, they start
+        # as Mirage's; after that the two are apart.
+        try:
+            store.seed_settings(prefs.from_mirage(owner._engine))
+        except Exception:
+            self._log('seed: ' + traceback.format_exc())
+        # Subscriptions brought up to date on their own, while the app is
+        # open: at start when asked, then every N hours (Settings >
+        # Subscriptions). Nothing else here runs unasked.
+        threading.Thread(target=self._keep_subs_fresh, daemon=True).start()
 
     # -- the one door ------------------------------------------------------
 
@@ -151,9 +161,58 @@ class Section:
         key = str(p.get('key'))
         if key not in ('fragment',):
             raise ValueError('not an option')
-        store.set_option(key, bool(p.get('on')))
+        store.set_settings({key: bool(p.get('on'))})
         return {'list': self._listing(),
                 'reconnect': self.runner.alive()}
+
+    def do_pick(self, p):
+        """The one Connect will use, without connecting."""
+        cid = str(p.get('id') or '')
+        if not store.find(cid):
+            raise ValueError('that config is not there any more')
+        store.set_option('selected', cid)
+        return {'list': self._listing()}
+
+    # -- the section's own settings ------------------------------------------
+
+    def do_settings(self, p):
+        return {'values': store.settings()}
+
+    def do_set(self, p):
+        """One or more settings, {values: {key: value}}. Says whether the
+        connection that is up has to be made again for them to apply."""
+        changes = p.get('values')
+        if not isinstance(changes, dict) or not changes:
+            raise ValueError('nothing to change')
+        changed = store.set_settings(changes)
+        values = store.settings()
+        self.runner.prefs_changed()
+        applied = self._apply_live(changed, values)
+        return {'values': values, 'changed': changed, 'applied': applied,
+                'reconnect': self.runner.alive() and not applied
+                and any(prefs.reconnects(k) for k in changed)}
+
+    def _apply_live(self, changed, values):
+        """What can follow a change on a connection that is up, does: the
+        kill switch's hold, and the system proxy put on or taken off. A
+        move between the proxy and the adapter connects the same config
+        again. True when the change is already in effect."""
+        done = False
+        if 'kill_switch' in changed:
+            # Held is exactly when nothing is active - so this goes first,
+            # and on its own: turned off while holding, the hold goes.
+            on = bool(values.get('kill_switch'))
+            if self.kill_switch_changed(on):
+                self.owner._holding = False
+                self.owner._emit('Disconnected', {'minutes': 0})
+                return True
+            done = self.runner.active()
+        if not self.runner.active():
+            return done
+        if 'mode' in changed:
+            out = self.reroute()
+            done = out is True or out == 'reconnect'
+        return done
 
     # -- subscriptions -----------------------------------------------------
 
@@ -192,7 +251,40 @@ class Section:
                              'connected - disconnect first')
         return {'removed': store.remove_group(gid), 'list': self._listing()}
 
-    def _fetch(self, gid):
+    def _keep_subs_fresh(self, first_wait=30, every=300):
+        stop = getattr(self.owner, '_stop', None)
+        wait = (stop.wait if stop is not None else time.sleep)
+        if wait(first_wait):
+            return
+        first = True
+        tried = {}
+        while True:
+            try:
+                opts = store.settings()
+                hours = int(opts.get('sub_auto_hours') or 0)
+                now = time.time()
+                # Not while a kill switch is holding: with nothing up the
+                # fetch would go out on the very line that is being held.
+                held = self.runner.blocked() or self.owner._engine.blocked()
+                for g in ([] if held else store.load()['groups']):
+                    if g.get('kind') != 'sub':
+                        continue
+                    stale = hours and (now - float(g.get('updated') or 0)) > hours * 3600
+                    # A fetch that failed is not tried again for an hour, or
+                    # for the whole interval when that is shorter.
+                    recent = now - tried.get(g['id'], 0) < min(3600, max(hours, 1) * 3600)
+                    if ((first and opts.get('sub_on_launch')) or stale) and not recent:
+                        tried[g['id']] = now
+                        self._fetch(g['id'], quiet=True)
+            except Exception:
+                self._log('subs: ' + traceback.format_exc())
+            first = False
+            if wait(every):
+                return
+
+    def _fetch(self, gid, quiet=False):
+        """quiet: a fetch nobody pressed for - its failure is kept on the
+        group, not said over whatever the person is doing."""
         if gid in self._fetching:
             return
         self._fetching.add(gid)
@@ -200,7 +292,9 @@ class Section:
 
         def work():
             try:
-                configs, problems, info, name = subs.fetch(store.group_url(gid), via)
+                agent = store.settings().get('sub_user_agent') or None
+                configs, problems, info, name = subs.fetch(
+                    store.group_url(gid), via, user_agent=agent)
                 n = store.replace_group(gid, configs)
                 fields = {'info': info, 'updated': time.time(), 'error': None}
                 state = store.load()
@@ -208,7 +302,7 @@ class Section:
                 if not g.get('name') and name:
                     fields['name'] = name
                 store.update_group(gid, **fields)
-                self._emit('sub', group=gid, ok=True, count=n,
+                self._emit('sub', group=gid, ok=True, count=n, quiet=quiet,
                            problems=problems[:30], through=bool(via),
                            list=self._listing())
             except Exception as e:
@@ -217,7 +311,7 @@ class Section:
                 if not isinstance(e, (subs.Refused, links.Invalid)):
                     self._log('sub: ' + traceback.format_exc())
                 store.update_group(gid, error=said[:200])
-                self._emit('sub', group=gid, ok=False, error=said,
+                self._emit('sub', group=gid, ok=False, error=said, quiet=quiet,
                            list=self._listing())
             finally:
                 self._fetching.discard(gid)
@@ -240,12 +334,13 @@ class Section:
         if not configs:
             raise ValueError('nothing to test')
         cancel = self._cancel = threading.Event()
-        fragment = bool(state.get('fragment'))
+        opts = store.settings(state)
+        fragment = bool(opts.get('fragment'))
 
         def work():
             try:
                 results = probe.test(
-                    configs, fragment=fragment, cancel=cancel,
+                    configs, fragment=fragment, cancel=cancel, opts=opts,
                     progress=lambda done, total, cid, r: self._emit(
                         'test', done=done, total=total, id=cid, result=r))
                 store.set_results({k: v for k, v in results.items()
@@ -336,6 +431,24 @@ class Section:
     def do_disconnect(self, p):
         return self.owner.disconnect()
 
+    def do_autostart(self, p):
+        """At start, Settings > Connection > Connect on opening: the last one
+        used, or the fastest of its group. Only with nothing up and nothing
+        under way."""
+        how = store.settings().get('auto_connect')
+        state = store.load()
+        cid = state.get('selected')
+        owner = self.owner
+        if how not in ('last', 'fastest') or not cid or not store.find(cid, state):
+            return {'started': False}
+        try:
+            if owner._busy or self.runner.active() or owner._engine.running():
+                return {'started': False}
+        except Exception:
+            return {'started': False}
+        self.do_connect({'id': cid, 'auto': how == 'fastest'})
+        return {'started': True}
+
     def _confirm(self):
         def work():
             info = self.runner.info
@@ -361,7 +474,11 @@ class Section:
         r.set_kill_switch(on)
         if on or r.alive() or not r.port:
             return False
-        if r.engaged() or self.owner._engine.tun.held_by_firewall():
+        eng = self.owner._engine
+        # A hold Mirage's own connection raised is Mirage's kill switch's.
+        if eng.running() or eng.engaged() or not r.owns_hold:
+            return False
+        if r.engaged() or eng.tun.held_by_firewall():
             r.disconnect(quiet=True)
             self._reconnect = None
             return True
@@ -382,6 +499,7 @@ class Section:
                 self.do_connect({'id': cid, 'auto': r.auto})
             except ValueError as e:
                 self._log(f'reroute: {e}')
+                return 'failed'
         return out
 
     def take_reconnect(self):
@@ -412,6 +530,7 @@ class Section:
         owner._retray('off')
         if held:
             owner._holding = True
+            r.owns_hold = True
             self._reconnect = (None if cur[0] == 'auto' else cur[0], cur[1])
             owner._emit('Blocked', {'reason': 'adapter' if r.mode == 'tun'
                                     else 'dropped', 'status': r.status()})
@@ -420,4 +539,12 @@ class Section:
                 r.disconnect(quiet=True)
             except Exception:
                 pass
+            # Settings > Connection > Reconnect when it drops.
+            if r.prefs().get('reconnect_on_drop') and cur[0]:
+                try:
+                    self.do_connect({'id': None if cur[0] == 'auto' else cur[0],
+                                     'auto': cur[1]})
+                    return
+                except ValueError:
+                    pass
             owner._emit('Dropped', {'status': r.status()})

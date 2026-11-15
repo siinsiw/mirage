@@ -27,12 +27,126 @@ import tempfile
 FROZEN = bool(getattr(sys, 'frozen', False))
 WORKER_FLAG = '--proxy-worker'
 
+DATA_NAME = 'Mirage'
+# The data folder's name before the app was renamed. Only adopt_legacy_data
+# uses it, to move an existing %LOCALAPPDATA%\Relay to its new name.
+LEGACY_DATA_NAME = 'Relay'
+
+
+def _repoint(record, old, new):
+    """Rewrite every absolute path under `old` in a JSON value to the same
+    place under `new`. Returns whether anything changed."""
+    changed = False
+
+    def move(value):
+        nonlocal changed
+        if isinstance(value, str):
+            prefix = ''
+            if value.startswith('folder:'):
+                prefix, value = 'folder:', value[7:]
+            if os.path.isabs(value):
+                o = os.path.normcase(os.path.abspath(old))
+                h = os.path.normcase(os.path.abspath(value))
+                try:
+                    inside = os.path.commonpath((o, h)) == o
+                except ValueError:
+                    inside = False
+                if inside:
+                    changed = True
+                    return prefix + os.path.join(new, os.path.relpath(value, old))
+            return prefix + value
+        if isinstance(value, dict):
+            return {k: move(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [move(v) for v in value]
+        return value
+
+    return move(record), changed
+
+
+def adopt_legacy_data(local):
+    r"""The data folder under `local` (LocalAppData), moving the old one in.
+
+    Mirage was called Relay, and so was its folder. On the first start after
+    the rename %LOCALAPPDATA%\Relay is renamed to %LOCALAPPDATA%\Mirage -
+    a rename, so the accounts, the pinned exits and the logs all come along
+    and nothing is copied. If Mirage already exists it wins and Relay is left
+    alone. Called once, while this module is imported, so nothing has read or
+    written either folder yet.
+
+    A rename can be refused - the old Relay still open, holding a log - and
+    then this run uses Relay where it is and the move is tried again on the
+    next start, rather than starting from an empty folder.
+
+    The settings and the set-aside index remember folders by absolute path,
+    so those are pointed at the new name after the move.
+    """
+    new = os.path.join(local, DATA_NAME)
+    old = os.path.join(local, LEGACY_DATA_NAME)
+    if os.path.isdir(new):
+        # Moved already - but a rewrite below that failed once (a settings
+        # file held by an antivirus scan) is tried again on every start.
+        _repoint_state(new, old)
+        return new
+    if os.path.lexists(new) or not os.path.isdir(old):
+        return new
+    # The old Relay still running: its folder is not moved out from under
+    # it. This copy only lives long enough to bring that window forward
+    # (oneinstance), and the move happens on the first start without it.
+    if _legacy_running():
+        return old
+    try:
+        os.rename(old, new)
+    except OSError:
+        # Another copy starting at the same moment may have won the move.
+        return new if os.path.isdir(new) else old
+    _repoint_state(new, old)
+    return new
+
+
+def _legacy_running():
+    """Whether the old Relay.exe holds its single-instance claim now."""
+    if os.name != 'nt':
+        return False
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.OpenMutexW.restype = ctypes.c_void_p
+        h = k32.OpenMutexW(0x00100000, False, r'Local\Relay.SingleInstance')
+        if h:
+            k32.CloseHandle(ctypes.c_void_p(h))
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _repoint_state(new, old):
+    """Point the settings and the set-aside index at the new folder where
+    they still name the old one. Quiet, and done again next time if not."""
+    state = os.path.join(new, '.state')
+    for name in ('settings.json', 'settings.json.bak', 'dropped.json'):
+        target = os.path.join(state, name)
+        try:
+            with open(target, encoding='utf-8') as f:
+                record = json.load(f)
+            record, changed = _repoint(record, old, new)
+            if not changed:
+                continue
+            tmp = target + '.migrating'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(record, f, indent=2)
+            os.replace(tmp, target)
+        except (OSError, ValueError, TypeError):
+            continue
+
+
 if FROZEN:
     APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
     RES_DIR = getattr(sys, '_MEIPASS', APP_DIR)
-    DATA_DIR = os.path.join(
+    DATA_DIR = adopt_legacy_data(
         os.environ.get('LOCALAPPDATA') or
-        os.path.join(os.path.expanduser('~'), 'AppData', 'Local'), 'Relay')
+        os.path.join(os.path.expanduser('~'), 'AppData', 'Local'))
     PROXY_PY = os.path.join(RES_DIR, 'ovpn-proxy.py')
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -128,7 +242,7 @@ DROPPED_INDEX = os.path.join(STATE_DIR, 'dropped.json')
 def prepare_data():
     """Seed per-user storage from an older portable build without overwriting it.
 
-    The release ZIP holds starter configs under the executable. Older Relay
+    The release ZIP holds starter configs under the executable. Older
     versions also wrote user state there. Both are copied on first use, and
     new starter names can be added by later releases. A user's existing files
     always win, including DPAPI-sealed accounts from this Windows account.
@@ -147,7 +261,7 @@ def prepare_data():
         tmp = None
         try:
             with open(source, 'rb') as src:
-                fd, tmp = tempfile.mkstemp(prefix='.relay-import-', dir=parent)
+                fd, tmp = tempfile.mkstemp(prefix='.mirage-import-', dir=parent)
                 with os.fdopen(fd, 'wb') as dst:
                     shutil.copyfileobj(src, dst)
             try:

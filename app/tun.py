@@ -8,7 +8,7 @@ whether it knows about proxies or not, handed to the same worker on the same
 port. Everything from the worker on is unchanged - the exit, the meter, the
 host list.
 
-Relay does not drive an adapter itself. It runs sing-box, which creates one
+Mirage does not drive an adapter itself. It runs sing-box, which creates one
 with wintun (carried inside sing-box.exe, there is no driver to install),
 points the routes at it, keeps Windows from asking the other adapters' DNS
 servers, and turns each TCP connection it catches into a SOCKS5 request to
@@ -40,7 +40,7 @@ listed name is looked up from this line's own resolver rather than through
 the exit, so it is answered as seen from here.
 
 Creating an adapter takes administrator rights, so sing-box is started by a
-small elevated PowerShell script: one UAC prompt per connect, none if Relay
+small elevated PowerShell script: one UAC prompt per connect, none if Mirage
 is already elevated. An unelevated window cannot stop an elevated process,
 so it asks - the same way the sweep is asked. It drops a stop file, and the
 script ends sing-box and says so in a done file. The script also watches the
@@ -65,7 +65,7 @@ import paths
 from sweep import CREATE_NO_WINDOW, _ps_array, _ps_string, discard, elevated
 
 # The adapter's name in Network Connections, and what the script waits for.
-ADAPTER = 'RelayTun'
+ADAPTER = 'MirageTun'
 # Not one of the private ranges below: those are routed around the adapter,
 # and the adapter's own subnet must not be one of the things routed around.
 # sing-box answers DNS on the next address, 198.18.0.2.
@@ -194,7 +194,7 @@ def _split_rules(r, line_resolver):
         conds = ([{'process_name': apps}] if apps else []) + ([dest] if dest else [])
         for cond in conds:
             route.append(dict(cond, network='udp', action='reject'))
-            route.append(dict(cond, action='route', outbound='relay'))
+            route.append(dict(cond, action='route', outbound='proxy'))
     return route, dns
 
 
@@ -255,7 +255,7 @@ def build_config(port, keep=(), own=(), carriers=(), log_path=None,
 
     dns_servers = [
         {'type': 'https', 'tag': 'dns-remote', 'server': DOH,
-         'detour': 'relay'},
+         'detour': 'proxy'},
         {'type': 'https', 'tag': 'dns-direct', 'server': DOH},
     ]
     if split_dns:
@@ -287,14 +287,14 @@ def build_config(port, keep=(), own=(), carriers=(), log_path=None,
             'route_exclude_address': list(LOCAL_NETS) + kept,
         }],
         'outbounds': [
-            {'type': 'socks', 'tag': 'relay', 'server': '127.0.0.1',
+            {'type': 'socks', 'tag': 'proxy', 'server': '127.0.0.1',
              'server_port': int(port), 'version': '5', 'network': 'tcp'},
             {'type': 'direct', 'tag': 'direct'},
         ],
         'route': {
             'rules': rules,
             # In "only", what is not listed goes straight out - UDP and all.
-            'final': 'direct' if only else 'relay',
+            'final': 'direct' if only else 'proxy',
             # Without it, sing-box's own connections - the direct ones, and
             # its DNS - would be routed into its own adapter.
             'auto_detect_interface': True,
@@ -320,19 +320,39 @@ def build_config(port, keep=(), own=(), carriers=(), log_path=None,
 #   What the profiles said before is kept under HKLM, which only an
 #   administrator can write, and put back exactly when the block is lifted:
 #   by the next adapter once it is up, by Disconnect or quitting, and when
-#   Relay opens again. It survives a restart of Windows on purpose - that is
-#   what "until Relay opens again" means - and README says how to lift it by
-#   hand if Relay is gone for good.
+#   Mirage opens again. It survives a restart of Windows on purpose - that is
+#   what "until Mirage opens again" means - and README says how to lift it by
+#   hand if Mirage is gone for good.
+#
+#   The app used to be called Relay, and so were the key and the rules. A
+#   hold the old version left behind is still this app's to lift: a block
+#   takes over its saved profiles (they are what was there before any hold),
+#   and lifting restores from whichever key there is and removes both, and
+#   both groups of rules.
 #
 # Plain text, not a str.format template: it is put in front of WRAPPER, and
 # run on its own by Tun.release_firewall.
-KILL_GROUP = 'Relay kill switch'
-KILL_KEY = r'SOFTWARE\Relay\KillSwitch'
+KILL_GROUP = 'Mirage kill switch'
+KILL_KEY = r'SOFTWARE\Mirage\KillSwitch'
+LEGACY_KILL_GROUP = 'Relay kill switch'
+LEGACY_KILL_KEY = r'SOFTWARE\Relay\KillSwitch'
 KILL_PS = r'''
-$RelayKillGroup = 'Relay kill switch'
-$RelayKillKey = 'HKLM:\SOFTWARE\Relay\KillSwitch'
+$MirageKillGroup = 'Mirage kill switch'
+$MirageKillKey = 'HKLM:\SOFTWARE\Mirage\KillSwitch'
+$LegacyKillGroup = 'Relay kill switch'
+$LegacyKillKey = 'HKLM:\SOFTWARE\Relay\KillSwitch'
 
-function Block-RelayOutbound {
+function Remove-LegacyKillKey {
+    Remove-Item -LiteralPath $LegacyKillKey -Recurse -Force -ErrorAction SilentlyContinue
+    # Its parent, HKLM\SOFTWARE\Relay, was made for it alone.
+    $parent = Split-Path -Parent $LegacyKillKey
+    $left = Get-Item -LiteralPath $parent -ErrorAction SilentlyContinue
+    if ($left -and $left.SubKeyCount -eq 0 -and $left.ValueCount -eq 0) {
+        Remove-Item -LiteralPath $parent -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Block-MirageOutbound {
     param([string[]] $Programs)
     try {
         $profiles = @(Get-NetFirewallProfile -PolicyStore PersistentStore -ErrorAction Stop)
@@ -341,31 +361,38 @@ function Block-RelayOutbound {
     }
     try {
         # Only the first block saves what the profiles said: a second one
-        # would save the block itself as the thing to put back.
-        if (-not (Test-Path -LiteralPath $RelayKillKey)) {
-            New-Item -Path $RelayKillKey -Force -ErrorAction Stop | Out-Null
+        # would save the block itself as the thing to put back. A hold the
+        # old Relay left counts as a first block already made: what it saved
+        # is what was there before it, so that is what is carried over.
+        if (-not (Test-Path -LiteralPath $MirageKillKey)) {
+            New-Item -Path $MirageKillKey -Force -ErrorAction Stop | Out-Null
+            $legacy = Get-ItemProperty -LiteralPath $LegacyKillKey -ErrorAction SilentlyContinue
             foreach ($p in $profiles) {
-                New-ItemProperty -LiteralPath $RelayKillKey -Name ([string]$p.Name) -Value ([string]$p.DefaultOutboundAction) -PropertyType String -Force -ErrorAction Stop | Out-Null
+                $name = [string]$p.Name
+                $was = if ($legacy) { [string]$legacy.$name } else { [string]$p.DefaultOutboundAction }
+                New-ItemProperty -LiteralPath $MirageKillKey -Name $name -Value $was -PropertyType String -Force -ErrorAction Stop | Out-Null
             }
         }
-        Remove-NetFirewallRule -Group $RelayKillGroup -ErrorAction SilentlyContinue
+        Remove-LegacyKillKey
+        Remove-NetFirewallRule -Group $LegacyKillGroup -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -Group $MirageKillGroup -ErrorAction SilentlyContinue
         foreach ($prog in $Programs) {
             if ($prog -and (Test-Path -LiteralPath $prog -PathType Leaf)) {
-                New-NetFirewallRule -DisplayName ("$RelayKillGroup - " + [IO.Path]::GetFileName($prog)) -Group $RelayKillGroup -Direction Outbound -Action Allow -Program $prog -ErrorAction Stop | Out-Null
+                New-NetFirewallRule -DisplayName ("$MirageKillGroup - " + [IO.Path]::GetFileName($prog)) -Group $MirageKillGroup -Direction Outbound -Action Allow -Program $prog -ErrorAction Stop | Out-Null
             }
         }
-        New-NetFirewallRule -DisplayName "$RelayKillGroup - local network" -Group $RelayKillGroup -Direction Outbound -Action Allow -RemoteAddress @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '224.0.0.0/4', '255.255.255.255', 'fe80::/10', 'ff00::/8') -ErrorAction Stop | Out-Null
-        New-NetFirewallRule -DisplayName "$RelayKillGroup - no DNS (UDP)" -Group $RelayKillGroup -Direction Outbound -Action Block -Protocol UDP -RemotePort 53 -ErrorAction Stop | Out-Null
-        New-NetFirewallRule -DisplayName "$RelayKillGroup - no DNS (TCP)" -Group $RelayKillGroup -Direction Outbound -Action Block -Protocol TCP -RemotePort 53 -ErrorAction Stop | Out-Null
+        New-NetFirewallRule -DisplayName "$MirageKillGroup - local network" -Group $MirageKillGroup -Direction Outbound -Action Allow -RemoteAddress @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '224.0.0.0/4', '255.255.255.255', 'fe80::/10', 'ff00::/8') -ErrorAction Stop | Out-Null
+        New-NetFirewallRule -DisplayName "$MirageKillGroup - no DNS (UDP)" -Group $MirageKillGroup -Direction Outbound -Action Block -Protocol UDP -RemotePort 53 -ErrorAction Stop | Out-Null
+        New-NetFirewallRule -DisplayName "$MirageKillGroup - no DNS (TCP)" -Group $MirageKillGroup -Direction Outbound -Action Block -Protocol TCP -RemotePort 53 -ErrorAction Stop | Out-Null
         Set-NetFirewallProfile -Profile Domain, Private, Public -DefaultOutboundAction Block -ErrorAction Stop
     } catch {
         $why = $_.Exception.Message
-        # Half a block is no block, and the key is what Relay reads as "held"
+        # Half a block is no block, and the key is what Mirage reads as "held"
         # (tun.firewall_held): left behind, the window would say traffic is
         # held while it goes out on the bare line. So everything this did is
         # undone - profiles put back, rules and key removed - and the failure
         # is said as what it is.
-        Unblock-RelayOutbound
+        Unblock-MirageOutbound
         return "Windows Firewall would not hold traffic ($why), so nothing is holding it"
     }
     $off = @($profiles | Where-Object { -not $_.Enabled } | ForEach-Object { [string]$_.Name })
@@ -375,17 +402,21 @@ function Block-RelayOutbound {
     return $null
 }
 
-function Unblock-RelayOutbound {
-    if (Test-Path -LiteralPath $RelayKillKey) {
-        $saved = Get-ItemProperty -LiteralPath $RelayKillKey -ErrorAction SilentlyContinue
+function Unblock-MirageOutbound {
+    # This app's key first; the old Relay's when that is all there is.
+    $key = @($MirageKillKey, $LegacyKillKey) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($key) {
+        $saved = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
         foreach ($name in 'Domain', 'Private', 'Public') {
             $was = if ($saved) { [string]$saved.$name } else { '' }
             if ($was -notin 'Allow', 'Block', 'NotConfigured') { $was = 'NotConfigured' }
             Set-NetFirewallProfile -Profile $name -DefaultOutboundAction $was -ErrorAction SilentlyContinue
         }
-        Remove-Item -LiteralPath $RelayKillKey -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $MirageKillKey -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-LegacyKillKey
     }
-    Remove-NetFirewallRule -Group $RelayKillGroup -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -Group $MirageKillGroup -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -Group $LegacyKillGroup -ErrorAction SilentlyContinue
 }
 '''
 
@@ -411,10 +442,10 @@ function Unblock-RelayOutbound {
 #   otherwise - a stop file (Disconnect, quitting) or a new worker's pid in
 #   `watch`, which it then watches instead. It says so in `held`. The window
 #   going away does not end the hold either: a crashed window is no reason to
-#   put every program back on the bare line, and Relay opening again is what
+#   put every program back on the bare line, and Mirage opening again is what
 #   lets it go (Tun.tidy). And if sing-box itself goes, which takes the
 #   adapter with it, the firewall takes over the hold (KILL_PS) until a new
-#   adapter is up or Relay is told to let go.
+#   adapter is up or Mirage is told to let go.
 WRAPPER = r'''
 $ErrorActionPreference = 'Continue'
 $exe    = {exe}
@@ -443,7 +474,7 @@ try {{
     # temp folder, where an ordinary user can add files but not change or
     # delete anyone else's. Raw UTF-8 bytes, no byte-order mark, which
     # sing-box's JSON reader would refuse.
-    $cfg = Join-Path (Join-Path $env:SystemRoot 'Temp') ('relay-sing-box-' + [guid]::NewGuid().ToString('N') + '.json')
+    $cfg = Join-Path (Join-Path $env:SystemRoot 'Temp') ('mirage-sing-box-' + [guid]::NewGuid().ToString('N') + '.json')
     $sec = New-Object System.Security.AccessControl.FileSecurity
     $sec.SetAccessRuleProtection($true, $false)
     foreach ($sid in 'S-1-5-18', 'S-1-5-32-544') {{
@@ -496,7 +527,7 @@ while (-not $box.HasExited) {{
         }}
     }}
     # The window itself. With the kill switch on, a window that has gone (a
-    # crash, a kill) does not end the hold: the adapter stays, and Relay
+    # crash, a kill) does not end the hold: the adapter stays, and Mirage
     # opening again is what lets it go. Only said, so the held note is true.
     $uiGone = ($ui -and -not (Get-Process -Id $ui -ErrorAction SilentlyContinue))
     if ($watch -and -not (Get-Process -Id $watch -ErrorAction SilentlyContinue)) {{
@@ -524,7 +555,7 @@ while (-not $box.HasExited) {{
             # A firewall hold left by the last adapter (see KILL_PS) is let
             # go only now, with this one carrying traffic: lifted before,
             # the seconds in between would be on the bare line.
-            Unblock-RelayOutbound
+            Unblock-MirageOutbound
             Set-Content -LiteralPath $ready -Value 'up' -Encoding ascii
         }} elseif ((Get-Date) -gt $deadline) {{
             Set-Content -LiteralPath $failed -Value 'the network adapter did not come up' -Encoding utf8
@@ -542,7 +573,7 @@ if ($box.HasExited) {{
         # The adapter went with it, so every program is on the bare line
         # again - unless the kill switch is on, and the firewall holds them.
         if ($up -and (Test-Path -LiteralPath $holdf)) {{
-            $fw = Block-RelayOutbound $allow
+            $fw = Block-MirageOutbound $allow
             if ($fw) {{
                 $why += "; $fw"
             }} else {{
@@ -596,17 +627,21 @@ def carriers_of_a_reconnect():
 
 def firewall_held():
     """Whether a firewall hold from KILL_PS is in place. Read from the key
-    only an administrator can write, so this needs no elevation to ask."""
+    only an administrator can write, so this needs no elevation to ask. The
+    old Relay's key counts too: a hold it left is still a hold, and this app
+    is what lifts it."""
     if os.name != 'nt':
         return False
-    try:
-        import winreg
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, KILL_KEY, 0,
-                             winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
-        winreg.CloseKey(key)
-        return True
-    except OSError:
-        return False
+    import winreg
+    for path in (KILL_KEY, LEGACY_KILL_KEY):
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path, 0,
+                                 winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+            winreg.CloseKey(key)
+            return True
+        except OSError:
+            continue
+    return False
 
 
 def explain(error):
@@ -913,7 +948,7 @@ class Tun:
         prompt was refused, and the machine stays as it was."""
         if not firewall_held():
             return True
-        script, script_path = elevated(KILL_PS + '\nUnblock-RelayOutbound\n',
+        script, script_path = elevated(KILL_PS + '\nUnblock-MirageOutbound\n',
                                        self.dir, 'release')
         try:
             if is_admin():

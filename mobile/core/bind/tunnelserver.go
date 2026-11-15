@@ -1,4 +1,4 @@
-package relay
+package mirage
 
 import (
 	"context"
@@ -154,12 +154,13 @@ func (c *ServerConfig) server() core.ServerWay {
 	return srv
 }
 
-// ParseKey reads the key the server's installer printed (relay://...) and
+// ParseKey reads the key the server's installer printed (mirage://..., or
+// relay://... from one installed before the rename) and
 // hands back what it says as JSON, checked: host, pin, password,
 // apiPassword, port (the server's TLS port, 443 when the key has none) and,
 // when the server offers it, ss {method, password, port, exitPort}. What the settings screen calls when a key is pasted.
 func ParseKey(text string) (string, error) {
-	k, err := core.ParseRelayKey(text)
+	k, err := core.ParseMirageKey(text)
 	if err != nil {
 		return "", err
 	}

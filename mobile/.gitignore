@@ -1,6 +1,6 @@
 # Built by build-android.sh. 26 MB of native code that any checkout can
 # rebuild in a minute, so it is not carried in the repo. The copy the app
 # reads is ignored by android/.gitignore.
-relay.aar
-relay-sources.jar
-Relay.xcframework/
+mirage.aar
+mirage-sources.jar
+Mirage.xcframework/

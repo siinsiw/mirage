@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Relay tunnel - server installer.
+# Mirage tunnel - server installer.
 #
 #   ./install-server.sh <ip-or-domain> [--password P] [--api-password A]
 #                       [--port N] [--ss-port N] [--no-ss] [--slots N]
@@ -10,7 +10,8 @@
 #
 # A password on the command line lands in the shell's history and, while this
 # runs, in the process list. To keep it out of both, leave the option off and
-# set RELAY_PASSWORD / RELAY_API_PASSWORD in the environment instead, or give
+# set MIRAGE_PASSWORD / MIRAGE_API_PASSWORD in the environment instead (the
+# old RELAY_PASSWORD / RELAY_API_PASSWORD still work), or give
 # `-` as the value (--password -) to read it as one line from stdin; two `-`
 # are read in the order they were given. A password is 1 to 128 printable
 # ASCII characters and none of ' " ` $ \ { } #, the rule the apps share.
@@ -36,7 +37,7 @@
 # in the app for this server ("check the exit"), or the app will push checked
 # chains that cannot complete; the script says so again when it finishes.
 #
-# It ends by printing a key - relay://... - that carries the server, its
+# It ends by printing a key - mirage://... - that carries the server, its
 # passwords and its Shadowsocks settings. Pasted into either app it sets the
 # whole tunnel up, which is how a server set up by somebody else, or by hand,
 # reaches a phone without anybody typing a password into one.
@@ -50,11 +51,11 @@
 # domestic traffic when this server is inside Iran.
 #
 # It also keeps locations for other devices - an iPhone, a friend's laptop:
-# anything with a V2Ray client and no Relay (--slots, 8 unless told). Each is
+# anything with a V2Ray client and no Mirage (--slots, 8 unless told). Each is
 # a user on sing-box, reached by VLESS on /vl or VMess on /vm through the same
 # nginx, and routed to its own gost chain, loc-<k>, which the app points at a
 # provider location and saves. Slot 0 exits here. The users' UUIDs are derived
-# from one id kept in /etc/relay/export.id, which the key carries, so the app
+# from one id kept in /etc/mirage/export.id, which the key carries, so the app
 # can make any slot's link itself.
 #
 # An IP address is the ordinary case: no domain, no DNS, no CA. The server
@@ -75,6 +76,12 @@
 # Idempotent: safe to re-run. Leaves any other nginx site alone - the block it
 # writes carries its own server_name. Passwords already on the server are
 # kept unless new ones are passed.
+#
+# A server set up when the app was still called Relay is moved over by running
+# this again: /etc/relay and /opt/relay become /etc/mirage and /opt/mirage with
+# every password, id and certificate kept, the relay-* nginx sites it wrote
+# give way to mirage-* ones, and /etc/relay stays behind as a link to
+# /etc/mirage for anything that still reads the old path.
 set -euo pipefail
 # Everything this writes - the passwords, the gost and sing-box configs, the
 # key - is a secret, so nothing is ever created readable by others, not even
@@ -83,8 +90,9 @@ set -euo pipefail
 umask 077
 
 DOMAIN=""
-NEWPW="${RELAY_PASSWORD:-}"
-NEWAPW="${RELAY_API_PASSWORD:-}"
+# MIRAGE_* first; RELAY_* is what the name was before, still honoured.
+NEWPW="${MIRAGE_PASSWORD:-${RELAY_PASSWORD:-}}"
+NEWAPW="${MIRAGE_API_PASSWORD:-${RELAY_API_PASSWORD:-}}"
 TLSPORT=443
 SSPORT=8388
 WITH_SS=1
@@ -98,7 +106,7 @@ USAGE="usage: $0 <ip-or-domain> [--password P|-] [--api-password A|-] [--port N]
                     from a server in Iran (without it, about 10 KB/s), so use
                     this only if connecting through the exit fails entirely.
                     Passwords given as - are read from stdin;
-                    RELAY_PASSWORD / RELAY_API_PASSWORD also work."
+                    MIRAGE_PASSWORD / MIRAGE_API_PASSWORD also work."
 # `-` reads the value as one line from stdin, so it never sits in argv.
 from_stdin() { local v; IFS= read -r v || [ -n "$v" ] || { echo "$1: nothing on stdin" >&2; exit 1; }; printf '%s' "$v"; }
 while [ $# -gt 0 ]; do
@@ -196,11 +204,13 @@ declare -A SB_SHA256=(
 )
 CFG=/etc/gost/config.yaml
 SBCFG=/etc/sing-box/config.json
-SITE="/etc/nginx/sites-available/relay-${DOMAIN}.conf"
+SITE="/etc/nginx/sites-available/mirage-${DOMAIN}.conf"
 # gost and sing-box run as this account, not as root: gost's API can be told
 # to write its config anywhere, and the unit lets this account write nowhere
 # but /etc/gost.
-RUNAS=relay
+RUNAS=mirage
+# What the account was called before; moved off and removed below.
+OLD_RUNAS=relay
 
 say() { printf '\n=== %s\n' "$*"; }
 
@@ -285,6 +295,118 @@ if ! id -u "$RUNAS" >/dev/null 2>&1; then
   useradd --system --user-group --no-create-home --home-dir /nonexistent \
     --shell /usr/sbin/nologin "$RUNAS"
 fi
+# A server set up under the old name runs gost and sing-box as ${OLD_RUNAS}
+# until the units are rewritten and restarted near the end. The folders go to
+# group ${RUNAS} below, so ${OLD_RUNAS} joins that group meanwhile: if this run
+# stops anywhere in between, a reboot still finds services that can read their
+# configuration. The account itself goes once nothing runs as it any more.
+if [ "$OLD_RUNAS" != "$RUNAS" ] && id -u "$OLD_RUNAS" >/dev/null 2>&1; then
+  usermod -aG "$RUNAS" "$OLD_RUNAS" >/dev/null 2>&1 || true
+fi
+
+# certbot renews on its own timer but nothing told nginx, which kept serving
+# the old certificate until something else reloaded it. Only nginx reads the
+# certificate - gost and sing-box sit behind it on plain WebSockets - so a
+# reload is all a renewal needs.
+write_reload_hook() {
+  mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+  cat > /etc/letsencrypt/renewal-hooks/deploy/mirage-nginx-reload.sh <<'HOOK'
+#!/bin/sh
+# Written by the Mirage installer: pick up a renewed certificate.
+nginx -t >/dev/null 2>&1 && systemctl reload nginx
+HOOK
+  chmod 755 /etc/letsencrypt/renewal-hooks/deploy/mirage-nginx-reload.sh
+}
+
+# The old directory's contents end up in the new one. Nothing is lost: when
+# only the old one exists it is simply renamed, and when both do, what the new
+# one already has is kept and everything else moves across. Old copies of
+# files the new one already had are put aside ($3 = keep) or dropped
+# ($3 = drop, for /opt, which only holds the copy of this script the app
+# uploads each time).
+migrate_dir() {  # $1 = old, $2 = new, $3 = keep | drop
+  local old="$1" new="$2" f base aside
+  [ -d "$old" ] && [ ! -L "$old" ] || return 0
+  if [ ! -e "$new" ] && [ ! -L "$new" ]; then
+    mv "$old" "$new"
+    echo "  moved $old to $new"
+    return 0
+  fi
+  for f in "$old"/* "$old"/.[!.]* "$old"/..?*; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    base="${f##*/}"
+    [ -e "$new/$base" ] || [ -L "$new/$base" ] || mv "$f" "$new/"
+  done
+  if rmdir "$old" 2>/dev/null; then
+    echo "  merged $old into $new"
+  elif [ "$3" = drop ]; then
+    rm -rf "$old"
+    echo "  merged $old into $new (its older copies of the same files dropped)"
+  else
+    aside="${old}.before-mirage-$(date +%Y%m%d%H%M%S)"
+    mv "$old" "$aside"
+    echo "  merged $old into $new; where both had a file, $new's was kept"
+    echo "  and the old one is in $aside"
+  fi
+}
+
+# Before the app was called Mirage it was Relay, and so were its files on the
+# server. Every step here does nothing on a fresh server or on one already
+# moved, so running this twice is no different from running it once.
+say "moving Relay's files to Mirage, if any"
+if [ -d /etc/relay ] && [ ! -L /etc/relay ]; then
+  migrate_dir /etc/relay /etc/mirage keep
+  # Moved just now: whatever still reads the old path - a person following
+  # an old note, an older app - finds the same files there. Only on a server
+  # that had the old folder; a new one never gets the old name. Nothing is
+  # ever written through it by this script.
+  if [ ! -e /etc/relay ] && [ ! -L /etc/relay ] && [ -d /etc/mirage ]; then
+    ln -s /etc/mirage /etc/relay
+  fi
+fi
+migrate_dir /opt/relay /opt/mirage drop
+# No systemd units to move: this script's units were always gost.service and
+# sing-box.service, rewritten below. Anything else named relay-* on the box is
+# somebody else's and is left alone.
+# nginx sites relay-<host>.conf become mirage-<host>.conf: for this host the
+# file is written again further down; for any other host on the box it is the
+# same site under the new name, pointed at the new rate-limit zone and the
+# new certificate path. Enabled stays enabled.
+# Only sites this installer wrote move - they carry its rate-limit zone,
+# zone=relay_api; a relay-*.conf without it is somebody else's and stays.
+for f in /etc/nginx/sites-available/relay-*.conf /etc/nginx/sites-enabled/relay-*.conf; do
+  [ -f "$f" ] && [ ! -L "$f" ] && grep -q 'zone=relay_api' "$f" || continue
+  dir="${f%/*}" base="${f##*/relay-}"
+  if [ ! -e "$dir/mirage-$base" ]; then
+    sed -e 's/zone=relay_api/zone=mirage_api/g' -e 's#/etc/relay/#/etc/mirage/#g' \
+      "$f" > "$dir/mirage-$base"
+    chmod 644 "$dir/mirage-$base"
+  fi
+  if [ "$dir" = /etc/nginx/sites-available ]; then
+    enabled="/etc/nginx/sites-enabled/relay-$base"
+    if [ -L "$enabled" ] && [ "$(readlink -f "$enabled")" = "$(readlink -f "$f")" ]; then
+      ln -sf "$dir/mirage-$base" /etc/nginx/sites-enabled/
+      rm -f "$enabled"
+    fi
+  fi
+  rm -f "$f"
+  echo "  nginx: ${f} removed, ${dir}/mirage-${base} in its place"
+done
+unset dir base enabled
+# The API's rate limit (see the site below) lives in conf.d, read once inside
+# http {}, so a second Mirage site on the same box does not declare it twice.
+# Written here, before nginx is first asked to check anything, because a site
+# moved over just above already names this zone.
+rm -f /etc/nginx/conf.d/relay-api-limit.conf
+cat > /etc/nginx/conf.d/mirage-api-limit.conf <<'NGX'
+# Written by the Mirage installer: the rate limit on each Mirage site's /api/.
+limit_req_zone $binary_remote_addr zone=mirage_api:1m rate=5r/s;
+NGX
+chmod 644 /etc/nginx/conf.d/mirage-api-limit.conf
+if [ -e /etc/letsencrypt/renewal-hooks/deploy/relay-nginx-reload.sh ]; then
+  write_reload_hook
+  rm -f /etc/letsencrypt/renewal-hooks/deploy/relay-nginx-reload.sh
+fi
 
 say "secrets"
 # /etc/gost is root's, and the account can only look in it. The one file it
@@ -292,12 +414,12 @@ say "secrets"
 # and rewrites that file in place (os.Create), so owning the file is enough
 # and the directory need not be writable. That way it can never put a link
 # or a file of its own where root writes - the passwords here stay root's,
-# readable by root alone. /etc/relay is root's only.
-mkdir -p /etc/gost /etc/sing-box /etc/relay
+# readable by root alone. /etc/mirage is root's only.
+mkdir -p /etc/gost /etc/sing-box /etc/mirage
 chown root:"$RUNAS" /etc/gost /etc/sing-box
 chmod 0750 /etc/gost /etc/sing-box
-chown root:root /etc/relay
-chmod 0700 /etc/relay
+chown root:root /etc/mirage
+chmod 0700 /etc/mirage
 newpw() { head -c 18 /dev/urandom | base64 | tr -d '/+=' | head -c 20; }
 # The app's own passwords when it sent them, so it already knows them.
 if [ -n "$NEWPW" ];  then printf '%s' "$NEWPW"  > /etc/gost/tunnel.pw; fi
@@ -313,10 +435,10 @@ if [ -n "$NEWAPW" ]; then printf '%s' "$NEWAPW" > /etc/gost/api.pw; fi
 [ -s /etc/gost/ss.pw ] || newpw > /etc/gost/ss.pw
 # The id the exported locations' UUIDs are derived from. Kept, like the
 # rest, so links already handed out keep working when this runs again.
-[ -s /etc/relay/export.id ] || newpw > /etc/relay/export.id
-chmod 600 /etc/gost/*.pw /etc/gost/vless.uuid /etc/relay/export.id
+[ -s /etc/mirage/export.id ] || newpw > /etc/mirage/export.id
+chmod 600 /etc/gost/*.pw /etc/gost/vless.uuid /etc/mirage/export.id
 PW=$(cat /etc/gost/tunnel.pw)
-XID=$(cat /etc/relay/export.id)
+XID=$(cat /etc/mirage/export.id)
 if [ "$SLOTS" -gt 0 ] && ! command -v python3 >/dev/null 2>&1; then
   # The UUIDs are uuid5s, which is one line of Python and no line of bash.
   echo "  python3 is missing, so no locations for other devices this time"
@@ -335,9 +457,9 @@ if [ "$IS_IP" = 1 ]; then
   say "certificate (self-signed, for ${DOMAIN})"
   # Ten years, because nothing renews it: the apps trust this exact
   # certificate, not a CA, so a new one would only make them refuse.
-  CERT=/etc/relay/cert.pem
-  KEY=/etc/relay/key.pem
-  mkdir -p /etc/relay
+  CERT=/etc/mirage/cert.pem
+  KEY=/etc/mirage/key.pem
+  mkdir -p /etc/mirage
   if [ ! -s "$CERT" ] || ! openssl x509 -in "$CERT" -noout -ext subjectAltName 2>/dev/null | grep -q "IP Address:${DOMAIN}\$"; then
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
       -days 3650 -subj "/CN=${DOMAIN}" \
@@ -375,17 +497,7 @@ NGX
   CERT="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
   KEY="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
   PIN=""
-  # certbot renews on its own timer but nothing told nginx, which kept
-  # serving the old certificate until something else reloaded it. Only nginx
-  # reads the certificate - gost and sing-box sit behind it on plain
-  # WebSockets - so a reload is all a renewal needs.
-  mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-  cat > /etc/letsencrypt/renewal-hooks/deploy/relay-nginx-reload.sh <<'HOOK'
-#!/bin/sh
-# Written by the Relay installer: pick up a renewed certificate.
-nginx -t >/dev/null 2>&1 && systemctl reload nginx
-HOOK
-  chmod 755 /etc/letsencrypt/renewal-hooks/deploy/relay-nginx-reload.sh
+  write_reload_hook
 fi
 
 say "nginx :${TLSPORT}"
@@ -426,7 +538,7 @@ NGX
   # connects, too few to guess the API password at any useful speed.
   cat <<NGX
     location /api/ {
-        limit_req zone=relay_api burst=20 nodelay;
+        limit_req zone=mirage_api burst=20 nodelay;
         limit_req_status 429;
         proxy_pass http://127.0.0.1:18080/api/;
         proxy_set_header Host \$host;
@@ -436,13 +548,6 @@ NGX
 NGX
 } >> "$SITE"
 chmod 644 "$SITE"
-# The zone lives in conf.d, read once inside http {}, so a second relay site
-# on the same box does not declare it twice.
-cat > /etc/nginx/conf.d/relay-api-limit.conf <<'NGX'
-# Written by the Relay installer: the rate limit on each relay site's /api/.
-limit_req_zone $binary_remote_addr zone=relay_api:1m rate=5r/s;
-NGX
-chmod 644 /etc/nginx/conf.d/relay-api-limit.conf
 ln -sf "$SITE" /etc/nginx/sites-enabled/
 nginx_ok
 systemctl enable --now nginx >/dev/null 2>&1 || true
@@ -511,6 +616,11 @@ for k in $(seq 1 "$SLOTS"); do
               tls: ${EXIT_TLS}
 "
 done
+# The user name "relay" here (and in the loc-* services above, which sing-box
+# logs in to) is not the app's name but part of the protocol:
+# every app already out there (desktop, phone, the LAN proxy) logs in to these
+# services and to the API as "relay", so it stays, whatever the app is called.
+#
 # Written as root into a file the gost account owns (so the app's saves
 # through the API can rewrite it), in a directory that account cannot write,
 # so it cannot have swapped the file for a link to somewhere else.
@@ -577,6 +687,9 @@ import json, os, uuid
 e = os.environ
 n = int(e['N'])
 
+# "relay-export:" is fixed, like the user name in gost's config: the apps
+# derive the same UUIDs from the same string, and links already handed out
+# were made with it.
 def users():
     return [{'name': f'slot-{k}',
              'uuid': str(uuid.uuid5(uuid.NAMESPACE_URL,
@@ -588,7 +701,7 @@ print(json.dumps({
     'inbounds': [
         {'type': 'vless', 'tag': 'phone', 'listen': '127.0.0.1',
          'listen_port': 10003,
-         'users': [{'name': 'relay', 'uuid': e['UUID']}] + users(),
+         'users': [{'name': 'mirage', 'uuid': e['UUID']}] + users(),
          'transport': {'type': 'ws', 'path': '/vl'}},
         {'type': 'vmess', 'tag': 'others', 'listen': '127.0.0.1',
          'listen_port': 10004,
@@ -615,7 +728,7 @@ cat > "$SBCFG" <<JSON
       "tag": "phone",
       "listen": "127.0.0.1",
       "listen_port": 10003,
-      "users": [ { "uuid": $(dq "$UUID"), "name": "relay" } ],
+      "users": [ { "uuid": $(dq "$UUID"), "name": "mirage" } ],
       "transport": { "type": "ws", "path": "/vl" }
     }
   ],
@@ -666,7 +779,7 @@ UNIT
 {
 cat <<UNIT
 [Unit]
-Description=Relay tunnel, the phone's half (sing-box)
+Description=Mirage tunnel, the phone's half (sing-box)
 After=network.target
 [Service]
 ExecStart=/usr/local/bin/sing-box -D /var/lib/sing-box run -c ${SBCFG}
@@ -686,7 +799,7 @@ UNIT
 {
 cat <<UNIT
 [Unit]
-Description=Relay tunnel (gost)
+Description=Mirage tunnel (gost)
 After=network.target
 [Service]
 ExecStart=/usr/local/bin/gost -C ${CFG}
@@ -708,6 +821,19 @@ for unit in gost sing-box; do
 done
 sleep 2
 
+# The account both ran as before the rename. Removed once nothing runs as it
+# any more (the units above now name the new one), and only if it is the
+# account this script made: a system account with no home and no shell.
+if [ "$OLD_RUNAS" != "$RUNAS" ]     && getent passwd "$OLD_RUNAS" | grep -q ':/nonexistent:/usr/sbin/nologin$'     && [ "$(id -u "$OLD_RUNAS")" -lt 1000 ]     && ! pgrep -u "$OLD_RUNAS" >/dev/null 2>&1; then
+  userdel "$OLD_RUNAS" >/dev/null 2>&1 || true
+  if getent group "$OLD_RUNAS" >/dev/null 2>&1; then
+    groupdel "$OLD_RUNAS" >/dev/null 2>&1 || true
+  fi
+  if ! getent passwd "$OLD_RUNAS" >/dev/null 2>&1; then
+    echo "  account ${OLD_RUNAS} removed; ${RUNAS} runs gost and sing-box now"
+  fi
+fi
+
 if command -v ufw >/dev/null 2>&1 \
     && ufw status 2>/dev/null | grep -q '^Status: active'; then
   # Only when ufw is already guarding the box: switching a firewall on is not
@@ -726,8 +852,8 @@ fi
 # The key: everything an app needs, in one line to paste. base64url of a JSON
 # object so it survives a chat message, a QR code and a terminal that wraps.
 # Kept on the server, so it can be shown again without running this again:
-#   cat /etc/relay/key
-mkdir -p /etc/relay
+#   cat /etc/mirage/key
+mkdir -p /etc/mirage
 SSJSON=""
 if [ "$WITH_SS" = 1 ]; then
   SSJSON=",\"ss\":{\"method\":$(dq "$SSMETHOD"),\"password\":$(dq "$SSPW"),\"port\":${SSPORT},\"exitPort\":${SSXPORT}}"
@@ -747,7 +873,7 @@ if e['SS'] == '1':
 if int(e['SLOTS']) > 0:
     key['x'] = {'id': e['XID'], 'n': int(e['SLOTS'])}
 raw = json.dumps(key, separators=(',', ':')).encode()
-print('relay://' + base64.urlsafe_b64encode(raw).decode().rstrip('='))
+print('mirage://' + base64.urlsafe_b64encode(raw).decode().rstrip('='))
 PY
 )
 else
@@ -756,10 +882,10 @@ else
   PORTJSON=""
   if [ "$TLSPORT" != 443 ]; then PORTJSON=",\"port\":${TLSPORT}"; fi
   RAW="{\"v\":1,\"host\":$(dq "$DOMAIN"),\"pin\":$(dq "$PIN"),\"pw\":$(dq "$PW"),\"apw\":$(dq "$APW")${PORTJSON}${SSJSON}}"
-  KEY="relay://$(printf '%s' "$RAW" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+  KEY="mirage://$(printf '%s' "$RAW" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 fi
-printf '%s\n' "$KEY" > /etc/relay/key
-chmod 600 /etc/relay/key
+printf '%s\n' "$KEY" > /etc/mirage/key
+chmod 600 /etc/mirage/key
 
 say "result"
 for unit in gost sing-box; do printf '  %-9s %s
@@ -806,7 +932,7 @@ cat <<SUMMARY
 
   The key for either app - Settings, Your own tunnel, Paste a key.
   It holds the passwords above: treat it like one. Shown again by
-  cat /etc/relay/key
+  cat /etc/mirage/key
 
 ${KEY}
 

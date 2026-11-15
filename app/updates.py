@@ -1,4 +1,4 @@
-"""Is there a newer Relay than this copy?
+"""Is there a newer Mirage than this copy?
 
 Asked only when somebody presses the button for it - nothing here runs on
 its own, and nothing about this machine is sent: one GET for the public list
@@ -19,7 +19,7 @@ import urllib.request
 
 RELEASES = 'https://api.github.com/repos/siinsiw/ovpn-pin/releases?per_page=30'
 PAGE = 'https://github.com/siinsiw/ovpn-pin/releases'
-UA = 'Relay-update-check'
+UA = 'Mirage-update-check'
 TIMEOUT = 15
 
 # Windows' own release tags (desktop-release.yml). Android's are android-v*,

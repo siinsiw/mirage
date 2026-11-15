@@ -1,4 +1,4 @@
-package relay
+package mirage
 
 import (
 	"encoding/json"
@@ -26,7 +26,7 @@ import (
 // the next thing to be wrong is readable instead of fatal.
 func guard(errp *error) {
 	if r := recover(); r != nil {
-		*errp = fmt.Errorf("relay core: %v", r)
+		*errp = fmt.Errorf("mirage core: %v", r)
 	}
 }
 
@@ -36,7 +36,7 @@ func guard(errp *error) {
 func said(out *string) {
 	if r := recover(); r != nil {
 		b, _ := json.Marshal(map[string]any{
-			"ok": false, "error": fmt.Sprintf("relay core: %v", r)})
+			"ok": false, "error": fmt.Sprintf("mirage core: %v", r)})
 		*out = string(b)
 	}
 }

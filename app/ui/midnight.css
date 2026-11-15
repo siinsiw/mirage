@@ -530,3 +530,18 @@ input[type='checkbox']:checked { accent-color: var(--accent-mid); }
 /* the picked row's edge bar: the accent, not the connection's green */
 .row.is-picked::before,
 .group.is-in:not(.is-open) > .row::before { background: var(--accent-mid); }
+
+/* Settings › Servers › Your servers, and the same way out from an empty list. */
+.setupcards { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.setupcard {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 2px;
+  align-items: center; padding: 12px 14px; border-radius: 14px;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.setupcard__head { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; color: var(--text); }
+.setupcard__mark { width: 16px; height: 16px; color: var(--text-2); }
+.setupcard__line { grid-column: 1; margin: 0; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.setupcard__fail { grid-column: 1 / -1; margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: var(--fail); }
+.setupcard__go { grid-column: 2; grid-row: 1 / span 2; }
+.empty--setup { display: grid; gap: 12px; justify-items: start; }
+.empty--setup p { margin: 0; }

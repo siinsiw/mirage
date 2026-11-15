@@ -401,7 +401,7 @@ func (c *Catalogue) CountriesJSON() string {
 		c2.Count++
 		// Per provider as well as in total, because a country backed by
 		// eleven Surfshark exits and one Windscribe one is a different
-		// proposition from the reverse, and a row that says only "12 relays"
+		// proposition from the reverse, and a row that says only "12 servers"
 		// cannot tell you which you are about to get.
 		c2.By[s.Provider]++
 		if s.Seconds != nil && (c2.Best == nil || *s.Seconds < *c2.Best) {

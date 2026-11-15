@@ -1,4 +1,4 @@
-"""Build Relay into a folder that is ready to run.
+"""Build Mirage into a folder that is ready to run.
 
     python app/build.py
     python app/build.py --public-release
@@ -11,7 +11,7 @@ out produced a real mistake:
   else is not a build, it is homework.
 
   It deletes the working folder afterwards. PyInstaller leaves an
-  intermediate Relay.exe in there which looks exactly like the real one,
+  intermediate Mirage.exe in there which looks exactly like the real one,
   has no _internal beside it, and fails instantly when double-clicked. Two
   identical-looking exes where one is broken is a trap; the fix is to have
   one exe.
@@ -52,8 +52,12 @@ PUBLIC_RELEASE = '--public-release' in sys.argv
 BUILD_ROOT = os.path.join(ROOT, 'release-build') if PUBLIC_RELEASE else ROOT
 DIST = os.path.join(BUILD_ROOT, 'dist')
 WORK = os.path.join(BUILD_ROOT, 'build')
-NAME = 'Relay'                # the exe's file name, kept so installs carry on
+NAME = 'Mirage'               # the exe's file name: dist/Mirage/Mirage.exe
 DISPLAY_NAME = 'Mirage'       # what people see: shortcut, version resource
+# What the app was called before. Only so a rebuild can find the last build's
+# dist/Relay folder (its user data, and whether it is running) and the
+# Desktop shortcut that pointed into it.
+LEGACY_NAME = 'Relay'
 STARTERS = os.path.join(HERE, 'public-starters.json')
 
 # Modules in app/ that are for development only and are kept out of the exe
@@ -149,7 +153,7 @@ def app_is_running():
 
     Windows will not let a running executable be opened for writing, and that
     is a sharper test than a name in the process list: it answers about this
-    exact file rather than about anything called Relay.exe. Renaming is not
+    exact file rather than about anything called Mirage.exe. Renaming is not
     the test - Windows allows a running exe to be renamed, so that answered
     "free" every time and was worse than no check at all.
 
@@ -158,22 +162,26 @@ def app_is_running():
     can, leaves the one file it cannot, and carries on into PyInstaller - and
     what it deleted is the servers, the credentials and the pinned exits.
     """
-    exe = os.path.join(DIST, NAME, f'{NAME}.exe')
-    if not os.path.isfile(exe):
-        return False
-    try:
-        open(exe, 'r+b').close()
-        return False
-    except OSError:
-        return True
+    for name in (NAME, LEGACY_NAME):
+        exe = os.path.join(DIST, name, f'{name}.exe')
+        if not os.path.isfile(exe):
+            continue
+        try:
+            open(exe, 'r+b').close()
+        except OSError:
+            return True
+    return False
 
 
 def stash_user_data():
     """Take the last build's own files somewhere the delete cannot reach."""
     out = os.path.join(DIST, NAME)
     if not os.path.isdir(out):
+        # The first build after the rename: the last one is dist/Relay.
+        out = os.path.join(DIST, LEGACY_NAME)
+    if not os.path.isdir(out):
         return None
-    keep = tempfile.mkdtemp(prefix='relay-keep-')
+    keep = tempfile.mkdtemp(prefix='mirage-keep-')
     saved = 0
     for rel in KEEP:
         src = os.path.join(out, rel.replace('/', os.sep))
@@ -342,9 +350,9 @@ def write_public_starters(target):
                     f'Expected one matching remote line in {entry["source"]}')
             filename = f'{entry["name"]}.prod.surfshark.com_tcp_{address}.ovpn'
         else:
-            text = ('# Windscribe starter pinned by the Relay release build.\n'
+            text = ('# Windscribe starter pinned by the Mirage release build.\n'
                     f'# {host} -> {address}\n'
-                    '# Used by Relay\'s HTTPS proxy path; not an OpenVPN profile.\n'
+                    '# Used by Mirage\'s HTTPS proxy path; not an OpenVPN profile.\n'
                     'client\n'
                     'dev tun\n'
                     'proto tcp\n'
@@ -376,7 +384,7 @@ def _safe_public_server(path):
 
 def version_string():
     """Product version used both in the PE metadata and by SignPath policy."""
-    value = os.environ.get('RELAY_VERSION', '0.0.0-dev').strip()
+    value = os.environ.get('MIRAGE_VERSION', '0.0.0-dev').strip()
     # Release tags are desktop-v1.2.3; the app's own version is the 1.2.3.
     if value.lower().startswith('desktop-'):
         value = value[len('desktop-'):]
@@ -389,7 +397,7 @@ def write_version_file():
     numbers = [int(n) for n in re.findall(r'\d+', version)[:4]]
     numbers += [0] * (4 - len(numbers))
     fixed = tuple(numbers)
-    path = os.path.join(WORK, 'relay-version.txt')
+    path = os.path.join(WORK, 'mirage-version.txt')
     os.makedirs(WORK, exist_ok=True)
     body = f"""VSVersionInfo(
   ffi=FixedFileInfo(filevers={fixed!r}, prodvers={fixed!r}, mask=0x3f,
@@ -398,8 +406,8 @@ def write_version_file():
     StringStruct('CompanyName', 'Mirage contributors'),
     StringStruct('FileDescription', 'Mirage'),
     StringStruct('FileVersion', '{version}'),
-    StringStruct('InternalName', 'Relay'),
-    StringStruct('OriginalFilename', 'Relay.exe'),
+    StringStruct('InternalName', '{NAME}'),
+    StringStruct('OriginalFilename', '{NAME}.exe'),
     StringStruct('ProductName', 'Mirage'),
     StringStruct('ProductVersion', '{version}')])]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])])
@@ -464,6 +472,33 @@ def make_shortcut(target, folder, name, icon=None):
         return None
 
 
+def remove_legacy_shortcut(folder):
+    """Delete the Desktop's Relay.lnk, but only one a build made: one that
+    points at dist/Relay/Relay.exe, which the rename has taken away. A
+    Relay.lnk pointing anywhere else is somebody else's and stays."""
+    link = os.path.join(folder, f'{LEGACY_NAME}.lnk')
+    if not os.path.isfile(link):
+        return False
+    old = os.path.join(DIST, LEGACY_NAME, f'{LEGACY_NAME}.exe')
+    script = ("(New-Object -ComObject WScript.Shell).CreateShortcut('"
+              + link.replace("'", "''") + "').TargetPath")
+    try:
+        target = subprocess.run(
+            ['powershell', '-NoProfile', '-Command', script],
+            capture_output=True, text=True, check=True,
+            timeout=30).stdout.strip()
+    except Exception:
+        return False
+    if not target or (os.path.normcase(os.path.abspath(target))
+                      != os.path.normcase(os.path.abspath(old))):
+        return False
+    try:
+        os.remove(link)
+        return True
+    except OSError:
+        return False
+
+
 def stop_tunnel_client():
     """End a gost this app started, so dist/ can be deleted.
 
@@ -512,7 +547,7 @@ def main():
     # servers, the credentials and every pinned exit are gone.
     if not PUBLIC_RELEASE and app_is_running():
         raise SystemExit(
-            'Relay is running, and a build deletes the folder it is running\n'
+            'Mirage is running, and a build deletes the folder it is running\n'
             'from. Quit it from its tray icon first, then build.')
 
     if not PUBLIC_RELEASE:
@@ -755,7 +790,7 @@ def main():
 
     # -- remove the decoy --------------------------------------------------
 
-    # PyInstaller leaves its own Relay.exe in the working folder. It looks
+    # PyInstaller leaves its own Mirage.exe in the working folder. It looks
     # identical and does not work, having no _internal beside it. Better that
     # it does not exist.
     shutil.rmtree(WORK, ignore_errors=True)
@@ -766,10 +801,9 @@ def main():
         audit_public_output(out)
         link = None
     else:
-        # Named for what the app is called; the exe keeps its file name.
-        link = make_shortcut(
-            exe, os.path.join(os.path.expanduser('~'), 'Desktop'),
-            DISPLAY_NAME, shortcut_icon)
+        desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
+        link = make_shortcut(exe, desktop, DISPLAY_NAME, shortcut_icon)
+        remove_legacy_shortcut(desktop)
 
     print()
     print('done.')

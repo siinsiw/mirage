@@ -10,4 +10,4 @@ app/build/
 local.properties
 
 # The Go core, built by mobile/build-android.sh. Any checkout rebuilds it.
-app/libs/relay.aar
+app/libs/mirage.aar

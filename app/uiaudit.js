@@ -1,4 +1,4 @@
-/* Relay — the layout audit.
+/* Mirage — the layout audit.
  *
  * Injected into the real page by ui-layout.py, run against whatever is on
  * screen, and asked one question: is anything laid out wrong. Not "does it

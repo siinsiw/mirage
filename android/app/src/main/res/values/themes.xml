@@ -4,13 +4,13 @@
         The window behind Compose: the app's own background from the first
         frame, so there is no white flash before the first composition.
     -->
-    <style name="Theme.Relay" parent="@android:style/Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/relay_bg</item>
+    <style name="Theme.Mirage" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/mirage_bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:navigationBarColor">@color/relay_bg</item>
+        <item name="android:navigationBarColor">@color/mirage_bg</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 
     <!-- Mirage's black (theme/Theme.kt Palette.BLACK bg), so the first frame is the app's. -->
-    <color name="relay_bg">#FF070304</color>
+    <color name="mirage_bg">#FF070304</color>
 </resources>

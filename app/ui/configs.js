@@ -19,6 +19,7 @@
     renaming: null,
     testing: null,      // {done, total} while a test runs
     fresh: true,        // animate rows in on the next draw
+    mine: false,        // a connect started here, until the line is down again
   };
 
   const WARN = {
@@ -301,12 +302,77 @@
       host.appendChild(empty);
     }
     $('cfgAuto').setAttribute('aria-checked', list.auto ? 'true' : 'false');
-    $('cfgFragment').setAttribute('aria-checked', list.fragment ? 'true' : 'false');
     if (list.engines && !list.engines.singbox) {
-      say('sing-box.exe is not beside Relay, so configs cannot connect or be tested.', true);
+      say('sing-box.exe is not beside Mirage, so configs cannot connect or be tested.', true);
     }
     if (view.fresh) { view.fresh = false; reveal(host); }
+    sync();
   }
+
+  /* ------------------------------------------------------------ the home */
+
+  /* The section's own home, from what the window already knows: state.mode
+     (app.js), the runner's side of it (list.live), and whether the connect
+     under way is this section's. Called on every draw and on every render()
+     of the main home, so the two never disagree. */
+  function heroState() {
+    const live = (view.list && view.list.live) || {};
+    // Held by a kill switch, whichever section raised it: said here, with
+    // its way out, rather than only on Mirage's page behind this one.
+    if (state.blocked) return 'held';
+    if (state.mode === 'busy' && view.mine) return 'busy';
+    if (state.mode === 'on' && live.on) return 'on';
+    if (state.mode === 'fail' && view.mine) return 'fail';
+    return 'off';
+  }
+
+  function sync() {
+    if (!view.list) return;
+    const live = view.list.live || {};
+    const hs = heroState();
+    if (state.mode === 'off' || (state.mode === 'on' && !live.on)) view.mine = false;
+    $('cfgHero').dataset.state = hs === 'held' ? 'fail' : hs;
+    // A drop, a tray Disconnect, a hold: the list's own idea of what is up
+    // is asked for again rather than left saying connected.
+    if (live.on && state.mode !== 'on' && state.mode !== 'busy' && !view.asking) {
+      view.asking = true;
+      refresh().finally(() => { view.asking = false; });
+    }
+    const id = live.on ? (live.using || live.current) : view.list.selected;
+    const c = id && id !== 'auto' ? find(id) : null;
+    const word = { off: 'Disconnected', busy: 'Connecting', on: 'Connected', held: 'Blocked' }[hs]
+      || ($('status').textContent || 'Not connected');
+    $('cfgState').textContent = word;
+    $('cfgClock').textContent = hs === 'on' && state.since
+      ? clockText(Date.now() / 1000 - state.since) : '';
+    const flag = $('cfgNowFlag');
+    const cc = c && c.last && c.last.country;
+    flag.style.backgroundImage = cc ? flagUrl(canonCode(cc)) : '';
+    if (c) {
+      $('cfgNowName').textContent = (live.on && live.auto ? 'Fastest · ' : '') + c.name;
+      const r = c.last;
+      const t = !r ? 'not tested' : r.ms ? `${r.ms} ms` : (FAIL[r.error] || 'failed');
+      $('cfgNowSub').textContent = hs === 'busy'
+        ? ($('statusWhere').textContent || '').trim() || 'Starting'
+        : `${c.label} · ${t}`;
+    } else {
+      $('cfgNowName').textContent = view.list.configs.length ? 'No config picked' : 'No configs yet';
+      $('cfgNowSub').textContent = view.list.configs.length ? 'Pick one below' : 'Paste links or add a subscription below';
+    }
+    $('cfgTun').setAttribute('aria-checked', view.list.mode === 'tun' ? 'true' : 'false');
+    const go = $('cfgGo');
+    go.dataset.mode = hs === 'fail' ? 'off' : (hs === 'held' ? 'on' : hs);
+    // Busy with a connect that is not this section's: wait for it.
+    go.disabled = (hs === 'off' && (!c || state.mode === 'busy'));
+    const provider = !live.on && (state.mode === 'on' || (state.mode === 'busy' && !view.mine));
+    $('cfgNote').textContent = hs === 'held'
+      ? 'The connection dropped and the kill switch is holding: nothing leaves on your normal line. Disconnect to use it again, or pick a config to reconnect.'
+      : provider
+        ? 'Mirage is connected through a provider. Connecting here takes over from it.'
+        : (hs === 'fail' ? ($('hint').textContent || '') : '');
+  }
+  window.cfgSync = () => { if ($('configsDlg').open) sync(); };
+  setInterval(() => { if ($('configsDlg').open && heroState() === 'on') sync(); }, 1000);
 
   /* The rows settle in once, when the sheet opens: opacity and a few pixels
      of rise, nothing that moves layout, and nothing at all for people who
@@ -338,6 +404,7 @@
   async function connectTo(id) {
     const c = find(id);
     if (!c || state.mode === 'busy') return;
+    view.mine = true;
     if ((c.warnings || []).includes('plain') && !(await ask(
       `“${c.name}” sends your traffic to its server without any encryption. `
       + 'Anyone on the line in between can read it. Connect anyway?', 'Connect anyway'))) return;
@@ -345,7 +412,6 @@
     if (live.on && !live.auto && sameGroup(live.current, id)) {
       const r = await call('switch', { id });
       if (!r.ok) { say(r.error, true); return; }
-      shut($('configsDlg'));
       return;
     }
     state.mode = 'busy';
@@ -356,12 +422,44 @@
     const r = await call('connect', { id, auto });
     if (!r.ok) {
       state.mode = 'off';
+      view.mine = false;
       render();
       say(r.error, true);
+    }
+  }
+
+  /* A row pressed: with this section's connection up, it moves there (live,
+     within a group); otherwise it becomes the one Connect will use. */
+  async function choose(id) {
+    const live = (view.list && view.list.live) || {};
+    if (live.on) { connectTo(id); return; }
+    const r = await call('pick', { id });
+    if (r.ok) draw(r.list); else say(r.error, true);
+  }
+
+  $('cfgTun').addEventListener('click', async () => {
+    const on = $('cfgTun').getAttribute('aria-checked') !== 'true';
+    const r = await call('set', { values: { mode: on ? 'tun' : 'system' } });
+    if (!r.ok) { say(r.error, true); return; }
+    say(r.applied ? (on ? 'Moving the whole system onto the config… Windows may ask for administrator approval.'
+      : 'Back to the proxy setting…')
+      : (on ? 'The whole system goes through the config from the next connect. It asks for administrator approval.'
+        : 'Only what follows the proxy setting goes through it from the next connect.'));
+    refresh();
+  });
+
+  $('cfgGo').addEventListener('click', async () => {
+    const hs = heroState();
+    if (hs === 'on' || hs === 'busy' || hs === 'held') {
+      setStatus(hs === 'busy' ? 'Cancelling' : 'Disconnecting', 'off', 'Putting Windows back', '');
+      const r = await window.pywebview.api.disconnect();
+      view.mine = false;
+      window.onDisconnected(r && r.session);
+      refresh();
       return;
     }
-    shut($('configsDlg'));
-  }
+    if (view.list && view.list.selected) connectTo(view.list.selected);
+  });
 
   async function test(what) {
     if (view.testing) {
@@ -435,7 +533,11 @@
       say(e.error ? `The test did not run: ${e.error}` : 'Fastest first.', !!e.error);
     }
     if (e.kind === 'sub') {
-      if (e.list) draw(e.list);
+      // One fetched in the background that failed: kept on the group, not
+      // drawn over a rename or an open row, and not said.
+      if (e.quiet && !e.ok) return;
+      if (e.list && !(e.quiet && (view.renaming || view.expanded))) draw(e.list);
+      if (e.quiet) return;
       if (e.ok) {
         say(`Updated: ${e.count} configs${e.problems && e.problems.length
           ? `, ${e.problems.length} not taken` : ''}${e.through ? ', fetched through the connection' : ''}.`);
@@ -445,17 +547,32 @@
     }
   };
 
-  const dlg = $('configsDlg');
-  $('configsOpen').addEventListener('click', () => {
-    view.fresh = true;
-    view.expanded = null;
-    view.renaming = null;
-    say('');
-    dlg.showModal();
-    refresh();
-  });
-  $('cfgClose').addEventListener('click', () => shut(dlg));
-  dlg.addEventListener('cancel', (e) => { e.preventDefault(); shut(dlg); });
+  /* For configs-shell.js, which opens and closes the section. */
+  window.cfgSection = {
+    opened() {
+      view.fresh = true;
+      view.expanded = null;
+      view.renaming = null;
+      say('');
+      refresh();
+    },
+    refresh,
+    list: () => view.list,
+    draw,
+    // Settings > Connection > Connect on opening, once, at start.
+    async autostart() {
+      if (state.mode !== 'off') return;
+      try {
+        const r = await call('autostart');
+        if (r.ok && r.started) {
+          view.mine = true;
+          state.mode = 'busy';
+          render();
+          setStatus('Connecting', 'busy', 'Starting your config', '');
+        }
+      } catch (e) { /* a preference, not worth a failure at start */ }
+    },
+  };
 
   $('cfgPaste').addEventListener('click', () => addLinks());
   $('cfgPasteForm').addEventListener('submit', (e) => {
@@ -492,6 +609,7 @@
     const live = (view.list && view.list.live) || {};
     if (live.on && view.list.selected) {
       // A different shape of connection, so it is made again.
+      view.mine = true;
       state.mode = 'busy';
       render();
       setStatus('Connecting', 'busy', on ? 'Fastest, automatically' : 'The one you picked', '');
@@ -501,16 +619,6 @@
       say(on ? 'The next connection picks the fastest of the group, and moves on when it stops answering.'
         : 'The next connection uses the one you pick.');
     }
-  });
-
-  $('cfgFragment').addEventListener('click', async () => {
-    const b = $('cfgFragment');
-    const on = b.getAttribute('aria-checked') !== 'true';
-    const r = await call('option', { key: 'fragment', on });
-    if (!r.ok) { say(r.error, true); return; }
-    draw(r.list);
-    say(r.reconnect ? 'Applies when you connect again.' : (on
-      ? 'The TLS hello is split into pieces from the next connection on.' : ''));
   });
 
   $('cfgList').addEventListener('click', (e) => {
@@ -524,13 +632,13 @@
       draw(view.list);
       return;
     }
-    connectTo(id);
+    choose(id);
   });
   $('cfgList').addEventListener('keydown', (e) => {
     const r = e.target.closest('.cfg');
     if (r && e.target === r && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault();
-      connectTo(r.dataset.id);
+      choose(r.dataset.id);
     }
   });
 }());

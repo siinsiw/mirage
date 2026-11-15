@@ -11,10 +11,12 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from configs import api, runner                                # noqa: E402
+from configs import api, prefs, runner, store                  # noqa: E402
 
 # _forget removes the runner's record: never the real one.
 runner.RECORD = os.path.join(tempfile.mkdtemp(), 'running.json')
+# Configs' own settings, kept away from the real file.
+store.PATH = os.path.join(tempfile.mkdtemp(), 'configs.json')
 
 PORT = 10808          # the Configs section's own port
 ENGINE_PORT = 8877    # the provider worker's
@@ -55,6 +57,12 @@ class Engine:
         self.kill_switch = kill_switch
         self.set_system_proxy = system_proxy
         self.route_with = route
+
+    def running(self):
+        return False
+
+    def engaged(self):
+        return False
 
 
 class SysProxy:
@@ -97,6 +105,9 @@ def _proxy_runner(kill_switch=True, system_proxy=True):
     eng = Engine(Tun(), kill_switch=kill_switch, system_proxy=system_proxy)
     sp = SysProxy(PORT if system_proxy else None)
     r = runner.Runner(eng, sp)
+    # The runner reads Configs' own settings now, not Mirage's.
+    r._prefs = dict(prefs.defaults(), kill_switch=kill_switch,
+                    mode='system' if system_proxy else 'local')
     r.mode, r.port, r.box, r.expected_up = 'proxy', PORT, Child(), True
     r.current = 'c1'
     return r
@@ -105,6 +116,7 @@ def _proxy_runner(kill_switch=True, system_proxy=True):
 def _tun_runner(kill_switch=True):
     eng = Engine(Tun(PORT), kill_switch=kill_switch, route='tun')
     r = runner.Runner(eng, SysProxy())
+    r._prefs = dict(prefs.defaults(), kill_switch=kill_switch, mode='tun')
     r.mode, r.port, r.expected_up = 'tun', PORT, True
     r.current = 'c1'
     return r
@@ -172,19 +184,44 @@ def _section(r):
 def test_turning_the_kill_switch_off_while_held_lets_go():
     r = _proxy_runner()
     r.box.alive = False           # the program went; Windows still points here
+    r.owns_hold = True            # as watch_drop marks it
     assert r.blocked()
     s = _section(r)
-    r.engine.kill_switch = False
+    r._prefs['kill_switch'] = False
     assert s.kill_switch_changed(False)
     assert not r.sysproxy.engaged_for(PORT)
     assert not r.blocked()
+
+
+def test_configs_own_kill_switch_turned_off_while_held_lets_go():
+    r = _proxy_runner()
+    r.box.alive = False           # held: nothing active, Windows still points here
+    r.owns_hold = True
+    s = _section(r)
+    sent = []
+    s.owner._emit = lambda name, payload=None: sent.append(name)
+    s.owner._holding = True
+    r._prefs['kill_switch'] = False
+    assert s._apply_live(['kill_switch'], {'kill_switch': False}) is True
+    assert not r.sysproxy.engaged_for(PORT) and not s.owner._holding
+    assert sent == ['Disconnected']
+
+
+def test_a_hold_this_section_did_not_raise_is_not_let_go():
+    r = _proxy_runner()
+    r.box.alive = False
+    r.owns_hold = False           # Mirage's, say
+    s = _section(r)
+    r._prefs['kill_switch'] = False
+    assert not s.kill_switch_changed(False)
+    assert r.sysproxy.engaged_for(PORT)
 
 
 def test_turning_the_kill_switch_on_or_off_while_up_lets_nothing_go():
     r = _proxy_runner()
     s = _section(r)
     assert not s.kill_switch_changed(True)
-    r.engine.kill_switch = False
+    r._prefs['kill_switch'] = False
     assert not s.kill_switch_changed(False)
     assert r.alive() and r.sysproxy.engaged_for(PORT)
 
@@ -194,15 +231,15 @@ def test_turning_the_kill_switch_on_or_off_while_up_lets_nothing_go():
 def test_system_proxy_turned_on_or_off_is_applied_in_place():
     r = _proxy_runner(system_proxy=False)
     assert not r.sysproxy.engaged_for(PORT)
-    r.engine.set_system_proxy = True
+    r._prefs['mode'] = 'system'
     assert r.reroute() is True and r.sysproxy.engaged_for(PORT)
-    r.engine.set_system_proxy = False
+    r._prefs['mode'] = 'local'
     assert r.reroute() is True and not r.sysproxy.engaged_for(PORT)
 
 
 def test_a_move_between_proxy_and_adapter_connects_the_same_config_again():
     r = _proxy_runner()
-    r.engine.route_with = 'tun'
+    r._prefs['mode'] = 'tun'
     assert r.reroute() == 'reconnect'
     s = _section(r)
     asked = []
@@ -218,6 +255,41 @@ def test_reroute_with_nothing_up_does_nothing():
     s = _section(r)
     s.do_connect = lambda p: (_ for _ in ()).throw(AssertionError('connected'))
     assert s.reroute() is None
+
+
+# -- Configs' own settings, apart from Mirage's ------------------------------
+
+def test_mirages_switches_do_not_steer_a_config_connection():
+    r = _proxy_runner(kill_switch=True)
+    r.engine.kill_switch = False          # Mirage's own switch
+    r.engine.set_system_proxy = False
+    assert r.holding(), "Configs' kill switch is its own"
+    assert r.points_windows()
+
+
+def test_settings_start_as_mirages_once():
+    eng = Engine(Tun(), kill_switch=False, system_proxy=True, route='tun')
+    eng.split = {'mode': 'bypass', 'iran': True, 'apps': ['chrome.exe'], 'domains': []}
+    got = prefs.from_mirage(eng)
+    assert got['mode'] == 'tun' and got['kill_switch'] is False
+    # A file of its own: the sections above have seeded the shared one.
+    store.PATH = os.path.join(tempfile.mkdtemp(), 'configs.json')
+    assert got['split_mode'] == 'bypass' and got['split_apps'] == ['chrome.exe']
+    assert store.seed_settings(got) is True
+    assert store.seed_settings({'mode': 'local'}) is False, 'only once'
+    assert store.settings()['mode'] == 'tun'
+    store.set_settings({'mode': 'local'})
+    assert store.settings()['mode'] == 'local'
+
+
+def test_a_setting_out_of_range_is_refused():
+    for key, bad in (('mode', 'vpn'), ('split_apps', 'bad|name'),
+                     ('split_domains', 'exa mple..com')):
+        try:
+            store.set_settings({key: bad})
+        except ValueError:
+            continue
+        raise AssertionError(f'{key}={bad!r} was taken')
 
 
 if __name__ == '__main__':

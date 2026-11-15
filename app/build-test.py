@@ -8,8 +8,8 @@ import tempfile
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SPEC = importlib.util.spec_from_file_location('relay_build',
-                                              os.path.join(HERE, 'build.py'))
+SPEC = importlib.util.spec_from_file_location('mirage_build',
+                                               os.path.join(HERE, 'build.py'))
 build = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(build)
 
@@ -49,25 +49,27 @@ def test_dynamic_proxy_imports():
 
 
 def test_version_file():
-    old = os.environ.get('RELAY_VERSION')
+    old = os.environ.get('MIRAGE_VERSION')
     old_work = build.WORK
     try:
         with tempfile.TemporaryDirectory() as folder:
             build.WORK = folder
-            os.environ['RELAY_VERSION'] = 'v2.7.3-beta.1'
+            os.environ['MIRAGE_VERSION'] = 'v2.7.3-beta.1'
             text = open(build.write_version_file(), encoding='utf-8').read()
             assert "filevers=(2, 7, 3, 1)" in text
             assert "StringStruct('ProductName', 'Mirage')" in text
+            assert "StringStruct('OriginalFilename', 'Mirage.exe')" in text
+            assert 'Relay' not in text
             assert "StringStruct('ProductVersion', '2.7.3-beta.1')" in text
             # A release tag names the app: desktop-v1.4.0 is version 1.4.0.
-            os.environ['RELAY_VERSION'] = 'desktop-v1.4.0'
+            os.environ['MIRAGE_VERSION'] = 'desktop-v1.4.0'
             assert build.version_string() == '1.4.0'
     finally:
         build.WORK = old_work
         if old is None:
-            os.environ.pop('RELAY_VERSION', None)
+            os.environ.pop('MIRAGE_VERSION', None)
         else:
-            os.environ['RELAY_VERSION'] = old
+            os.environ['MIRAGE_VERSION'] = old
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Frozen Relay keeps mutable data in the user's profile."""
+"""Frozen Mirage keeps mutable data in the user's profile."""
 
 import importlib.util
 import json
@@ -12,7 +12,7 @@ from pathlib import Path
 def test_frozen_data_outside_install():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        install = root / 'Program Files' / 'Relay'
+        install = root / 'Program Files' / 'Mirage'
         local = root / 'user' / 'AppData' / 'Local'
         (install / 'servers').mkdir(parents=True)
         (install / 'configs').mkdir()
@@ -34,7 +34,7 @@ def test_frozen_data_outside_install():
         (install / 'gost.exe').write_bytes(b'client')
         (install / 'Resolve-OvpnRemote.ps1').write_text('script')
 
-        data = local / 'Relay'
+        data = local / 'Mirage'
         (data / 'servers').mkdir(parents=True)
         (data / 'servers' / 'starter.ovpn').write_text('user version')
 
@@ -42,11 +42,11 @@ def test_frozen_data_outside_install():
         old_frozen = getattr(sys, 'frozen', None)
         old_local = os.environ.get('LOCALAPPDATA')
         try:
-            sys.executable = str(install / 'Relay.exe')
+            sys.executable = str(install / 'Mirage.exe')
             sys.frozen = True
             os.environ['LOCALAPPDATA'] = str(local)
             spec = importlib.util.spec_from_file_location(
-                'relay_frozen_paths', Path(__file__).with_name('paths.py'))
+                'mirage_frozen_paths', Path(__file__).with_name('paths.py'))
             paths = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(paths)
         finally:
@@ -92,6 +92,136 @@ def test_frozen_data_outside_install():
         assert (data / '.state' / 'accounts.json').read_text() == 'new user version'
 
 
+def _frozen_paths(install, local):
+    """paths.py imported as a built Mirage.exe in `install` would see it."""
+    old_exe = sys.executable
+    old_frozen = getattr(sys, 'frozen', None)
+    old_local = os.environ.get('LOCALAPPDATA')
+    try:
+        sys.executable = str(install / 'Mirage.exe')
+        sys.frozen = True
+        os.environ['LOCALAPPDATA'] = str(local)
+        spec = importlib.util.spec_from_file_location(
+            'mirage_frozen_paths', Path(__file__).with_name('paths.py'))
+        paths = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(paths)
+        return paths
+    finally:
+        sys.executable = old_exe
+        if old_frozen is None:
+            del sys.frozen
+        else:
+            sys.frozen = old_frozen
+        if old_local is None:
+            os.environ.pop('LOCALAPPDATA', None)
+        else:
+            os.environ['LOCALAPPDATA'] = old_local
+
+
+def test_legacy_data_folder_moves():
+    """%LOCALAPPDATA%\\Relay becomes %LOCALAPPDATA%\\Mirage on the first
+    start, folders remembered inside it follow, and nothing else is touched."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        install = root / 'Program Files' / 'Mirage'
+        install.mkdir(parents=True)
+        local = root / 'user' / 'AppData' / 'Local'
+        old = local / 'Relay'
+        (old / '.state').mkdir(parents=True)
+        (old / 'servers').mkdir()
+        (old / 'servers' / 'mine.ovpn').write_text('mine')
+        (old / '.state' / 'accounts.json').write_text('sealed account')
+        (old / '.state' / 'settings.json').write_text(json.dumps({
+            'folder': str(old / 'servers'),
+            'source': 'folder:' + str(old / 'pinned'),
+            'external': str(root / 'elsewhere'),
+            'port': 8080}))
+        (old / '.state' / 'dropped.json').write_text(json.dumps({
+            'servers/x.ovpn': {'from': str(old / 'servers')}}))
+
+        paths = _frozen_paths(install, local)
+        new = local / 'Mirage'
+        assert Path(paths.DATA_DIR) == new
+        assert not old.exists()
+        assert (new / 'servers' / 'mine.ovpn').read_text() == 'mine'
+        assert (new / '.state' / 'accounts.json').read_text() == 'sealed account'
+        settings = json.loads((new / '.state' / 'settings.json').read_text())
+        assert settings['folder'] == str(new / 'servers')
+        assert settings['source'] == 'folder:' + str(new / 'pinned')
+        assert settings['external'] == str(root / 'elsewhere')
+        assert settings['port'] == 8080
+        dropped = json.loads((new / '.state' / 'dropped.json').read_text())
+        assert dropped['servers/x.ovpn']['from'] == str(new / 'servers')
+
+        # Both there: Mirage is used and Relay is left exactly as it was.
+        (old / '.state').mkdir(parents=True)
+        (old / '.state' / 'accounts.json').write_text('older copy')
+        paths = _frozen_paths(install, local)
+        assert Path(paths.DATA_DIR) == new
+        assert (old / '.state' / 'accounts.json').read_text() == 'older copy'
+        assert (new / '.state' / 'accounts.json').read_text() == 'sealed account'
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Neither there: a fresh install, and the import creates nothing.
+        local = Path(tmp) / 'Local'
+        local.mkdir()
+        paths = _frozen_paths(Path(tmp) / 'app', local)
+        assert Path(paths.DATA_DIR) == local / 'Mirage'
+        assert list(local.iterdir()) == []
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # The move refused (the old copy still open): this run keeps using
+        # Relay where it is, rather than starting from an empty folder.
+        local = Path(tmp)
+        (local / 'Relay').mkdir()
+        spec = importlib.util.spec_from_file_location(
+            'mirage_paths_refused', Path(__file__).with_name('paths.py'))
+        paths = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(paths)
+        real = os.rename
+
+        def refuse(a, b):
+            raise PermissionError(32, 'in use')
+        os.rename = refuse
+        try:
+            assert Path(paths.adopt_legacy_data(str(local))) == local / 'Relay'
+        finally:
+            os.rename = real
+        assert Path(paths.adopt_legacy_data(str(local))) == local / 'Mirage'
+        assert (local / 'Mirage').is_dir() and not (local / 'Relay').exists()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # The old Relay still running: its folder is not moved from under it.
+        local = Path(tmp)
+        (local / 'Relay').mkdir()
+        spec = importlib.util.spec_from_file_location(
+            'mirage_paths_running', Path(__file__).with_name('paths.py'))
+        paths = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(paths)
+        paths._legacy_running = lambda: True
+        assert Path(paths.adopt_legacy_data(str(local))) == local / 'Relay'
+        assert (local / 'Relay').is_dir() and not (local / 'Mirage').exists()
+        paths._legacy_running = lambda: False
+        assert Path(paths.adopt_legacy_data(str(local))) == local / 'Mirage'
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Moved before, but a settings file still names the old folder (its
+        # rewrite failed once): it is put right on the next start.
+        local = Path(tmp)
+        (local / 'Mirage' / '.state').mkdir(parents=True)
+        stale = {'folder': str(local / 'Relay' / 'servers')}
+        (local / 'Mirage' / '.state' / 'settings.json').write_text(json.dumps(stale))
+        spec = importlib.util.spec_from_file_location(
+            'mirage_paths_retry', Path(__file__).with_name('paths.py'))
+        paths = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(paths)
+        assert Path(paths.adopt_legacy_data(str(local))) == local / 'Mirage'
+        got = json.loads((local / 'Mirage' / '.state' / 'settings.json').read_text())
+        assert got['folder'] == str(local / 'Mirage' / 'servers')
+
+
 if __name__ == '__main__':
     test_frozen_data_outside_install()
     print('ok test_frozen_data_outside_install')
+    test_legacy_data_folder_moves()
+    print('ok test_legacy_data_folder_moves')
