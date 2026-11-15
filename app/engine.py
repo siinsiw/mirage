@@ -31,7 +31,8 @@ import split
 import tun
 import windscribe
 from sweep import CREATE_NO_WINDOW, _ps_array, _ps_string, discard, elevated
-from countries import aliases, canon, city_name, continent, country_name
+from countries import (WINDSCRIBE_CITIES, aliases, canon, city_name, continent,
+                       country_name, listing_order)
 
 HERE = paths.APP_DIR
 ROOT = paths.DATA_DIR
@@ -204,22 +205,31 @@ def lan_password_ok(text):
     return px.lan_password_valid(text)
 
 
-FIREWALL_RULE = 'Relay LAN share ({port})'
+FIREWALL_RULE = 'Mirage LAN share ({port})'
+# The same rule as the app made it when it was called Relay. Removed along
+# with the new one, and counted as the rule by the probe, so sharing that was
+# on before the rename stays on without another administrator prompt.
+LEGACY_FIREWALL_RULE = 'Relay LAN share ({port})'
 FIREWALL_STATES = ('ok', 'missing', 'public-network', 'unknown')
 
 # Adapters that are not "the Wi-Fi": the adapter this app creates, Hyper-V and
 # WSL's switches, VM hosts, other VPNs. An address on one of those would be
 # offered to the person as the thing to type into the phone, and a phone can
 # never reach it. ("Local Area Connection*" is Windows' own name for the
-# virtual Wi-Fi Direct adapters behind Mobile Hotspot.)
+# virtual Wi-Fi Direct adapters behind Mobile Hotspot.) RelayTun is this
+# adapter as the app named it before it was called Mirage.
 VIRTUAL_ADAPTERS = re.compile(
-    r'relaytun|sing-?tun|\btun\d*\b|local area connection\*|vethernet|hyper-v|wsl|virtualbox|vmware|vmnet|'
+    r'miragetun|relaytun|sing-?tun|\btun\d*\b|local area connection\*|vethernet|hyper-v|wsl|virtualbox|vmware|vmnet|'
     r'loopback|bluetooth|\btap\b|tap-|tailscale|wireguard|zerotier|docker|'
     r'npcap|openvpn|tunnel|vpn|isatap|teredo', re.I)
 
 
 def firewall_rule_name(port):
     return FIREWALL_RULE.format(port=int(port))
+
+
+def legacy_firewall_rule_name(port):
+    return LEGACY_FIREWALL_RULE.format(port=int(port))
 
 
 def firewall_script(action, port):
@@ -231,8 +241,10 @@ def firewall_script(action, port):
     """
     port = clean_port(port)
     name = _ps_string(firewall_rule_name(port))
-    gone = ('Get-NetFirewallRule -DisplayName ' + name +
-            ' -ErrorAction SilentlyContinue | Remove-NetFirewallRule\n')
+    gone = ''.join('Get-NetFirewallRule -DisplayName ' + n +
+                   ' -ErrorAction SilentlyContinue | Remove-NetFirewallRule\n'
+                   for n in (name,
+                             _ps_string(legacy_firewall_rule_name(port))))
     if action == 'remove':
         return gone
     if action != 'add':
@@ -244,7 +256,7 @@ def firewall_script(action, port):
         'New-NetFirewallRule -DisplayName ' + name + ' -Direction Inbound '
         '-Action Allow -Protocol TCP -LocalPort ' + str(port) + ' '
         '-RemoteAddress LocalSubnet -Profile Private -Enabled True '
-        "-Description 'Relay: lets devices on your own Wi-Fi use this PC as "
+        "-Description 'Mirage: lets devices on your own Wi-Fi use this PC as "
         "their proxy. Removed when Share on Wi-Fi is turned off.' | Out-Null\n")
 
 
@@ -257,7 +269,9 @@ def firewall_probe_script(port):
     return (
         "$ErrorActionPreference = 'SilentlyContinue'\n"
         '$name = ' + _ps_string(firewall_rule_name(port)) + '\n'
-        '$found = @(Get-NetFirewallRule -DisplayName $name)\n'
+        '$legacy = ' + _ps_string(legacy_firewall_rule_name(port)) + '\n'
+        '$found = @(Get-NetFirewallRule -DisplayName $name) + '
+        '@(Get-NetFirewallRule -DisplayName $legacy)\n'
         '$good = $false\n'
         'foreach ($r in $found) {\n'
         '  $pf = $r | Get-NetFirewallPortFilter\n'
@@ -546,6 +560,14 @@ class Engine:
             out[s.provider] = out.get(s.provider, 0) + 1
         return out
 
+    def countries_by_provider(self):
+        """How many countries each provider covers, whatever is selected -
+        counted off the same unfiltered scan as counts_by_provider."""
+        seen = {}
+        for s in self.scan():
+            seen.setdefault(s.provider, set()).add(s.country)
+        return {k: len(v) for k, v in seen.items()}
+
     def scan(self):
         out, seen = [], set()
         for folder in self.sources():
@@ -654,11 +676,32 @@ class Engine:
             # Per provider as well as in total, because a country backed by
             # eleven Surfshark exits and one Windscribe one is a different
             # proposition from the reverse, and the row that says only "12
-            # relays" cannot tell you which you are about to get.
+            # servers" cannot tell you which you are about to get.
             c['by'][s.provider] = c['by'].get(s.provider, 0) + 1
             if s.seconds is not None and (c['best'] is None
                                           or s.seconds < c['best']):
                 c['best'] = s.seconds
+        # Windscribe's own order, countries and the cities inside them: the
+        # order its client shows, and the one people coming from it expect.
+        listed = windscribe.order()
+        place = listing_order(list(by_country), listed['countries'] or None)
+        city_at = {}
+        cities_listed = listed['cities'] or {
+            cc: list(names) for cc, names in WINDSCRIBE_CITIES.items()}
+        for cc, names in cities_listed.items():
+            for i, name in enumerate(names):
+                city_at.setdefault((canon(cc), city_key(name)), i)
+
+        def city_rank(x):
+            # A city every exit of which was asked and refused still goes to
+            # the bottom - one refusal among twenty untried is not that, and
+            # moves nothing. The rest keep Windscribe's order, and cities it
+            # does not list follow A-Z.
+            at = city_at.get((x['country'], x['code']))
+            dead = bool(x['tested'] and not x['ok']
+                        and x['tested'] >= x['count'])
+            return (dead, at is None, at if at is not None else 0, x['name'])
+
         out = []
         for code, c in by_country.items():
             out.append({'code': code,
@@ -666,16 +709,12 @@ class Engine:
                         # Which group of the list it sits in.
                         'continent': continent(code),
                         'alias': aliases(code),
+                        # Where it goes in Windscribe's order.
+                        'order': place.get(code, float(len(place))),
                         'cities': len(c['cities']),
-                        # The cities themselves, quickest first, so that
-                        # opening a country shows the one worth taking at the
-                        # top rather than whichever is alphabetically first.
                         'cityList': sorted(
                             (v for k, v in cities.items() if k[0] == code),
-                            key=lambda x: (x['tested'] and not x['ok'],
-                                           x['ping'] is None,
-                                           x['ping'] if x['ping'] is not None
-                                           else 0, x['name'])),
+                            key=city_rank),
                         'count': c['count'],
                         'by': c['by'],
                         'tested': c['tested'],
@@ -685,22 +724,17 @@ class Engine:
                         'byTested': c['byTested'],
                         'byPing': c['byPing'],
                         'best': c['best']})
-        # Answering first, then quickest, then the rest.
-        #
-        # A country every one of whose addresses was refused belongs at the
-        # bottom whatever its name: it is the one thing about a list of
-        # places to connect through that is worth reordering for. Untested
-        # sits between the two - not known to be blocked, not known to be
-        # quick - and an unmeasured exit is still not a fast one.
-
-        def rank(c):
-            blocked = c['tested'] and not c['ok']
-            return (bool(blocked),
-                    c['ping'] is None,
-                    c['ping'] if c['ping'] is not None else 0,
-                    c['best'] is None, c['best'] or 0, c['name'])
-
-        out.sort(key=rank)
+        # Windscribe's order, with a country every one of whose addresses was
+        # refused at the bottom whatever its place: it is the one thing about
+        # a list of places to connect through that is worth reordering for.
+        # Nothing here is ranked by speed any more - a test runs only when
+        # someone asks for one, so most rows have no time to rank by.
+        # Every exit asked and none answered, the same rule the list's "Not
+        # answering" group uses: one failed hand test out of fifty must not
+        # throw the United States out of first place.
+        out.sort(key=lambda c: (bool(c['tested'] and not c['ok']
+                                     and c['tested'] >= c['count']),
+                                c['order'], c['name']))
         return out
 
     # -- credentials -------------------------------------------------------
@@ -1597,12 +1631,24 @@ class Engine:
         adapter = self.set_system_proxy and self.route_with == 'tun'
         self.hand_split(adapter)
         if not self.set_system_proxy:
+            # Windows left alone - which means put back: not on a port the
+            # connection before this one held, nor under its adapter.
+            if self.sysproxy.stashed():
+                self.sysproxy.restore()
+            if self.tun.running() and not self.tun.engaged_for(self.port):
+                self.tun.stop()
+            if self.tun.held_by_firewall():
+                self.tun.release_firewall()
             return
         if adapter:
             if progress:
                 progress({'phase': 'adapter'})
+            # sing-box and Xray as carriers too: the Configs section's
+            # latency tests run them, and a test measures this line, not
+            # whichever exit happens to be up.
             want = dict(keep=[keep] if keep else [], own=[sys.executable],
-                        carriers=[paths.gost_exe()],
+                        carriers=[paths.gost_exe(), paths.singbox_exe(),
+                                  paths.xray_exe()],
                         split_rules=split.rules(self.split))
             # The adapter that held the line through a switch is kept as it
             # is, when it is the adapter this connection would have started
@@ -1618,6 +1664,10 @@ class Engine:
                 return
             self.tun.start(self.port, watch=watch, hold=self.kill_switch,
                            **want)
+            # The adapter carries everything now; a proxy setting a config
+            # connection held across the handoff goes.
+            if self.sysproxy.stashed():
+                self.sysproxy.restore()
         else:
             if progress:
                 progress({'phase': 'routing'})
@@ -1628,6 +1678,11 @@ class Engine:
             # its job; no adapter is coming to lift it, so it is lifted here.
             if self.tun.held_by_firewall():
                 self.tun.release_firewall()
+            # And an adapter still up for another port - a config's, held
+            # across the handoff to this connection - would go on carrying
+            # the whole machine through that config.
+            if self.tun.running() and not self.tun.engaged_for(self.port):
+                self.tun.stop()
 
     def hand_split(self, adapter=None):
         """Give the split rules to whichever is deciding: the worker, by its

@@ -19,7 +19,7 @@ def test_locked_roster():
         return
 
     with tempfile.TemporaryDirectory() as tmp:
-        folder = Path(tmp) / 'Rubika Stock' / 'AppData' / 'Local' / 'Relay' / '.state'
+        folder = Path(tmp) / 'Rubika Stock' / 'AppData' / 'Local' / 'Mirage' / '.state'
         folder.mkdir(parents=True)
         store = folder / 'accounts.json'
         store.write_text(json.dumps({

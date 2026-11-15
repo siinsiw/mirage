@@ -102,6 +102,8 @@ CONFIG_DIR = os.path.join(paths.DATA_DIR, 'windscribe')
 # says what it was *like* when the list was fetched. Nothing breaks if it is
 # missing; the rows simply say less.
 META_PATH = os.path.join(paths.STATE_DIR, 'windscribe-meta.json')
+# The order the published list gave its countries and cities in.
+ORDER_PATH = os.path.join(paths.STATE_DIR, 'windscribe-order.json')
 
 # What marks a config as Windscribe's, in the filename and nowhere else. The
 # app decides two things from it - which credential to use, and whether a
@@ -760,6 +762,10 @@ def write_configs(dest=None, free_only=False, per_city=None):
     dest = dest or CONFIG_DIR
     os.makedirs(dest, exist_ok=True)
     fleet = servers()
+    # The order is the whole list's, taken before anything is filtered out:
+    # a free-only fetch is ten countries, and the rest of the list would
+    # otherwise fall to the end in A-Z until the next full one.
+    whole = fleet
     if free_only:
         fleet = [s for s in fleet if not s['premium']]
 
@@ -797,6 +803,25 @@ def write_configs(dest=None, free_only=False, per_city=None):
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(note, f)
         os.replace(tmp, META_PATH)
+    except OSError:
+        pass
+
+    # The order the list came in, which is the order Windscribe's own client
+    # shows - countries, and the cities inside each. Kept apart from the
+    # notes, which are filed by config and read row by row.
+    countries, cities = [], {}
+    for s in whole:
+        if s['country'] not in countries:
+            countries.append(s['country'])
+        names = cities.setdefault(s['country'], [])
+        if s['city'] not in names:
+            names.append(s['city'])
+    try:
+        os.makedirs(paths.STATE_DIR, exist_ok=True)
+        tmp = f'{ORDER_PATH}.{os.getpid()}'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'countries': countries, 'cities': cities}, f)
+        os.replace(tmp, ORDER_PATH)
     except OSError:
         pass
 
@@ -846,6 +871,25 @@ def meta():
         return got if isinstance(got, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def order():
+    """The last fetched list's order: {'countries': [cc...], 'cities':
+    {cc: [city name...]}}, or empty lists when it has never been fetched."""
+    try:
+        with open(ORDER_PATH, encoding='utf-8') as f:
+            got = json.load(f)
+    except (OSError, ValueError):
+        got = None
+    if not isinstance(got, dict):
+        return {'countries': [], 'cities': {}}
+    listed = got.get('countries')
+    countries = ([c for c in listed if isinstance(c, str)]
+                 if isinstance(listed, list) else [])
+    cities = got.get('cities') if isinstance(got.get('cities'), dict) else {}
+    return {'countries': countries,
+            'cities': {k: [n for n in v if isinstance(n, str)]
+                       for k, v in cities.items() if isinstance(v, list)}}
 
 
 def verify_tunnel(px, ip, host, user, password, timeout=15):

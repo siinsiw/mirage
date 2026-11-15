@@ -58,8 +58,9 @@ on:
     inputs:
       release:
         description: >-
-          Build the release variant and sign it. Needs RELAY_KEYSTORE_B64 and
-          RELAY_KEYSTORE_PASSWORD, and fails without them: a release signed
+          Build the release variant and sign it. Needs the RELAY_KEYSTORE_B64 and
+          RELAY_KEYSTORE_PASSWORD secrets (named before the app was called
+          Mirage; secret names cannot be changed from here), and fails without them: a release signed
           with a runner's throwaway debug key cannot be upgraded over, and
           cannot be told apart from somebody else's build.
         type: boolean
@@ -126,12 +127,15 @@ jobs:
             echo "::error::mobile/core/countries.go is not what app/countries.py makes - run python mobile/tools/gen-countries.py and commit the result"
             exit 1
           fi
+      # The same tags the .aar is built with (mobile/build-android.sh): the
+      # Configs section's tests make Reality and Hysteria2 outbounds, which
+      # sing-box only has with with_utls and with_quic.
       - name: vet
         working-directory: mobile/core
-        run: go vet ./...
+        run: go vet -tags with_gvisor,with_quic,with_utls ./...
       - name: test
         working-directory: mobile/core
-        run: go test ./...
+        run: go test -tags with_gvisor,with_quic,with_utls ./...
       # Again under the race detector: the core is goroutines around shared
       # state (the tunnel, the LAN share, the health checks), and a data race
       # passes an ordinary run. It needs cgo, which the runner has.
@@ -139,7 +143,7 @@ jobs:
         working-directory: mobile/core
         env:
           CGO_ENABLED: '1'
-        run: go test -race ./...
+        run: go test -race -tags with_gvisor,with_quic,with_utls ./...
       # Known vulnerabilities in what the core actually calls - the modules
       # in go.sum and the standard library of the Go above. It reports only
       # code that is reached, so a finding is a reason to stop.
@@ -147,7 +151,7 @@ jobs:
         working-directory: mobile/core
         run: |
           go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"
-          "$(go env GOPATH)/bin/govulncheck" ./...
+          "$(go env GOPATH)/bin/govulncheck" -tags with_gvisor,with_quic,with_utls ./...
 
   apk:
     runs-on: ubuntu-latest
@@ -209,7 +213,7 @@ jobs:
       # A release without the key fails here. It used to fall back to the
       # runner's debug key - a key made fresh on every runner, so each such
       # release could not be installed over the last, and nothing marked it
-      # as not ours. RELAY_REQUIRE_SIGNING makes Gradle refuse the same way,
+      # as not ours. MIRAGE_REQUIRE_SIGNING makes Gradle refuse the same way,
       # should the key be set and still not be usable.
       #
       # Nothing goes into GITHUB_ENV here. The password used to, which handed
@@ -225,7 +229,7 @@ jobs:
             echo "::error::no signing key configured (RELAY_KEYSTORE_B64 and RELAY_KEYSTORE_PASSWORD) - a release is not built without it"
             exit 1
           fi
-          ( umask 077; printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/relay-release.p12" )
+          ( umask 077; printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/mirage-release.p12" )
 
       # The unit tests run on both paths: a release is the build that most
       # needs them, and it used to be the one that skipped them. They are the
@@ -240,10 +244,11 @@ jobs:
         if: inputs.release
         working-directory: android
         env:
-          RELAY_KEYSTORE: ${{ runner.temp }}/relay-release.p12
-          RELAY_KEYSTORE_PASSWORD: ${{ secrets.RELAY_KEYSTORE_PASSWORD }}
-          RELAY_KEY_ALIAS: relay
-          RELAY_REQUIRE_SIGNING: 'true'
+          MIRAGE_KEYSTORE: ${{ runner.temp }}/mirage-release.p12
+          MIRAGE_KEYSTORE_PASSWORD: ${{ secrets.RELAY_KEYSTORE_PASSWORD }}
+          # The alias inside the existing keystore, made before the rename.
+          MIRAGE_KEY_ALIAS: relay
+          MIRAGE_REQUIRE_SIGNING: 'true'
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease
 
       - name: build the debug APK
@@ -255,21 +260,23 @@ jobs:
       # while the artifact is uploaded.
       - name: remove the signing key
         if: always() && inputs.release
-        run: rm -f "$RUNNER_TEMP/relay-release.p12"
+        run: rm -f "$RUNNER_TEMP/mirage-release.p12"
 
       # One name for both, because what changes between them is the build
-      # type rather than what the thing is.
+      # type rather than what the thing is. Several APKs either way: one per
+      # architecture and a universal one (android/app/build.gradle.kts).
       - name: name it
         id: apk
         run: |
           if [ "${{ inputs.release }}" = "true" ]; then
-            echo "path=android/app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_OUTPUT"
+            echo "path=android/app/build/outputs/apk/release/*.apk" >> "$GITHUB_OUTPUT"
           else
-            echo "path=android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "path=android/app/build/outputs/apk/debug/*.apk" >> "$GITHUB_OUTPUT"
           fi
+          ls -l android/app/build/outputs/apk/*/*.apk
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: relay-apk
+          name: mirage-apk
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error

@@ -158,7 +158,7 @@ def main():
         sys.exit(f'no index.html in {UI}')
     port = int(args[0]) if args else 8766
     server = http.server.ThreadingHTTPServer(('127.0.0.1', port), Desk)
-    print(f'Relay review desk on http://127.0.0.1:{port}/ showing {UI}', flush=True)
+    print(f'Mirage review desk on http://127.0.0.1:{port}/ showing {UI}', flush=True)
     server.serve_forever()
 
 

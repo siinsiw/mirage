@@ -1,4 +1,4 @@
-// Package core is the half of Relay that has to exist on a phone.
+// Package core is the half of Mirage that has to exist on a phone.
 //
 // Everything here is a port of the Python this repo already argued over, so
 // where the two disagree the Python is the one that was measured and this one

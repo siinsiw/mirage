@@ -758,7 +758,7 @@ class LocalExit(Exit):
 
     The tunnel modes put a local proxy in front - gost, holding a multiplexed
     WebSocket to the user's own server - and everything above this line is
-    left alone: the same CONNECT, the same relay(), the same meter, the same
+    left alone: the same CONNECT, the same pump(), the same meter, the same
     host list. What goes away is only what was there because the exit was
     reached across the open internet. There is no TLS to wrap, because this
     hop is a loopback socket; no certificate to check, for the same reason;
@@ -1204,7 +1204,7 @@ METER = {'up': 0, 'down': 0}
 
 # A lock on a hot path is worth a word. It is taken once per 64KB chunk -
 # a few hundred times a second on a fast line - and += on a dict value is
-# a read and a write with a bytecode boundary in between, so two relay
+# a read and a write with a bytecode boundary in between, so two pump
 # threads finishing at once really can lose a chunk. A meter that quietly
 # undercounts is worse than one that costs a lock.
 METER_LOCK = threading.Lock()
@@ -1479,7 +1479,7 @@ def straight_to(host, port):
     """A connection on this machine's own line, for what goes around."""
     # A phone sharing this proxy is not at this keyboard. Going around the
     # exit for it must not mean reaching the services this machine keeps on
-    # 127.0.0.1 - a database, a dev server, Relay's own window - that were
+    # 127.0.0.1 - a database, a dev server, Mirage's own window - that were
     # only ever meant for whoever is sitting at it.
     # Link-local and this PC's own LAN addresses count as well (see "who may
     # use it"): a service listening on the Wi-Fi address is this machine's
@@ -1640,7 +1640,7 @@ def opened_by(source_port):
     return _process_name(pid), pid
 
 
-def relay(a, b, note=None):
+def pump(a, b, note=None):
     """Bytes both ways until either end is done. Past the proxy's 200 this
     connection is opaque - the browser's own TLS to the site it asked for
     runs inside it, and neither we nor the exit can read that."""
@@ -1689,11 +1689,11 @@ HEAD_END = b'\r\n\r\n'
 MAX_HEAD = 65536
 
 # How long a kept-alive connection may sit with nothing on it before both ends
-# are let go. The same 300 seconds relay() waits with, and it has to be set by
+# are let go. The same 300 seconds pump() waits with, and it has to be set by
 # hand on both sockets here: the one to the exit comes back from
 # create_connection with a 20-second timeout, which is the right budget for
 # reaching a server and much too short a leash for a connection that has been
-# opened and is waiting for something to happen on it. relay() never noticed
+# opened and is waiting for something to happen on it. pump() never noticed
 # because select() does not consult the socket timeout; reading straight from
 # the socket does, and a client long-polling - which is exactly what a chat
 # client does between messages - would have been cut off every 20 seconds.
@@ -1897,7 +1897,7 @@ def carry_http(client, upstream, exit_, head, rest, note, quiet, verb):
     did not corrupt anything loudly; it hung. Measured against one exit, on a
     connection dialled fresh, 8 of 12 plain-HTTP requests stalled until the
     client gave up, while HTTPS through the same proxy at the same moment was
-    12 for 12 - because CONNECT is carried by relay(), which has always been
+    12 for 12 - because CONNECT is carried by pump(), which has always been
     one thread and a select().
 
     Worst on a cold connection, which is the tell: a fresh TLS 1.3 session
@@ -1906,7 +1906,7 @@ def carry_http(client, upstream, exit_, head, rest, note, quiet, verb):
     Once a pooled connection has been idle a while there is nothing left
     in flight and the collision mostly stops happening.
 
-    So: same select() shape as relay(), with the per-request framing and
+    So: same select() shape as pump(), with the per-request framing and
     credentials folded into the client-to-exit side.
 
     Returns (served, asked_again): whether any of the exit's answer reached
@@ -2141,7 +2141,7 @@ def serve_socks(client, exit_, quiet, note):
             return
         note.straight()
         client.sendall(b'\x05\x00\x00\x01' + b'\x00' * 6)
-        relay(client, upstream, note)
+        pump(client, upstream, note)
         return
 
     try:
@@ -2169,7 +2169,7 @@ def serve_socks(client, exit_, quiet, note):
     if spare:
         # Anything the exit pipelined behind its 200 is tunnel content.
         client.sendall(spare)
-    relay(client, upstream, note)
+    pump(client, upstream, note)
 
 
 def serve_http(client, exit_, quiet, first, note):
@@ -2216,7 +2216,7 @@ def serve_http(client, exit_, quiet, first, note):
                            b'HTTP/1.1 200 Connection established\r\n\r\n',
                            rest)
             return
-        # The exit's answer is read here rather than relayed blind, because
+        # The exit's answer is read here rather than passed on blind, because
         # anything the client pipelined behind its CONNECT belongs inside the
         # tunnel and not to the proxy. Sent before the 200 arrives, a refusal
         # would leave those bytes in front of the exit's parser to be read as
@@ -2255,7 +2255,7 @@ def serve_http(client, exit_, quiet, first, note):
                 print(f'  CONNECT  {e}', file=sys.stderr, flush=True)
             shut(client, upstream)
             return
-        relay(client, upstream, note)
+        pump(client, upstream, note)
         return
 
     host, port = split_target(head_host(head), 80)
@@ -2362,7 +2362,7 @@ def serve_straight(client, note, host, port, quiet, what, said, rest,
         log('FAIL', f'{what} (straight): {e}')
         shut(client, upstream)
         return
-    relay(client, upstream, note)
+    pump(client, upstream, note)
 
 
 class Pushback:
@@ -3304,7 +3304,7 @@ LOOPBACK_NET = ipaddress.ip_network('127.0.0.0/8')
 # table and copied into logs, and an environment block is none of those.
 LAN_PASSWORD_ENV = 'OVPN_LAN_PASSWORD'
 LAN_PASSWORD = None
-LAN_REALM = 'Relay'
+LAN_REALM = 'Mirage'
 
 # How long a reading of this machine's adapters is trusted. A laptop moves
 # between networks; a phone on the new one should not be refused for long.
@@ -3915,7 +3915,7 @@ def edge_probe(domain, ip, timeout=3.0):
             sock.sendall(
                 f'GET /api/config HTTP/1.1\r\n'
                 f'Host: {domain}\r\n'
-                f'User-Agent: Relay (ovpn-pin)\r\n'
+                f'User-Agent: Mirage (ovpn-pin)\r\n'
                 f'Connection: close\r\n\r\n'.encode())
             said = sock.recv(4096).decode('latin-1', 'replace')
     except (OSError, ssl.SSLError, ValueError):
@@ -4226,6 +4226,8 @@ def tunnel_config_text(domain, password, edges=None, ca_file=None, ss=None,
                 f'            addr: {_yaml_str(f"{addr}:{int(port)}")}\n'
                 f'            connector:\n'
                 f'              type: http\n'
+                # "relay" is the user name every server's gost and API
+                # expect (tunnel/install-server.sh): protocol, not brand.
                 f'              auth: {{username: relay, '
                 f'password: {_yaml_str(password)}}}\n'
                 f'            dialer:\n'
@@ -4622,6 +4624,7 @@ def tunnel_api(saved, path, payload=None, method='GET', soft=False):
     url = f'https://{saved["domain"]}/api/{path}'
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method)
+    # "relay": the API's user name on every server, protocol rather than brand.
     token = base64.b64encode(f'relay:{saved["apiPassword"]}'.encode()).decode()
     req.add_header('Authorization', f'Basic {token}')
     req.add_header('User-Agent', 'ovpn-pin')

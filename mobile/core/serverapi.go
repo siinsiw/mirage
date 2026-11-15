@@ -253,8 +253,8 @@ func ServerAPI(host string, port int, apiPassword, pin, method, path string, bod
 	if err != nil {
 		return nil, err
 	}
-	req.SetBasicAuth("relay", apiPassword)
-	req.Header.Set("User-Agent", "Relay (ovpn-pin phone)")
+	req.SetBasicAuth(ServerUser, apiPassword)
+	req.Header.Set("User-Agent", "Mirage (ovpn-pin phone)")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

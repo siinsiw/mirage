@@ -1,4 +1,4 @@
-// Relay for Android: a native Compose app over the Go core in mobile/core.
+// Mirage for Android: a native Compose app over the Go core in mobile/core.
 //
 // Its own project rather than a module of mobile/app, which is the Flutter
 // shell this replaces. Nothing here loads a page: every screen is Compose and
@@ -20,5 +20,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "relay-android"
+rootProject.name = "mirage-android"
 include(":app")

@@ -66,7 +66,7 @@ const state = {
   providers: null,      // which providers the exit list is drawn from
   testing: null,        // which row is being tested, if any
   favourites: [],       // picker codes kept at the top of the list
-  sortBy: 'ping',       // ping | name | load
+  sortBy: 'windscribe', // windscribe | ping | name | load
   openCities: new Set(),  // countries showing their cities
   openExits: null,      // which row has its individual exits showing
   exits: {},            // and those exits, once fetched, by that row's code
@@ -217,7 +217,9 @@ function setStatus(word, kind, where, host) {
   s.dataset.state = kind;
   // As text: these carry an exit's name and place, and this page holds
   // the whole Python bridge - markup taken from a hostname would be script
-  // with every pywebview.api call in reach. A no-break space keeps the
+  // with every pywebview.api call in reach. Configs' home hears it too.
+  setTimeout(() => { if (window.cfgSync) window.cfgSync(); }, 0);
+  // A no-break space keeps the
   // line's height when there is nothing to say.
   $('statusWhere').textContent = where || ' ';
   $('statusHost').textContent = host || ' ';
@@ -268,6 +270,8 @@ function nameOf(code) {
 let shownConn = null;
 
 function render() {
+  // Configs' own home reads the same state, so it is repainted with this.
+  if (window.cfgSync) window.cfgSync();
   const act = $('act');
   const visualState = state.mode === 'fail' ? 'fail' : state.mode;
   document.documentElement.dataset.conn = visualState;
@@ -394,9 +398,9 @@ function stateMoment() {
 
 function openPicker() {
   const began = performance.now();
-  state.freeze = null;
   $('list').dataset.key = '';
-  maybeQuick();
+  // Nothing is tested on the way in: a test runs only on the row somebody
+  // presses the bolt on.
   $('search').value = '';
   $('searchMain').classList.remove('is-typed');
   $('pickAny').hidden = !state.picked || state.picked === 'auto';
@@ -467,18 +471,14 @@ function drawList(query) {
   total.append(tally, ' locations');
   list.append(total);
 
-  let found = sortCountries(
+  const found = sortCountries(
     q ? state.fuse.search(q).map((r) => r.item) : state.countries);
-  // The order a quick run found the list in, held while its results land:
-  // rows that move out from under the pointer are worse than numbers that
-  // are briefly out of order. Fastest first puts them in place.
-  if (!q && state.freeze) {
-    const at = new Map(state.freeze.order.map((code, i) => [code, i]));
-    const pos = (c) => (at.has(c.code) ? at.get(c.code) : 1e9);
-    found = found.slice().sort((a, b) => pos(a) - pos(b));
-  }
   if (!found.length) {
     tally.textContent = '0';
+    if (!q) {
+      list.append(setupAgainNote('No servers here yet. A setup may not have finished.'));
+      return;
+    }
     const e = document.createElement('p');
     e.className = 'empty';
     e.textContent = `No country matches “${q}”.`;
@@ -486,12 +486,12 @@ function drawList(query) {
     return;
   }
 
-  /* The sections, by what is useful rather than by geography - the question
-     here is "where do I connect", and the answer is rarely "which continent":
+  /* The sections:
        Starred        your own short list, first
-       Fastest now    the few quickest measured round trips (when two or more were timed)
-       All locations  everything else, in the order the sort chose
+       All locations  everything else, in Windscribe's order unless another sort was chosen
        Not answering  the places whose every exit turned the test away, at the foot
+     Nothing is ranked by speed unless the reader asks for it: a test runs only
+     on the row somebody presses, so there is no "fastest now" to show.
      A search is one list of results. Every section is open; an empty one is
      not drawn. */
   const groups = [];
@@ -502,22 +502,25 @@ function drawList(query) {
     const starred = found.filter(starredIn);
     if (starred.length) groups.push(['Starred', starred, 'Your short list']);
     const others = found.filter((c) => !starredIn(c));
-    const live = others.filter((c) => !deadHere(c));
-    const quick = live.filter((c) => c.tested && c.ok && c.ping !== null && c.ping !== undefined)
-      .sort((a, b) => a.ping - b.ping);
-    const fastest = quick.length >= 2 ? quick.slice(0, 4) : [];
-    if (fastest.length) groups.push(['Fastest now', fastest, 'The quickest round trips from here, just measured']);
-    const rest = live.filter((c) => !fastest.includes(c));
-    const said = ({ ping: 'Quickest first', load: 'Least busy first', name: 'A to Z' })[state.sortBy || 'ping'] || '';
-    if (rest.length) groups.push([fastest.length || starred.length ? 'All locations' : 'Locations', rest, said]);
+    const rest = others.filter((c) => !deadHere(c));
+    const said = ({
+      windscribe: 'In Windscribe’s order', ping: 'Quickest first',
+      load: 'Least busy first', name: 'A to Z',
+    })[state.sortBy || 'windscribe'] || '';
+    if (rest.length) groups.push([starred.length ? 'All locations' : 'Locations', rest, said]);
     const dead = others.filter(deadHere).sort((a, b) => a.name.localeCompare(b.name));
     if (dead.length) groups.push(['Not answering', dead, 'Their exits turned the last test away']);
+    // Nothing left that answers: the list itself offers the way out.
+    if (!starred.length && !rest.length && dead.length) {
+      list.append(setupAgainNote('None of these answered the last test. '
+        + 'Setting the servers up again fetches fresh ones.'));
+    }
   }
 
   // Fastest first is only honest about the countries that were timed; within
   // a group the rest go below their own heading, in alphabetical order.
-  const byPing = !q && (state.sortBy || 'ping') === 'ping';
-  const timed = (c) => (state.freeze ? state.freeze.tested.has(c.code) : !!c.tested);
+  const byPing = !q && state.sortBy === 'ping';
+  const timed = (c) => !!c.tested;
 
   const jobs = [];
   for (const [name, items, note] of groups) {
@@ -550,8 +553,8 @@ function drawList(query) {
 
     let ordered = items;
     let untimedAt = -1;
-    // Fastest now is already in order of its times; Not answering has none.
-    if (byPing && name !== 'Fastest now' && name !== 'Not answering') {
+    // Not answering has no times to order by.
+    if (byPing && name !== 'Not answering') {
       const yes = items.filter(timed);
       const no = items.filter((c) => !timed(c))
         .sort((a, b) => a.name.localeCompare(b.name));
@@ -659,9 +662,9 @@ function buildCountry(c) {
   const cities = c.cityList || [];
   const places = cities.length > 1 ? `${cities.length} cities`
     : (cities[0] && cities[0].name) || '';
-  // "11 relays" breaks before the number, never inside it, when the line has
+  // "11 servers" breaks before the number, never inside it, when the line has
   // to wrap.
-  const line = [places, `${c.count} relay${c.count === 1 ? '' : 's'}`]
+  const line = [places, `${c.count} server${c.count === 1 ? '' : 's'}`]
     .filter(Boolean).map((s) => s.replace(/ /g, ' ')).join(' · ');
   const count = document.createElement('span');
   count.className = 'row__count';
@@ -884,7 +887,7 @@ window.onConnected = (status) => {
         ? 'Connected, but the independent check did not answer. If pages load, it is fine.'
         : (status.tun
             ? 'Every program on this PC now goes through this connection, including the ones that ignore the proxy setting.'
-            : (state.systemProxy
+            : ((status.configs ? !!status.systemProxy : state.systemProxy)
                 ? 'Everything on this PC now goes through this connection.'
                 : `Serving on 127.0.0.1:${state.port}. Windows was left alone, so point what you want at it.`)))),
   !!warn);
@@ -2423,7 +2426,7 @@ async function useTunnelKey() {
   const btn = $('tunnelKeyUse');
   const text = $('tunnelKey').value.trim();
   if (!text) {
-    said($('tunnelKeySaid'), 'Paste the relay:// line first.', 'bad');
+    said($('tunnelKeySaid'), 'Paste the mirage:// line first.', 'bad');
     return;
   }
   busy(btn, true);
@@ -2609,14 +2612,12 @@ function paintPrefs(info) {
   $('keepOnClose').setAttribute('aria-checked', String(!!info.keepOnClose));
   if (info.port) state.port = info.port;
   paintPort();
+  paintSetupCards(info);
   $('folderPath').textContent = info.folder || '—';
   $('folderCount').textContent =
     `${info.serverCount || 0} servers · ${state.countries.length} countries`;
   state.serverCount = info.serverCount || 0;
   state.tunnelReady = !!info.tunnelReady;
-  if (info.quickAt !== undefined) state.quickAt = info.quickAt || 0;
-  if (info.autoQuick !== undefined) state.autoQuick = info.autoQuick !== false;
-  paintQuick();
   $('aboutPaths').textContent = info.about || '';
 
   // Whether anything can connect at all. What is signed in as what is the
@@ -3516,6 +3517,7 @@ async function bootSteps() {
   // had no starred places to put there.
   state.favourites = info.favourites || state.favourites;
   state.sortBy = info.sortBy || state.sortBy;
+  if (info.providerState) state.providerState = info.providerState;
   state.fuse = new Fuse(state.countries, {
     keys: ['name', 'code', 'alias'], threshold: 0.4, ignoreLocation: true,
   });
@@ -3577,6 +3579,16 @@ async function bootSteps() {
   // is the DOM work that is being moved, and the flags are being fetched
   // alongside it by the line above.
   drawList('');
+  // Back in Configs if that is where the window was left - unless a setup
+  // or another sheet is already in front.
+  if (info.section === 'configs' && window.cfgShell
+      && !document.querySelector('dialog[open]')) {
+    window.cfgShell.enter(true);
+  }
+  // Configs' own Connect on opening, when it is set and nothing is up.
+  if (window.cfgSection && s.state !== 'on' && !s.blocked && !lacking.length) {
+    window.cfgSection.autostart();
+  }
 }
 
 /* --------------------------------------------------------------- wiring */
@@ -5362,7 +5374,7 @@ const sharePane = (() => {
     const n = city ? city.count : c.count;
     const cities = (c.cityList || []).length;
     meta.textContent = (!city && cities > 1 ? `${cities} cities · ` : '')
-      + `${n || 0} relay${n === 1 ? '' : 's'}`;
+      + `${n || 0} server${n === 1 ? '' : 's'}`;
     b.append(flag, name, meta, icon('#i-check', 'ico runpop__check'));
     li.append(b);
 
@@ -7373,7 +7385,7 @@ function msSaid(ms) {
 
 /* What a row says about itself once it has been tested: nothing at all
    before, a time when it answered, and why not when it did not. Kept short -
-   this sits after the relay count on one line. */
+   this sits after the server count on one line. */
 /* "Blocked here" has to mean everything here was asked and nothing answered.
 
    Anything less is a guess wearing a fact's clothes: a country with three
@@ -7384,7 +7396,7 @@ function reachSaid(c) {
   if (!c || !c.tested) return '';
   // The ratio has moved to the sign, which is beside the name and coloured
   // by it. Saying it here as well cost the end of the line - "PL - 12
-  // relays - 139 ms - ..." with the number that mattered cut off - to
+  // servers - 139 ms - ..." with the number that mattered cut off - to
   // repeat what a green letter already said.
   if (!c.ok) return c.tested >= c.count ? ' · blocked' : '';
   return c.ping === null ? '' : ` · ${msSaid(c.ping)}`;
@@ -7431,58 +7443,6 @@ async function startReach(code) {
   said($('reachSaid'), `Asking ${r.total} in ${nameOf(code)}…`);
 }
 
-/* One exit per country, six at a time. By hand from Test all or Settings;
-   on its own when the list opens and the last run is over six hours old -
-   never with the tunnel up, where every time would be the tunnel's. */
-async function startQuick(auto) {
-  if (state.testing) {
-    if (state.testing === 'quick' && !auto) await window.pywebview.api.cancelReach();
-    return;
-  }
-  const r = await window.pywebview.api.quickTest();
-  if (!r.ok) {
-    if (!auto) {
-      said($('reachSaid'), r.error, 'bad');
-      said($('quickSaid'), r.error, 'bad');
-    }
-    return;
-  }
-  state.testing = 'quick';
-  paintTesting();
-  said($('reachSaid'), `Timing ${r.total} countries…`);
-}
-
-function maybeQuick() {
-  const stale = Date.now() / 1000 - (state.quickAt || 0) > 6 * 3600;
-  const up = state.mode === 'on' || state.mode === 'busy';
-  if (state.autoQuick !== false && stale && !state.testing && !up) startQuick(true);
-}
-
-/* Settings' Quick timing: when it last ran, whether it runs on its own. */
-function paintQuick() {
-  const pill = $('quickPill');
-  if (!pill) return;
-  const running = state.testing === 'quick';
-  const at = state.quickAt || 0;
-  const mins = at ? Math.floor((Date.now() / 1000 - at) / 60) : null;
-  pill.textContent = running ? 'timing'
-    : mins === null ? 'never'
-      : mins < 60 ? `${mins}m ago`
-        : mins < 1440 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 1440)}d ago`;
-  pill.dataset.state = running || (mins !== null && mins < 360) ? 'on' : 'off';
-  $('autoQuick').setAttribute('aria-checked', String(state.autoQuick !== false));
-  const run = $('quickRun');
-  run.textContent = running ? 'Stop' : 'Time every country';
-  run.disabled = !!state.testing && !running;
-}
-
-$('quickRun').addEventListener('click', () => startQuick(false));
-$('autoQuick').addEventListener('click', async () => {
-  state.autoQuick = state.autoQuick === false;
-  paintQuick();
-  await window.pywebview.api.setAutoQuick(state.autoQuick);
-});
-
 /* The bolt that is running, marked without rebuilding the list under the
    reader. Every other bolt goes quiet with it: a second press would only
    stop the first, and a row that looks pressable while it is not is worse
@@ -7492,11 +7452,11 @@ function paintTesting() {
     const busy = el.dataset.test === state.testing;
     el.dataset.busy = String(busy);
     el.dataset.idle = String(!!state.testing && !busy);
+    const one = el.dataset.test.startsWith('file:');
     el.setAttribute('aria-label', busy ? 'Stop testing this one'
-      : 'Test the servers here');
-    el.title = busy ? 'Stop' : 'Test these';
+      : one ? 'Test this server' : 'Test the servers here');
+    el.title = busy ? 'Stop' : one ? 'Test this one' : 'Test these';
   }
-  paintQuick();
 }
 
 /* Each result as it lands, written straight onto the row it belongs to.
@@ -7574,17 +7534,6 @@ window.onReach = (p) => {
 };
 
 window.onReachDone = (r) => {
-  const quick = r.code === 'quick';
-  // A quick run over an open list keeps the list where it is: the order
-  // and which rows count as timed are taken now, before the new answers.
-  if (quick && r.ok && $('picker').open && !$('search').value.trim()) {
-    state.freeze = {
-      order: rows().map((x) => x.dataset.code)
-        .filter((code) => code && code !== 'auto' && !/[/:]/.test(code)),
-      tested: new Set((state.countries || []).filter((c) => c.tested).map((c) => c.code)),
-    };
-  }
-  if (quick && r.quickAt) state.quickAt = r.quickAt;
   state.testing = null;
   paintTesting();
   $('reachBar').style.setProperty('--at', '0%');
@@ -7595,7 +7544,7 @@ window.onReachDone = (r) => {
   // Named, because a run is now about one place and the line under the list
   // is the only thing that says which. "30 of 37 answered" over a list of
   // ninety countries is a sentence about nothing in particular.
-  const where = r.code && !quick ? ` in ${nameOf(r.code)}` : '';
+  const where = r.code ? ` in ${nameOf(r.code)}` : '';
   // A run where the exits turned the account away is not a run about the
   // exits, and "0 of 37 answered" reads as thirty-seven broken servers. The
   // same account is at every one of those addresses, so the count is one
@@ -7629,12 +7578,8 @@ window.onReachDone = (r) => {
         : refused
           ? `${answered} of ${r.tested} answered${where}. `
             + `${refused} turned these credentials away.`
-          : quick
-            ? `${answered} of ${r.tested} countries answered.`
-              + (state.freeze ? ' New times are in — press Fastest first to put them in order.' : '')
-            : `${answered} of ${r.tested} answered${where}.`,
+          : `${answered} of ${r.tested} answered${where}.`,
     answered ? 'good' : 'bad');
-  if (quick) said($('quickSaid'), `${answered} of ${r.tested} countries answered.`);
   // The list is rebuilt rather than patched: every row's order can change,
   // because answering ones sort above blocked ones.
   $('list').dataset.key = '';
@@ -7782,7 +7727,9 @@ async function toggleExits(code, after) {
       said_.append(bubble);
     }
 
-    row.append(sign, name, meta, said_);
+    // Its own bolt: one server is the smallest thing worth asking about,
+    // and with no test-all left, the only way to time just this one.
+    row.append(sign, name, meta, said_, testMark(`file:${x.file}`));
     box.append(row);
   }
   after.insertAdjacentElement('afterend', box);
@@ -7827,9 +7774,10 @@ function testMark(code) {
   el.dataset.test = code;
   el.dataset.busy = String(busy);
   el.setAttribute('role', 'button');
+  const one = code.startsWith('file:');
   el.setAttribute('aria-label', busy ? 'Stop testing this one'
-    : 'Test the servers here');
-  el.title = busy ? 'Stop' : 'Test these';
+    : one ? 'Test this server' : 'Test the servers here');
+  el.title = busy ? 'Stop' : one ? 'Test this one' : 'Test these';
   el.append(icon('#i-bolt', 'ico rowtest__ico'));
   return el;
 }
@@ -7852,7 +7800,7 @@ function starFor(code) {
 
 /* The sign that says who backs a place, and how that provider is doing there.
 
-   It replaces a row per provider. The row said "Surfshark - 23 relays" and
+   It replaces a row per provider. The row said "Surfshark - 23 servers" and
    nothing else, because nothing about those twenty-three had been measured;
    the sign says the same thing in one letter and says it beside the name,
    where the eye already is. Its colour is that provider's own tally and not
@@ -7871,7 +7819,7 @@ function providerTag(key, count, tested, ok, ping) {
     : ok ? `${ok} of ${tested} answered`
       + (ping !== undefined && ping !== null ? `, best ${msSaid(ping)}` : '')
       : `none of ${tested} answered`;
-  t.title = `${name} · ${count} relay${count === 1 ? '' : 's'} · ${said_}`;
+  t.title = `${name} · ${count} server${count === 1 ? '' : 's'} · ${said_}`;
   return t;
 }
 
@@ -7909,10 +7857,15 @@ async function toggleFavourite(code) {
    exit is not a good answer to "sort by name" either - and starred places
    come above everything, which is the whole point of starring one. */
 function sortCountries(list) {
-  const kind = state.sortBy || 'ping';
-  const dead = (c) => (c.tested && !c.ok ? 1 : 0);
+  const kind = state.sortBy || 'windscribe';
+  // Every exit asked and refused, as "Not answering" counts it - not one
+  // failed test among fifty untried.
+  const dead = (c) => (c.tested && !c.ok && c.tested >= c.count ? 1 : 0);
   const fav = (c) => (starredIn(c) ? 0 : 1);
   const cmp = {
+    // Windscribe's own client's order, which the catalogue sends as `order`.
+    windscribe: (a, b) => (a.order ?? 1e6) - (b.order ?? 1e6)
+      || a.name.localeCompare(b.name),
     ping: (a, b) => (a.ping === null) - (b.ping === null)
       || (a.ping || 0) - (b.ping || 0) || a.name.localeCompare(b.name),
     name: (a, b) => a.name.localeCompare(b.name),
@@ -8029,7 +7982,7 @@ function buildCity(c, city, via) {
   const meta = document.createElement('span');
   meta.className = 'row__meta';
   const n = via ? (city.by || {})[via] || 0 : city.count;
-  const bits = [`${n} relay${n === 1 ? '' : 's'}`];
+  const bits = [`${n} server${n === 1 ? '' : 's'}`];
   // The load down here, the time on the right: the time is what picks a
   // city, so it is the number that stands out.
   if (city.load !== null && city.load !== undefined) bits.push(`${loadSaid(city.load)} load`);
@@ -8052,7 +8005,7 @@ function buildCity(c, city, via) {
   // go without anyone missing it.
   if (nick) name.append(' ', nick);
 
-  // The phone's second line: whose relays, 10G and P2P, then the count and
+  // The phone's second line: whose servers, 10G and P2P, then the count and
   // the load - so the name line keeps its room for the name and the time.
   const lead = [];
   for (const key of Object.keys(city.by || {}).filter((k) => city.by[k] > 0).sort()) {
@@ -8085,7 +8038,7 @@ function buildCity(c, city, via) {
 
 function paintSort() {
   for (const b of $('sortBy').querySelectorAll('.pair__opt')) {
-    b.setAttribute('aria-selected', String(b.dataset.sort === (state.sortBy || 'ping')));
+    b.setAttribute('aria-selected', String(b.dataset.sort === (state.sortBy || 'windscribe')));
   }
   slideSort();
 }
@@ -8134,9 +8087,6 @@ $('sortBy').addEventListener('click', async (e) => {
   const opt = e.target.closest('.pair__opt');
   if (!opt) return;
   state.sortBy = opt.dataset.sort;
-  // The list is laid out afresh, so the line asking for it is done with.
-  if (state.freeze) said($('reachSaid'), '');
-  state.freeze = null;
   paintSort();
   $('list').dataset.key = '';
   drawList($('search').value.trim());
@@ -8312,6 +8262,85 @@ function paintDropList() {
     row.append(where, ip, why);
     box.append(row);
   }
+}
+
+/* Settings › Servers › Your servers: one card per provider, with what it has,
+   when it was last set up, the last setup that did not finish, and the way to
+   do it again. */
+function paintSetupCards(info) {
+  const box = $('setupCards');
+  if (!box) return;
+  const per = (info && info.providerState) || state.providerState || {};
+  if (info && info.providerState) state.providerState = info.providerState;
+  box.replaceChildren();
+  for (const key of Object.keys(PROVIDER_NAMES)) {
+    const p = per[key] || {};
+    const li = document.createElement('li');
+    li.className = 'setupcard';
+    li.dataset.provider = key;
+    const head = document.createElement('p');
+    head.className = 'setupcard__head';
+    const nm = document.createElement('b');
+    nm.textContent = PROVIDER_NAMES[key];
+    head.append(providerMark(key, 'ico setupcard__mark'), nm);
+    const countries = p.countries || 0;
+    const line = document.createElement('p');
+    line.className = 'setupcard__line';
+    line.textContent = !p.account ? 'Not signed in'
+      : !p.servers ? 'No servers yet'
+        : `${p.servers} servers · ${countries} countries`
+          + (p.setupAt ? ` · set up ${whenAgo(p.setupAt)}` : '');
+    li.append(head, line);
+    if (p.setupFail) {
+      const bad = document.createElement('p');
+      bad.className = 'setupcard__fail';
+      bad.textContent = `Last try, ${whenAgo(p.setupFail.at)}: ${p.setupFail.why}`;
+      li.append(bad);
+    }
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'btn btn--quiet btn--auto setupcard__go';
+    // Not under a live connection: the lookups and the reachability checks
+    // would go out through the tunnel and judge every address from its exit.
+    const up = state.mode === 'on' || state.mode === 'busy';
+    go.textContent = !p.account ? 'Sign in first' : up ? 'Disconnect first' : 'Set up again';
+    go.disabled = !p.account || up;
+    go.addEventListener('click', () => { setup.queue = []; prepareServers(key); });
+    li.append(go);
+    box.append(li);
+  }
+}
+
+/* The same, from the list itself, for when it has nothing worth picking:
+   no servers at all, or every one of them refused the last test. */
+function setupAgainNote(text) {
+  const signed = Object.entries(state.providerState || {})
+    .filter(([, p]) => p && p.account).map(([k]) => k);
+  const p = document.createElement('div');
+  p.className = 'empty empty--setup';
+  const t = document.createElement('p');
+  t.textContent = text;
+  p.append(t);
+  if (signed.length) {
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'btn btn--quiet btn--auto';
+    const up = state.mode === 'on' || state.mode === 'busy';
+    go.textContent = up ? 'Disconnect first, then set the servers up again'
+      : signed.length > 1 ? 'Set up all servers again' : 'Set up servers again';
+    go.disabled = up;
+    go.addEventListener('click', () => {
+      shut($('picker'));
+      // One after the other, in the one sheet: they share the pinning run,
+      // and the next starts only when the one before has finished (see the
+      // end of prepareServers). A failure stops there, and its Try again
+      // carries on with the rest.
+      setup.queue = signed.slice(1);
+      prepareServers(signed[0]);
+    });
+    p.append(go);
+  }
+  return p;
 }
 
 /* How long ago, in the words a person would use. Not a timestamp: the point
@@ -8821,7 +8850,7 @@ $('welcomeServer').addEventListener('click', () => {
 /* The setup: an account's servers fetched and then pinned, with each step
    shown as it happens. What the Android app does on its own after a sign-in
    - and what this app used to leave to two buttons in Settings. */
-const setup = { provider: null, finish: null, lastPin: 0, watch: null };
+const setup = { provider: null, finish: null, lastPin: 0, watch: null, queue: [], closing: null };
 
 // How long a pinning run may go without a single word before the sheet stops
 // waiting. One hostname is at most a 20 s lookup plus a reachability check
@@ -8923,7 +8952,8 @@ function setupFail(why) {
   // nothing to say which step it was.
   try {
     const logged = window.pywebview.api.logSetup(setup.provider, why || '');
-    if (logged && logged.catch) logged.catch(() => {});
+    // And Settings' card says so straight away, not on the next open.
+    if (logged && logged.then) logged.then(() => refreshPrefs(), () => {});
   } catch (e) { /* the log is not worth a second failure */ }
 }
 
@@ -8949,6 +8979,8 @@ function pinFinished() {
 
 async function prepareServers(provider) {
   const dlg = $('setupDlg');
+  // A sheet about to close from the run before must stay for this one.
+  if (setup.closing) { clearTimeout(setup.closing); setup.closing = null; }
   const name = provider === 'windscribe' ? 'Windscribe' : 'Surfshark';
   setup.provider = provider;
   $('setupTitle').textContent = 'Getting your servers ready';
@@ -9010,6 +9042,9 @@ async function prepareServers(provider) {
   }
   if (p.error) { setupFail(p.error); return false; }
   if (!p.written) { setupFail('No server answered. Try again in a moment.'); return false; }
+  // Stamped on the Python side when the pin run finished; this repaints the
+  // Servers screen with it.
+  try { await refreshPrefs(); } catch (e) { /* only a repaint */ }
   setupAt('pinning', 'done');
   $('setupTitle').textContent = 'Ready';
   $('setupSay').textContent = 'Mirage connects through whichever server answers first.';
@@ -9022,7 +9057,12 @@ async function prepareServers(provider) {
     setHint(`${state.countries.length} countries ready.`);
   }
   render();
-  setTimeout(() => shut(dlg), 1200);
+  const next = (setup.queue || []).shift();
+  if (next) {
+    setup.closing = setTimeout(() => { setup.closing = null; prepareServers(next); }, 1200);
+  } else {
+    setup.closing = setTimeout(() => { setup.closing = null; shut(dlg); }, 1200);
+  }
   return true;
 }
 

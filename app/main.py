@@ -73,7 +73,7 @@ if '--ui-drive' in sys.argv:
 if paths.FROZEN and '--ui-drive' not in sys.argv:
     paths.prepare_data()
 
-APP_ID = 'ovpnpin.relay'
+APP_ID = 'ovpnpin.mirage'
 APP_NAME = 'Mirage'
 
 
@@ -136,6 +136,35 @@ def _log_line(name, text, cap=64_000):
                 f.write(tail[tail.find('\n') + 1:])
     except OSError:
         pass
+
+
+def _last_setup_failures():
+    """The last setup that did not finish, per provider, out of setup.log:
+    {provider: {'at': epoch, 'why': text}}. A provider whose last line is a
+    finish has none. Never raises."""
+    out = {}
+    try:
+        with open(os.path.join(paths.STATE_DIR, 'setup.log'),
+                  encoding='utf-8', errors='replace') as f:
+            lines = f.read().splitlines()[-200:]
+    except OSError:
+        return out
+    for line in lines:
+        stamp, _, rest = line[:19], line[19:20], line[20:]
+        provider, sep, why = rest.partition(': ')
+        if not sep or provider not in ('surfshark', 'windscribe'):
+            continue
+        try:
+            at = int(time.mktime(time.strptime(stamp, '%Y-%m-%d %H:%M:%S')))
+        except ValueError:
+            continue
+        if why.strip() == 'finished':
+            out.pop(provider, None)
+        else:
+            # Without the bracketed route note the log keeps for whoever
+            # reads the file: the screen wants the sentence.
+            out[provider] = {'at': at, 'why': why.split(' [route=')[0][:300]}
+    return out
 
 
 def _diagnostics_to_file(name):
@@ -457,6 +486,7 @@ import uishot                                                # noqa: E402
 import vdesk                                                 # noqa: E402
 import surfshark                                             # noqa: E402
 import windscribe                                            # noqa: E402
+from configs import api as configs_api                       # noqa: E402
 from engine import Engine                                    # noqa: E402
 
 
@@ -517,6 +547,13 @@ class Api:
         self._tray = None
         self._busy = False
         self._settings = self._settings_early
+        # Once: the list now opens in Windscribe's order. A sort saved
+        # before that order existed was a default nobody chose, so it moves
+        # with it; one chosen afterwards stays.
+        if not self._settings.get('sortWs'):
+            self._settings['sortWs'] = True
+            self._settings['sortBy'] = 'windscribe'
+            save_settings(self._settings)
         self._since = None
         self._real_ip = None
         self._stop = threading.Event()
@@ -541,6 +578,21 @@ class Api:
         # and without this the close would be answered with "put it in the
         # tray" and refused - an app that could not be quit at all.
         self._leaving = False
+        # The Configs section (configs/): its own engine, the same machine.
+        # Only one of the two is ever up; see configs(), connect, disconnect.
+        self._configs = configs_api.Section(self)
+
+    def configs(self, action, payload=None):
+        """Everything the Configs section asks, in one door (configs/api.py)."""
+        return self._configs.call(action, payload)
+
+    def _live(self):
+        """Whichever side is carrying: the Configs section's runner while it
+        is up, otherwise the provider engine. Both answer traffic() and
+        hosts() in the same shapes."""
+        if self._configs.runner.active():
+            return self._configs.runner
+        return self._engine
 
     # -- talking to the page ----------------------------------------------
 
@@ -586,16 +638,55 @@ class Api:
         which is a chooser nobody can act on.
         """
         counts = self._engine.counts_by_provider()
+        lands = self._engine.countries_by_provider()
         waiting = self._unpinned_by_provider()
         roster = accounts.listing()
+        done = self._settings.get('setupAt') or {}
+        failed = _last_setup_failures()
         out = {}
         for name in accounts.PROVIDERS:
             servers = counts.get(name, 0)
             signed = any(a['provider'] == name and a['signedIn'] for a in roster)
+            at = done.get(name) if isinstance(done, dict) else None
+            fail = failed.get(name)
             out[name] = {'servers': servers, 'account': signed,
+                         'countries': lands.get(name, 0),
                          'waiting': waiting.get(name, 0),
-                         'usable': bool(servers) and signed}
+                         'usable': bool(servers) and signed,
+                         # When its servers were last set up whole, and the
+                         # last setup that did not finish - only if it came
+                         # after, since a later success answers it.
+                         'setupAt': at,
+                         'setupFail': (fail if fail and (not at or fail['at'] > at)
+                                       else None)}
         return out
+
+    @staticmethod
+    def _provider_of_folder(folder):
+        """surfshark or windscribe when folder is that provider's own
+        download folder, else None."""
+        try:
+            here = os.path.normcase(os.path.abspath(folder or ''))
+            for name, mine in (('surfshark', surfshark.CONFIG_DIR),
+                               ('windscribe', windscribe.CONFIG_DIR)):
+                if here == os.path.normcase(os.path.abspath(mine)):
+                    return name
+        except (TypeError, ValueError):
+            pass
+        return None
+
+    def setupDone(self, provider=None):
+        """A setup that got to the end: fetched and pinned. Stamped so the
+        Servers screen can say when, and so an older failure stops showing."""
+        if provider not in accounts.PROVIDERS:
+            return {'ok': False}
+        done = self._settings.get('setupAt')
+        done = dict(done) if isinstance(done, dict) else {}
+        done[provider] = int(time.time())
+        self._settings['setupAt'] = done
+        save_settings(self._settings)
+        _log_line('setup.log', f'{provider}: finished')
+        return {'ok': True, 'at': done[provider]}
 
     @staticmethod
     def _unpinned_by_provider():
@@ -768,9 +859,8 @@ class Api:
                 'defaultPort': engine.DEFAULT_PORT,
                 'picked': self._settings.get('picked', 'auto'),
                 'favourites': self._settings.get('favourites') or [],
-                'sortBy': self._settings.get('sortBy', 'ping'),
-                'quickAt': self._settings.get('quickAt', 0),
-                'autoQuick': self._settings.get('autoQuick', True),
+                'sortBy': self._settings.get('sortBy', 'windscribe'),
+                'section': self._settings.get('section', 'main'),
                 'connected': bool(self._engine.running()),
                 'keepOnClose': bool(self._settings.get('keepOnClose')),
                 'window': self._window_options(),
@@ -801,8 +891,12 @@ class Api:
         # went) and the page has merely been loaded again: that is a choice
         # the person makes with Disconnect, not one a reload makes for them.
         # A fresh launch never has _holding set, so a crash is still undone.
+        configs_up = self._configs.runner.active()
+        if not configs_up:
+            # A previous run's sing-box or Xray, left by a crash.
+            self._configs.runner.tidy()
         if (self._sysproxy.stashed() and not self._engine.running()
-                and not self._holding
+                and not self._holding and not configs_up
                 and not px_live_elsewhere(self._engine.port)):
             recovered = self._sysproxy.restore()
         # The adapter's version of the same wreckage: its worker gone and the
@@ -830,7 +924,8 @@ class Api:
             # when the last one closed. Watched from now on like one this
             # window made.
             self._engine.expected_up = True
-        status = dict(self._engine.status())
+        status = dict(self._configs.runner.status() if configs_up
+                      else self._engine.status())
         if status.get('state') == 'on' and self._since:
             # So a window opened onto a connection already up counts from
             # when it came up, not from when the window did.
@@ -853,7 +948,7 @@ class Api:
         Only meaningful while disconnected: routed, this comes back with the
         exit's address and would claim it as yours.
         """
-        if self._engine.running():
+        if self._engine.running() or self._configs.runner.active():
             return
         try:
             info = self._engine.current_ip()
@@ -892,7 +987,7 @@ class Api:
         with an empty meter until the next tick.
         """
         try:
-            return self._engine.traffic() or {'live': False}
+            return self._live().traffic() or {'live': False}
         except Exception:
             return {'live': False}
 
@@ -906,7 +1001,7 @@ class Api:
         of JSON a second spent on nothing.
         """
         try:
-            return self._engine.hosts() or {'live': False, 'rows': []}
+            return self._live().hosts() or {'live': False, 'rows': []}
         except Exception:
             return {'live': False, 'rows': []}
 
@@ -926,7 +1021,7 @@ class Api:
         quiet = True
         while not self._stop.wait(1.0):
             try:
-                reading = self._engine.traffic()
+                reading = self._live().traffic()
             except Exception:
                 reading = None
             if reading:
@@ -953,6 +1048,10 @@ class Api:
         a connect in flight, a port move or a disconnect is not a drop.
         """
         while not self._stop.wait(2.0):
+            if self._configs.runner.expected_up:
+                if not self._busy:
+                    self._configs.watch_drop()
+                continue
             if self._busy or not self._engine.expected_up:
                 continue
             try:
@@ -1025,7 +1124,7 @@ class Api:
             self._emit('Dropped', {'status': self._engine.status()})
 
     def _release_firewall_after_crash(self):
-        """Relay opened again onto a firewall hold it did not make in this
+        """Mirage opened again onto a firewall hold it did not make in this
         run: the last window went while holding, and opening again is what
         the hold waits for. One UAC prompt; refused, it stays held and the
         page keeps saying so."""
@@ -1051,7 +1150,11 @@ class Api:
         except Exception:
             pass
         released = False
-        if not on and not self._engine.running() and (
+        # The firewall hold is one, but a hold a config connection raised is
+        # Configs' own kill switch's to let go of, not this one's.
+        r = self._configs.runner
+        configs_hold = bool(r.owns_hold and not self._engine.engaged())
+        if not on and not self._engine.running() and not configs_hold and (
                 self._engine.engaged()
                 or self._engine.tun.held_by_firewall()):
             try:
@@ -1060,6 +1163,8 @@ class Api:
             except Exception:
                 pass
             self._holding = False
+        # A config connection follows Configs' own kill switch, set in its
+        # own settings, not this one.
         update_settings(self._settings,
                         lambda st: st.__setitem__('killSwitch', on))
         return {'ok': True, 'killSwitch': on, 'released': released}
@@ -1087,6 +1192,7 @@ class Api:
                 self._engine.set_system_proxy = was
                 return {'ok': False, 'systemProxy': was,
                         'error': tun.explain(e) or str(e)[:200]}
+        # A config connection has its own (Configs > Settings > Connection).
         self._settings['systemProxy'] = on
         save_settings(self._settings)
         return {'ok': True, 'systemProxy': on}
@@ -1116,6 +1222,7 @@ class Api:
                     pass
                 return {'ok': False, 'routeWith': was,
                         'error': tun.explain(e) or str(e)[:200]}
+        # A config connection has its own (Configs > Settings > Connection).
         self._settings['routeWith'] = way
         save_settings(self._settings)
         return {'ok': True, 'routeWith': way}
@@ -2397,6 +2504,12 @@ class Api:
                 if isinstance(p, dict) and p.get('phase') == 'finished':
                     self._apply_sources()
                     self._sync_providers()
+                    # A run that pinned a provider's own folder is that
+                    # provider set up, whichever screen started it - the
+                    # setup sheet or Settings' Pin by hand.
+                    who = self._provider_of_folder(was)
+                    if who and p.get('written') and not p.get('error'):
+                        self.setupDone(who)
             except Exception as e:
                 _log_line('setup.log', f'refreshing the server list after '
                                        f'pinning failed: {e}')
@@ -2459,8 +2572,6 @@ class Api:
         or a single file.
         """
         code = code or ''
-        if code == 'quick':
-            return self._quick_pool()
         if code.startswith('file:'):
             name = code[5:]
             return [s for s in self._engine.servers() if s.file == name]
@@ -2480,42 +2591,6 @@ class Api:
             out.append(s)
         return out
 
-    def _quick_pool(self):
-        """One exit per country: enough to put a time on every row of the
-        list, at a fraction of the cost of asking every exit - a few hundred
-        handshakes in a burst is what this line starts dropping, and what a
-        provider may read as one address hammering its logins.
-
-        The one asked is the one most likely to stand for its country: the
-        last to answer, else one never tried, else the first.
-        """
-        found = self._engine.reach()
-        best = {}
-        for s in self._engine.servers():
-            rec = found.get(s.file)
-            rank = 1 if rec is None else (2 if rec.get('ok') else 0)
-            if s.country not in best or rank > best[s.country][0]:
-                best[s.country] = (rank, s)
-        return [s for _, s in best.values()]
-
-    def quickTest(self):
-        """Time one exit per country, gently: six at a time, a short wait.
-
-        Only with the tunnel down. Through it, every exit would be timed from
-        wherever the tunnel comes out, which says nothing about this line.
-        """
-        if self._engine.running():
-            return {'ok': False,
-                    'error': "Disconnect first: through the tunnel, the "
-                             "times would be the tunnel's."}
-        return self.testReach('quick')
-
-    def setAutoQuick(self, on=True):
-        """Whether opening the list times a stale one on its own."""
-        self._settings['autoQuick'] = bool(on)
-        save_settings(self._settings)
-        return {'ok': True, 'autoQuick': bool(on)}
-
     def testReach(self, code=None):
         """Ask the exits behind one row whether they take the credentials.
 
@@ -2534,25 +2609,21 @@ class Api:
         """
         if self._testing:
             return {'ok': False, 'error': 'busy'}
+        # One row, never the whole list: there is no test-all on this side,
+        # and an empty code would mean every exit there is.
+        if not code:
+            return {'ok': False, 'error': 'Pick a country, city or server to test.'}
 
         pool = self._pool_for(code)
         if not pool:
             return {'ok': False, 'error': 'Nothing to test.'}
         only = {s.file for s in pool}
-        quick = code == 'quick'
         self._testing = True
 
         def work():
             try:
-                # The whole list is the gentle run: fewer at once, shorter
-                # waits, so a minute of it does not read as an attack.
-                kw = {'width': 6, 'timeout': 3.5} if quick else {}
                 out = self._engine.test_reach(
-                    lambda p: self._emit('Reach', p), only=only, **kw)
-                if quick and not out.get('cancelled'):
-                    self._settings['quickAt'] = int(time.time())
-                    save_settings(self._settings)
-                    out['quickAt'] = self._settings['quickAt']
+                    lambda p: self._emit('Reach', p), only=only)
                 # Moved out of the way of `ok`, which every call in this
                 # class uses for "the call worked" and which was being set
                 # over the top of it here - so the count reached the page as
@@ -2734,11 +2805,21 @@ class Api:
         self._retray()
         return {'ok': True, 'codes': codes, 'on': on}
 
+    def setSection(self, section=None):
+        """Which of the two sections was open last - Mirage or Configs -
+        so the window opens on it next time."""
+        section = 'configs' if section == 'configs' else 'main'
+        if self._settings.get('section') != section:
+            self._settings['section'] = section
+            save_settings(self._settings)
+        return {'ok': True, 'section': section}
+
     def setSort(self, kind=None):
         """How the list is ordered. Answering-first stays underneath every
         one of them: a blocked exit is not a good answer to "sort by name"
         either."""
-        kind = kind if kind in ('ping', 'name', 'load') else 'ping'
+        kind = (kind if kind in ('windscribe', 'ping', 'name', 'load')
+                else 'windscribe')
         self._settings['sortBy'] = kind
         save_settings(self._settings)
         return {'ok': True, 'sortBy': kind}
@@ -3083,21 +3164,44 @@ class Api:
                                  f'{engine.px.SECRET_RULE}. Set a new one.'}
         q = engine.px.shell_quote
         return {'ok': True,
-                'command': " mkdir -p /opt/relay && echo '" + blob + "' | base64 -d "
-                           "> /opt/relay/install-server.sh && bash "
-                           f"/opt/relay/install-server.sh {q(host)} "
+                'command': " mkdir -p /opt/mirage && echo '" + blob + "' | base64 -d "
+                           "> /opt/mirage/install-server.sh && bash "
+                           f"/opt/mirage/install-server.sh {q(host)} "
                            f"--password {q(pw)} --api-password {q(api)}",
                 'status': "systemctl --no-pager --lines=0 status gost sing-box nginx"
                           " | grep -E '^. |Active:'; ss -lnt | grep -E "
                           "':443 |:838[89] |127.0.0.1:(1000[0-3]|18080) '",
+                # Takes the server's own names and, from a server set up
+                # before the app was called Mirage, the relay-* leftovers
+                # too. /etc/relay is a symlink to /etc/mirage on a server
+                # the installer has moved over, so both go. The accounts go
+                # only if they are the installer's (a system account with no
+                # home and no shell), never a person's account of that name.
                 'uninstall': "systemctl disable --now gost sing-box;"
                              " rm -f /etc/systemd/system/gost.service"
                              " /etc/systemd/system/sing-box.service"
                              " /usr/local/bin/gost /usr/local/bin/sing-box"
-                             f" {q(f'/etc/nginx/sites-enabled/relay-{host}.conf')}"
-                             f" {q(f'/etc/nginx/sites-available/relay-{host}.conf')};"
-                             " rm -rf /etc/gost /etc/sing-box /etc/relay /opt/relay;"
-                             " systemctl daemon-reload; systemctl reload nginx"}
+                             + ''.join(
+                                 f" {q(f'/etc/nginx/sites-{d}/{n}-{host}.conf')}"
+                                 for n in ('mirage', 'relay')
+                                 for d in ('enabled', 'available'))
+                             + ";"
+                             # The rate-limit zone and the renewal hook are
+                             # shared by every Mirage site on the box: they go
+                             # only when no site left still names the zone, or
+                             # nginx would refuse to load at its next restart.
+                             " for z in mirage relay; do"
+                             " grep -qs \"zone=${z}_api\" /etc/nginx/sites-enabled/*"
+                             " || rm -f \"/etc/nginx/conf.d/${z}-api-limit.conf\""
+                             " \"/etc/letsencrypt/renewal-hooks/deploy/${z}-nginx-reload.sh\";"
+                             " done;"
+                             " rm -rf /etc/gost /etc/sing-box /etc/mirage /opt/mirage"
+                             " /etc/relay /opt/relay;"
+                             " systemctl daemon-reload; systemctl reload nginx;"
+                             " for u in mirage relay; do"
+                             " getent passwd \"$u\" | grep -q ':/nonexistent:/usr/sbin/nologin$'"
+                             " && [ \"$(id -u \"$u\")\" -lt 1000 ] && userdel \"$u\";"
+                             " done; true"}
 
     def saveTunnel(self, domain=None, password=None, apiPassword=None):
         """Keep what was typed. Blank means unchanged, not cleared: the page
@@ -3306,11 +3410,28 @@ class Api:
             return {'ok': False, 'error': str(e)[:200]}
 
     def status(self):
+        if self._configs.runner.active():
+            return self._configs.runner.status()
         return self._engine.status()
 
     def connect(self, country):
         if self._busy:
             return {'ok': False, 'error': 'busy'}
+        # The Configs section's kill switch holding the line: Connect means
+        # bring that connection back, as it does for the provider side.
+        again = self._configs.take_reconnect()
+        if again:
+            return self._configs.call('connect', {'id': again[0],
+                                                  'auto': again[1]})
+        # One connection at a time: a config's goes before a provider's -
+        # held, with the kill switch on, so the machine stays pointed at it
+        # (or its adapter stays up) until the provider's takes over.
+        if self._configs.runner.active():
+            try:
+                self._configs.runner.disconnect(
+                    quiet=True, hold=self._configs.runner.holding())
+            except Exception:
+                pass
         self._busy = True
         self._retray('busy')
 
@@ -3407,7 +3528,10 @@ class Api:
                     pass
                 blocked = False
                 try:
-                    blocked = self._engine.blocked()
+                    # Or held on the Configs section's port, when this was a
+                    # move from a config that the kill switch kept pointed.
+                    blocked = (self._engine.blocked()
+                               or self._configs.runner.blocked())
                 except Exception:
                     pass
                 self._holding = blocked
@@ -3753,7 +3877,10 @@ class Api:
         self._since = None
         try:
             # Never held: Disconnect is the one way out of the kill switch,
-            # and it puts the machine back whatever state it was in.
+            # and it puts the machine back whatever state it was in -
+            # whichever section the connection came from.
+            self._configs.runner.disconnect(quiet=True)
+            self._configs._reconnect = None
             self._engine.disconnect()
         except Exception as e:
             return {'ok': False, 'error': str(e)}
@@ -3888,6 +4015,12 @@ def install_safety(api):
         #
         # Off by default, then. Somebody who wants the connection to outlive
         # the window can say so, and the setting is where they would look.
+        # The Configs section's sing-box and Xray are children of this
+        # process, not detached workers: they go with it, always.
+        try:
+            api._configs.runner.disconnect(quiet=True)
+        except Exception:
+            pass
         if not api._settings.get('keepOnClose'):
             try:
                 api._engine.disconnect(quiet=True)
@@ -4291,7 +4424,7 @@ def ui_check(window):
     def our_window():
         """This process's own top-level window, by process id.
 
-        The caption is not an identity: a built Relay open beside the one
+        The caption is not an identity: a built Mirage open beside the one
         being checked answers to the same name, and whichever Windows hands
         back first is the one that gets photographed.
         """
@@ -4321,7 +4454,7 @@ def ui_check(window):
         layout audit takes the same photographs rather than its own.
 
         The process id goes with it. Finding the window by caption alone is
-        what main fixed: a built Relay open beside the one being checked
+        what main fixed: a built Mirage open beside the one being checked
         answers to the same name, and whichever Windows hands back first is
         the one that gets photographed - every picture in one such run came
         back 237x39 and said 600x1110.
@@ -5110,7 +5243,7 @@ def ui_check(window):
         said['pickerBackOpen'] = window.evaluate_js(
             "document.getElementById('picker').open")
         window.evaluate_js(
-            "document.querySelector('#sortBy [data-sort=ping]').click()")
+            "document.querySelector('#sortBy [data-sort=windscribe]').click()")
 
         # -- which answered, and how fast -----------------------------
         #
@@ -5311,14 +5444,14 @@ def ui_check(window):
         said['sortCounts'] = window.evaluate_js("""
             (function () {
               const out = {};
-              for (const k of ['ping', 'load', 'name']) {
+              for (const k of ['windscribe', 'ping', 'load', 'name']) {
                 document.querySelector(`#sortBy [data-sort=${k}]`).click();
                 const rows = Array.from(
                   document.querySelectorAll('.row[data-code]'))
                   .map(r => r.dataset.code).filter(c => c !== 'auto');
                 out[k] = [rows.length, rows.slice(0, 3).join(',')];
               }
-              document.querySelector('#sortBy [data-sort=ping]').click();
+              document.querySelector('#sortBy [data-sort=windscribe]').click();
               return out;
             })()""")
         said['pickedShot'] = shot('picker-picked')
@@ -5341,7 +5474,7 @@ def main():
     # file: a second copy that got that far would already be fighting the
     # first. It has asked the first to come forward, and that is all it does.
     if not oneinstance.claim():
-        # The UI checks drive a copy of their own, so with Relay already open
+        # The UI checks drive a copy of their own, so with Mirage already open
         # they never ran - and exiting 0 here read as a pass. Say so instead.
         testing = [a for a in ('--ui-check', '--ui-layout', '--ui-drive', '--ui-perf')
                    if a in sys.argv]
@@ -5447,7 +5580,7 @@ def main():
             traceback.print_exc()
 
     # Minimise minimises - to the taskbar, where the button says what it
-    # does. Putting Relay away in the tray is the close button's question
+    # does. Putting Mirage away in the tray is the close button's question
     # (closeRequest), and a minimise that vanished into the tray as well
     # left no way to get the window off the screen and keep it on the
     # taskbar.

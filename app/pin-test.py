@@ -223,7 +223,7 @@ check('every directive form is removed', removed,
       ['script-security', 'up', 'route-up', 'down', 'up', 'plugin', 'up',
        'config', 'cd', 'log-append', 'management', 'setenv'])
 check('what is not a directive stays',
-      [l for l in clean.split('\r\n') if l and not l.startswith('# relay')],
+      [l for l in clean.split('\r\n') if l and not l.startswith('# mirage')],
       ['client', 'remote 1.2.3.4 443', '# up is only a word in a comment',
        '; so is down', 'upx is not a directive', 'proto tcp'])
 check('the note says what went and keeps the line endings',

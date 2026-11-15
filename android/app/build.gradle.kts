@@ -5,13 +5,13 @@ plugins {
 
 // The Go core, built by mobile/build-android.sh: pin, probe, race, DoH and the
 // tunnel, for every phone CPU. Not in the repo - any checkout rebuilds it.
-val relayAar = file("libs/relay.aar")
+val mirageAar = file("libs/mirage.aar")
 
 // The server installer the tunnel pane hands out as one pasteable line. It
 // lives in tunnel/ for the desktop; copied in here at build time rather than
 // committed twice.
 val serverInstaller = rootProject.file("../tunnel/install-server.sh")
-val generatedAssets = layout.buildDirectory.dir("generated/relay-assets")
+val generatedAssets = layout.buildDirectory.dir("generated/mirage-assets")
 
 val copyInstaller by tasks.registering(Copy::class) {
     from(serverInstaller)
@@ -19,16 +19,16 @@ val copyInstaller by tasks.registering(Copy::class) {
 }
 
 android {
-    namespace = "com.erelay.relay"
+    namespace = "app.mirage"
     compileSdk = 36
     // The same NDK mobile/build-android.sh builds the core with. The app
     // compiles no C of its own; AGP only insists that one be named.
     ndkVersion = "27.3.13750724"
 
     defaultConfig {
-        // The same id as the Flutter build, so this installs over it and
-        // keeps its accounts, configs and VPN consent.
-        applicationId = "com.erelay.relay"
+        // Mirage's own id since the rename, not the old app's: a new
+        // install beside the old app, with nothing carried over from it.
+        applicationId = "app.mirage"
         // 24: VpnService.Builder.setMetered wants it.
         minSdk = 24
         targetSdk = 36
@@ -41,16 +41,16 @@ android {
     // to be signed by the same key every time. Same variables as the Flutter
     // build; without them a local release build falls back to the debug key
     // - which is fine on a desk and never fine for a release
-    // anybody downloads. CI's release path sets RELAY_REQUIRE_SIGNING, and
+    // anybody downloads. CI's release path sets MIRAGE_REQUIRE_SIGNING, and
     // then a missing or unreadable key stops the build instead.
-    val keystore = System.getenv("RELAY_KEYSTORE")
-    val keystorePassword = System.getenv("RELAY_KEYSTORE_PASSWORD")
+    val keystore = System.getenv("MIRAGE_KEYSTORE")
+    val keystorePassword = System.getenv("MIRAGE_KEYSTORE_PASSWORD")
     val signed = !keystore.isNullOrEmpty() && !keystorePassword.isNullOrEmpty() &&
         file(keystore).exists()
-    if (System.getenv("RELAY_REQUIRE_SIGNING") == "true" && !signed) {
+    if (System.getenv("MIRAGE_REQUIRE_SIGNING") == "true" && !signed) {
         throw GradleException(
-            "RELAY_REQUIRE_SIGNING is set but there is no usable release key: set RELAY_KEYSTORE " +
-                "to an existing keystore and RELAY_KEYSTORE_PASSWORD to its password.")
+            "MIRAGE_REQUIRE_SIGNING is set but there is no usable release key: set MIRAGE_KEYSTORE " +
+                "to an existing keystore and MIRAGE_KEYSTORE_PASSWORD to its password.")
     }
 
     signingConfigs {
@@ -58,8 +58,10 @@ android {
             create("release") {
                 storeFile = file(keystore!!)
                 storePassword = keystorePassword
-                keyAlias = System.getenv("RELAY_KEY_ALIAS") ?: "relay"
-                keyPassword = System.getenv("RELAY_KEY_PASSWORD") ?: keystorePassword
+                // "relay" is the alias inside the existing release keystore,
+                // made before the app was called Mirage; it is the key's name.
+                keyAlias = System.getenv("MIRAGE_KEY_ALIAS") ?: "relay"
+                keyPassword = System.getenv("MIRAGE_KEY_PASSWORD") ?: keystorePassword
             }
         }
     }
@@ -98,6 +100,30 @@ android {
         compose = true
     }
 
+    // One APK per architecture, and a universal one beside them. The Go core
+    // is a native library per architecture - 20.9 MB on arm64 once the
+    // Configs section's sing-box is in it (measured 2026-11-14) - and the
+    // universal APK carries all four: over 100 MB to download over a
+    // filtered line, where most phones need only the arm64-v8a one.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            isUniversalApk = true
+        }
+    }
+
+    // Compressed inside the APK and unpacked when it installs: the core
+    // compresses to about 38 % of its size, and the download is what the
+    // line pays for. Stored uncompressed (the default) the APK is bigger by
+    // the difference on every download.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     sourceSets["main"].assets.directories.add(generatedAssets.get().asFile.path)
 }
 
@@ -110,9 +136,9 @@ kotlin {
 tasks.named("preBuild") {
     dependsOn(copyInstaller)
     doFirst {
-        if (!relayAar.exists()) {
+        if (!mirageAar.exists()) {
             throw GradleException(
-                "android/app/libs/relay.aar is missing. Build the Go core first:\n" +
+                "android/app/libs/mirage.aar is missing. Build the Go core first:\n" +
                     "    mobile/build-android.sh\n" +
                     "It writes the .aar there as well as into mobile/.")
         }
@@ -120,7 +146,7 @@ tasks.named("preBuild") {
 }
 
 dependencies {
-    implementation(files(relayAar))
+    implementation(files(mirageAar))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

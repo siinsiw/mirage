@@ -58,7 +58,7 @@ func LatestRelease(ctx context.Context, w Way, timeout time.Duration) (string, e
 		return "", err
 	}
 	// GitHub refuses a request with no User-Agent.
-	req.Header.Set("User-Agent", "relay-update-check")
+	req.Header.Set("User-Agent", "mirage-update-check")
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := client.Do(req)
 	if err != nil {

@@ -24,6 +24,10 @@ env:
   GOST_ARCHIVE_SHA256: 'cc8ac946f86994a3aed47ef1f838cfb6b7649d9245c91fcb9899654b33d61170'
   SINGBOX_VERSION: '1.14.4'
   SINGBOX_ARCHIVE_SHA256: '99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df'
+  # The Configs section's second carrier, for xhttp. The digest is the one
+  # Xray publishes beside the archive (Xray-windows-64.zip.dgst, SHA2-256).
+  XRAY_VERSION: '26.10.31'
+  XRAY_ARCHIVE_SHA256: '2e04a9995a6f2ad1b28c0bb25c708ecb2695e43a1c9c7889c4b6ac2b48cf7a6a'
 
 jobs:
   windows:
@@ -85,6 +89,26 @@ jobs:
           if (-not $license) { throw 'sing-box LICENSE was not present in the verified archive' }
           Copy-Item -LiteralPath $license.FullName -Destination tunnel/sing-box-LICENSE.txt
 
+      - name: Fetch the pinned Xray
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'xray.zip'
+          $unpacked = Join-Path $env:RUNNER_TEMP 'xray'
+          $url = "https://github.com/XTLS/Xray-core/releases/download/v$env:XRAY_VERSION/Xray-windows-64.zip"
+          Invoke-WebRequest -UseBasicParsing $url -OutFile $archive
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:XRAY_ARCHIVE_SHA256) {
+            throw "Xray checksum mismatch: $actual"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+          $exe = Get-ChildItem -LiteralPath $unpacked -File -Filter xray.exe | Select-Object -First 1
+          if (-not $exe) { throw 'xray.exe was not present in the verified archive' }
+          Copy-Item -LiteralPath $exe.FullName -Destination tunnel/xray.exe
+          # MPL-2.0: the licence goes out with the binary.
+          $license = Join-Path $unpacked 'LICENSE'
+          if (-not (Test-Path -LiteralPath $license)) { throw 'Xray LICENSE was not present in the verified archive' }
+          Copy-Item -LiteralPath $license -Destination tunnel/xray-LICENSE.txt
+
       - name: Test
         shell: pwsh
         run: |
@@ -115,19 +139,20 @@ jobs:
         shell: pwsh
         run: |
           if ($env:GITHUB_REF -like 'refs/tags/desktop-v*') {
-            $env:RELAY_VERSION = $env:GITHUB_REF_NAME
+            $env:MIRAGE_VERSION = $env:GITHUB_REF_NAME
           } else {
-            $env:RELAY_VERSION = "0.0.0-dev.$env:GITHUB_RUN_NUMBER"
+            $env:MIRAGE_VERSION = "0.0.0-dev.$env:GITHUB_RUN_NUMBER"
           }
           python app/build.py --public-release
 
       - name: Inspect and package the built app
         shell: pwsh
         run: |
-          $out = Resolve-Path 'release-build/dist/Relay'
+          $out = Resolve-Path 'release-build/dist/Mirage'
           $required = @(
-            'Relay.exe', 'gost.exe', 'install-server.sh', 'README.md',
+            'Mirage.exe', 'gost.exe', 'install-server.sh', 'README.md',
             'sing-box.exe', 'sing-box-LICENSE.txt',
+            'xray.exe', 'xray-LICENSE.txt',
             'Sweep-OvpnExits.ps1', 'Resolve-OvpnRemote.ps1',
             'servers/lt-vno.prod.surfshark.com_tcp_62.197.149.105.ovpn',
             'servers/tr-ist.ws.tr-022.totallyacdn.com_149.50.208.46.ovpn',
@@ -150,29 +175,29 @@ jobs:
 
           # Launch the frozen program itself. Source-level tests cannot catch a
           # module omitted by PyInstaller from a dynamically loaded data file.
-          $process = Start-Process -FilePath (Join-Path $out 'Relay.exe') `
+          $process = Start-Process -FilePath (Join-Path $out 'Mirage.exe') `
             -ArgumentList '--selftest' -PassThru -WindowStyle Hidden
           try {
             Wait-Process -Id $process.Id -Timeout 30 -ErrorAction Stop
           } catch {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw 'Frozen Relay self-test did not exit within 30 seconds'
+            throw 'Frozen Mirage self-test did not exit within 30 seconds'
           }
           $process.Refresh()
           if ($process.ExitCode -ne 0) {
-            throw "Frozen Relay self-test failed with exit code $($process.ExitCode)"
+            throw "Frozen Mirage self-test failed with exit code $($process.ExitCode)"
           }
 
       - name: Package the release bundle
         shell: pwsh
         run: |
-          $root = (Resolve-Path 'release-build/dist/Relay').Path
+          $root = (Resolve-Path 'release-build/dist/Mirage').Path
           if ($env:GITHUB_REF -like 'refs/tags/desktop-v*') {
             $label = $env:GITHUB_REF_NAME
           } else {
             $label = "build-$env:GITHUB_RUN_NUMBER"
           }
-          $name = "Relay-windows-x64-$label.zip"
+          $name = "Mirage-windows-x64-$label.zip"
           Compress-Archive -Path "$root/*" -DestinationPath $name -CompressionLevel Optimal
           $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $name" | Set-Content -Encoding ascii "$name.sha256"
@@ -180,15 +205,15 @@ jobs:
       - name: Upload release artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: relay-windows-x64
+          name: mirage-windows-x64
           path: |
-            Relay-windows-x64-*.zip
-            Relay-windows-x64-*.zip.sha256
+            Mirage-windows-x64-*.zip
+            Mirage-windows-x64-*.zip.sha256
           if-no-files-found: error
 
   # Says, in a form GitHub signs and anybody can check, that this ZIP was
   # built by this workflow from this commit:
-  #   gh attestation verify Relay-windows-x64-<tag>.zip --repo <owner>/<repo>
+  #   gh attestation verify Mirage-windows-x64-<tag>.zip --repo <owner>/<repo>
   # The .sha256 beside the ZIP says the download is whole; this says where it
   # came from. A job of its own, so the token that can sign is not in the job
   # that runs pip and the tests. Attestations need a public repository (or
@@ -203,12 +228,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: relay-windows-x64
+          name: mirage-windows-x64
           path: dist
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/Relay-windows-x64-*.zip
+          subject-path: dist/Mirage-windows-x64-*.zip
 
   # The only job that can write to the repository. It runs on tags, after the
   # build passed, and runs nothing from the tree: it picks up the two files
@@ -225,23 +250,24 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: relay-windows-x64
+          name: mirage-windows-x64
           path: dist
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           NOTES: >-
-            Windows x64 portable desktop build. Extract the whole ZIP before running Relay.exe.
+            Windows x64 portable desktop build. Extract the whole ZIP before running Mirage.exe.
             The bundle includes credential-free starter servers for Surfshark and Windscribe;
-            add your own provider account in the app. Relay stores accounts, settings and server
-            data under %LOCALAPPDATA%\Relay, so it can run from Program Files without
+            add your own provider account in the app. Mirage stores accounts, settings and server
+            data under %LOCALAPPDATA%\Mirage (an earlier version's %LOCALAPPDATA%\Relay is
+            moved there on first run), so it can run from Program Files without
             Administrator access. Existing data beside the EXE is imported on first run. Accounts
             and credentials are not included in the download. This executable is not code-signed,
             so Windows may show a SmartScreen warning. Verify the accompanying SHA-256 file before
             running it.
         run: |
-          zip="dist/Relay-windows-x64-${GITHUB_REF_NAME}.zip"
+          zip="dist/Mirage-windows-x64-${GITHUB_REF_NAME}.zip"
           test -f "$zip" && test -f "$zip.sha256"
           # The artifact that arrived is the one the build hashed. The file was
           # written on Windows, so its line ends in a carriage return.
@@ -249,6 +275,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "$zip" "$zip.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
-            --title "Relay $GITHUB_REF_NAME" \
+            --title "Mirage $GITHUB_REF_NAME" \
             --generate-notes \
             --notes "$NOTES"

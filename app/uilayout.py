@@ -1,4 +1,4 @@
-"""Relay — every state the window has, measured rather than looked at.
+"""Mirage — every state the window has, measured rather than looked at.
 
     python app/main.py --ui-layout            all of it
     python app/main.py --ui-layout picker     one scene, by name

@@ -293,6 +293,11 @@ func (h *handler) JudgeFlow(network uint8, source netip.AddrPort, destination ne
 		if s := (*Tunnel)(h).Split(); s != nil && h.udpGoesStraight(s, source, destination) {
 			return tun.FlowVerdict{Action: tun.ActionAccept}
 		}
+		// A way that carries UDP itself - a config, not an HTTPS proxy - is
+		// given it (tunnel_udp_way.go).
+		if h.packetWay() != nil {
+			return tun.FlowVerdict{Action: tun.ActionAccept}
+		}
 		return tun.FlowVerdict{Action: tun.ActionDrop}
 	}
 	return tun.FlowVerdict{Action: tun.ActionAccept}
@@ -478,7 +483,10 @@ func (h *handler) carry(ctx context.Context, conn net.Conn, source, destination 
 // split tunnelling sends around the exit, carried on the phone's own line.
 // Anything else - which JudgeFlow should not have let by - is closed rather
 // than left hanging, so an app that tries gets an answer.
-func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, _ M.Socksaddr, _ M.Socksaddr, onClose N.CloseHandlerFunc) {
+func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	if h.packetVia(ctx, conn, source, destination, onClose) {
+		return
+	}
 	if (*Tunnel)(h).Split() == nil {
 		conn.Close()
 		if onClose != nil {
@@ -529,9 +537,9 @@ func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, destination M.Sock
 			// two it was. gomobile puts Go's stderr on logcat, so it lands
 			// beside the service's own lines.
 			if err != nil {
-				log.Printf("relay: dns through the exit: %v", err)
+				log.Printf("mirage: dns through the exit: %v", err)
 			} else {
-				log.Printf("relay: dns through the exit: empty answer")
+				log.Printf("mirage: dns through the exit: empty answer")
 			}
 			return
 		}
@@ -540,7 +548,7 @@ func (h *handler) NewDNSPacket(payload []byte, _ M.Socksaddr, destination M.Sock
 		// sees both halves.
 		h.names.learn(answer)
 		if err := writePacket(writer, answer, destination); err != nil {
-			log.Printf("relay: dns answer not written back: %v", err)
+			log.Printf("mirage: dns answer not written back: %v", err)
 		}
 	}()
 }

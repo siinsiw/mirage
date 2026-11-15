@@ -20,6 +20,7 @@ message that means what it says - which is why they are worth a file.
   everything.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -225,6 +226,58 @@ def test_two_folders():
               next(s for s in e.servers() if s.file == one).path.startswith(a))
 
 
+def test_windscribe_order():
+    section("the list in Windscribe's order")
+    import countries
+    pos = countries.listing_order(['de', 'us', 'qa', 'eg', 'ae', 'za', 'gb'])
+    ranked = sorted(pos, key=pos.get)
+    check("Windscribe's countries keep its order",
+          [c for c in ranked if c in ('us', 'de', 'gb', 'za', 'ae')]
+          == ['us', 'de', 'gb', 'za', 'ae'], str(ranked))
+    check('Qatar, which only Surfshark has, follows the last Middle East one',
+          ranked.index('qa') == ranked.index('ae') + 1, str(ranked))
+    check('and Egypt follows the last African one',
+          ranked.index('eg') == ranked.index('za') + 1, str(ranked))
+    check('uk is gb wherever it was written',
+          countries.listing_order(['uk'])['uk']
+          == countries.listing_order(['gb'])['gb'])
+    live = countries.listing_order(['de', 'us'], ['de', 'us'])
+    check('a fetched order wins over the snapshot', live['de'] < live['us'])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        for name in ('us-dal' + ws.MARK + 'us-1.totallyacdn.com_1.2.3.1.ovpn',
+                     'us-nyc' + ws.MARK + 'us-2.totallyacdn.com_1.2.3.2.ovpn',
+                     'de-fra.prod.surfshark.com_tcp_1.2.3.3.ovpn',
+                     'qa-doh.prod.surfshark.com_tcp_1.2.3.4.ovpn',
+                     'ca-tor.prod.surfshark.com_tcp_1.2.3.5.ovpn'):
+            with open(os.path.join(tmp, name), 'w', encoding='utf-8') as f:
+                f.write('# h -> 1.2.3.4\nclient\nremote 1.2.3.4 443\n')
+        order_file = os.path.join(tmp, 'order.json')
+        with open(order_file, 'w', encoding='utf-8') as f:
+            json.dump({'countries': ['us', 'ca', 'de'],
+                       'cities': {'us': ['New York', 'Dallas']}}, f)
+        # And the notes a fetch writes beside the configs, which is where a
+        # Windscribe city gets its name from.
+        meta_file = os.path.join(tmp, 'meta.json')
+        with open(meta_file, 'w', encoding='utf-8') as f:
+            json.dump({'us-dal' + ws.MARK + 'us-1.totallyacdn.com': {'city': 'Dallas'},
+                       'us-nyc' + ws.MARK + 'us-2.totallyacdn.com': {'city': 'New York'}}, f)
+        was = ws.ORDER_PATH, ws.META_PATH
+        ws.ORDER_PATH, ws.META_PATH = order_file, meta_file
+        try:
+            e = engine.Engine(_NoProxy(), folder=tmp)
+            cat = e.catalogue()
+        finally:
+            ws.ORDER_PATH, ws.META_PATH = was
+        codes = [c['code'] for c in cat]
+        check('the catalogue comes out in that order', codes == ['us', 'ca', 'de', 'qa'],
+              str(codes))
+        us = next(c for c in cat if c['code'] == 'us')
+        check("and a country's cities in Windscribe's order too",
+              [x['name'] for x in us['cityList']] == ['New York', 'Dallas'],
+              str([x['name'] for x in us['cityList']]))
+
+
 def main():
     print(__doc__.strip().splitlines()[0])
     test_alive()
@@ -232,6 +285,7 @@ def main():
     test_missing_credential_is_quiet()
     test_provider_routing()
     test_two_folders()
+    test_windscribe_order()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     for name in FAIL:
         print(f'  failed: {name}')

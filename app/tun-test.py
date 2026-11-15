@@ -41,10 +41,10 @@ def test_exit_is_routed_around_the_adapter():
 
 def test_traffic_goes_to_the_worker():
     cfg = tun.build_config(9050)
-    relay = [o for o in cfg['outbounds'] if o['tag'] == 'relay'][0]
-    assert relay['type'] == 'socks' and relay['server'] == '127.0.0.1'
-    assert relay['server_port'] == 9050
-    assert cfg['route']['final'] == 'relay'
+    proxy = [o for o in cfg['outbounds'] if o['tag'] == 'proxy'][0]
+    assert proxy['type'] == 'socks' and proxy['server'] == '127.0.0.1'
+    assert proxy['server_port'] == 9050
+    assert cfg['route']['final'] == 'proxy'
     assert cfg['route']['auto_detect_interface'] is True
     tun_in = cfg['inbounds'][0]
     assert tun_in['auto_route'] and tun_in['strict_route']
@@ -60,8 +60,8 @@ def test_udp_refused_after_dns():
 
 
 def test_own_and_carriers_go_straight_out():
-    me = r'C:\Program Files\Relay\Relay.exe'
-    gost = r'C:\Program Files\Relay\gost.exe'
+    me = r'C:\Program Files\Mirage\Mirage.exe'
+    gost = r'C:\Program Files\Mirage\gost.exe'
     cfg = tun.build_config(8877, own=[me], carriers=[gost, None])
     rules = cfg['route']['rules']
     straight = rule_with(rules, 'process_path_regex')
@@ -71,7 +71,7 @@ def test_own_and_carriers_go_straight_out():
     # Before UDP is refused, so this app's own UDP is not.
     assert rules.index(straight[0]) < rules.index(
         [r for r in rules if r.get('network') == 'udp'][0])
-    # Case-insensitive, and anchored: Relay.exe.bak is somebody else.
+    # Case-insensitive, and anchored: Mirage.exe.bak is somebody else.
     rx = re.compile(patterns[0].replace('(?i)', ''), re.I)
     assert rx.match(me.lower())
     assert not rx.match(me + '.bak')
@@ -81,7 +81,7 @@ def test_own_and_carriers_go_straight_out():
     assert len(dns_rules[0]['process_path_regex']) == 1
     assert cfg['dns']['final'] == 'dns-remote'
     remote = [s for s in cfg['dns']['servers'] if s['tag'] == 'dns-remote'][0]
-    assert remote['detour'] == 'relay'
+    assert remote['detour'] == 'proxy'
     assert cfg['dns']['strategy'] == 'ipv4_only'
 
 
@@ -94,13 +94,13 @@ def test_no_carriers_no_dns_rule():
 def test_wrapper_quotes_what_it_is_given():
     config = json.dumps(tun.build_config(8877, own=[r"C:\Users\O’Brien\x.exe"]))
     text = tun.WRAPPER.format(
-        exe=tun._ps_string(r"C:\Users\O'Brien\Relay\sing-box.exe"),
+        exe=tun._ps_string(r"C:\Users\O'Brien\Mirage\sing-box.exe"),
         ui=99, out="'o'", err="'e'", pidf="'p'", ready="'r'", failed="'f'",
-        stop="'s'", done="'d'", nic="'RelayTun'", watch=1234, startup=25,
+        stop="'s'", done="'d'", nic="'MirageTun'", watch=1234, startup=25,
         holdf="'h'", held="'hd'", watchf="'w'",
-        allow=tun._ps_list([r"C:\Users\O'Brien\Relay\Relay.exe"]),
+        allow=tun._ps_list([r"C:\Users\O'Brien\Mirage\Mirage.exe"]),
         config=tun._ps_string(config))
-    assert r"$allow  = @('C:\Users\O''Brien\Relay\Relay.exe')" in text
+    assert r"$allow  = @('C:\Users\O''Brien\Mirage\Mirage.exe')" in text
     assert "O''Brien" in text
     # The configuration travels inside the (hash-checked) script, and the
     # elevated side writes it - BOM-less, admin-only, CreateNew - where an
@@ -132,10 +132,10 @@ def test_the_kill_switch_is_a_file_the_script_reads():
     # firewall - and only once the adapter had been up.
     exited = w.index('if ($box.HasExited)')
     assert w.index('$up -and (Test-Path -LiteralPath $holdf)', exited) \
-        < w.index('Block-RelayOutbound $allow', exited)
+        < w.index('Block-MirageOutbound $allow', exited)
     # A leftover firewall hold is lifted only once the new adapter is up.
-    assert w.index('Unblock-RelayOutbound') > w.index('if ($seen)')
-    assert w.index('Unblock-RelayOutbound') < w.index("-Value 'up'")
+    assert w.index('Unblock-MirageOutbound') > w.index('if ($seen)')
+    assert w.index('Unblock-MirageOutbound') < w.index("-Value 'up'")
     import tempfile
     with tempfile.TemporaryDirectory() as d:
         t = tun.Tun(lambda pid: False)
@@ -160,10 +160,10 @@ def test_the_firewall_hold_puts_back_what_it_found():
     k = tun.KILL_PS
     # What the profiles said is saved once, before anything is changed, and
     # under HKLM - not in a folder this user can write.
-    assert "HKLM:\\SOFTWARE\\Relay\\KillSwitch" in k
+    assert "HKLM:\\SOFTWARE\\Mirage\\KillSwitch" in k
     save = k.index('New-ItemProperty')
     assert save < k.index('-DefaultOutboundAction Block')
-    assert k.index('if (-not (Test-Path -LiteralPath $RelayKillKey))') < save
+    assert k.index('if (-not (Test-Path -LiteralPath $MirageKillKey))') < save
     # Outbound blocked on every profile; only the reconnect's programs and
     # the local network allowed; DNS blocked even to the local network.
     assert 'Set-NetFirewallProfile -Profile Domain, Private, Public ' \
@@ -175,14 +175,33 @@ def test_the_firewall_hold_puts_back_what_it_found():
     # the rules go by their group.
     # A block that fails halfway is undone, key and all: the key is what
     # firewall_held() reads, and it must never say "held" when nothing is.
-    block = k[k.index('function Block-RelayOutbound'):
-              k.index('function Unblock-RelayOutbound')]
+    block = k[k.index('function Block-MirageOutbound'):
+              k.index('function Unblock-MirageOutbound')]
     failed = block[block.index('} catch {', block.index('New-Item -Path')):]
-    assert failed.index('Unblock-RelayOutbound') < failed.index('return')
-    unblock = k[k.index('function Unblock-RelayOutbound'):]
+    assert failed.index('Unblock-MirageOutbound') < failed.index('return')
+    unblock = k[k.index('function Unblock-MirageOutbound'):]
     assert "-notin 'Allow', 'Block', 'NotConfigured'" in unblock
-    assert 'Remove-NetFirewallRule -Group $RelayKillGroup' in unblock
+    assert 'Remove-NetFirewallRule -Group $MirageKillGroup' in unblock
     assert tun.KILL_GROUP in k and tun.KILL_KEY in k.replace('HKLM:\\', '')
+    assert tun.KILL_GROUP == 'Mirage kill switch'
+    assert tun.KILL_KEY == 'SOFTWARE\\Mirage\\KillSwitch'
+    # A hold the old Relay left is still lifted: Unblock restores from its
+    # key when this app's is not there, and removes both keys and both
+    # groups of rules. A new block takes over what the old key saved
+    # (the profiles before any hold), never the block itself.
+    assert tun.LEGACY_KILL_KEY == 'SOFTWARE\\Relay\\KillSwitch'
+    assert tun.LEGACY_KILL_GROUP == 'Relay kill switch'
+    assert "$LegacyKillKey = 'HKLM:\\SOFTWARE\\Relay\\KillSwitch'" in k
+    assert "$LegacyKillGroup = 'Relay kill switch'" in k
+    pick = unblock.index('@($MirageKillKey, $LegacyKillKey)')
+    assert pick < unblock.index('Set-NetFirewallProfile')
+    assert 'Remove-LegacyKillKey' in unblock
+    assert 'Remove-NetFirewallRule -Group $LegacyKillGroup' in unblock
+    assert 'Get-ItemProperty -LiteralPath $LegacyKillKey' in block
+    assert block.index('Remove-NetFirewallRule -Group $LegacyKillGroup') \
+        < block.index('-DefaultOutboundAction Block')
+    assert 'Relay' not in k.replace("'Relay kill switch'", '').replace(
+        'SOFTWARE\\Relay', '').replace('old Relay', '')
     # The programs it lets out are this app and what carries a reconnect.
     allowed = [os.path.normcase(p) for p in tun.carriers_of_a_reconnect()]
     assert os.path.normcase(os.path.normpath(sys.executable)) in allowed

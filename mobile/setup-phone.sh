@@ -13,7 +13,7 @@
 # history and in every process listing while it runs. They come from the
 # environment, or are asked for:
 #
-#     RELAY_TUNNEL_PASSWORD=...  RELAY_API_PASSWORD=...  ./setup-phone.sh --tunnel DOMAIN
+#     MIRAGE_TUNNEL_PASSWORD=...  MIRAGE_API_PASSWORD=...  ./setup-phone.sh --tunnel DOMAIN
 #     ./setup-phone.sh --tunnel DOMAIN       # prompts, without echoing
 #
 # Nothing here is secret to the phone that was not already secret to this
@@ -37,7 +37,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
 APK="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
-APP_ID="com.erelay.relay.debug"
+APP_ID="app.mirage.debug"
 FILES="/sdcard/Android/data/$APP_ID/files"
 
 domain=""; password=""; api_password=""
@@ -46,14 +46,14 @@ if [ "${1:-}" = "--tunnel" ]; then
     [ -n "$domain" ] || { echo "--tunnel wants a domain" >&2; exit 2; }
     if [ $# -gt 2 ]; then
         echo "--tunnel takes the domain only. Passwords on the command line end up in the" >&2
-        echo "shell's history and in process listings; set RELAY_TUNNEL_PASSWORD (and" >&2
-        echo "RELAY_API_PASSWORD), or leave them out and type them when asked." >&2
+        echo "shell's history and in process listings; set MIRAGE_TUNNEL_PASSWORD (and" >&2
+        echo "MIRAGE_API_PASSWORD), or leave them out and type them when asked." >&2
         exit 2
     fi
-    password="${RELAY_TUNNEL_PASSWORD:-}"
-    api_password="${RELAY_API_PASSWORD:-}"
+    password="${MIRAGE_TUNNEL_PASSWORD:-}"
+    api_password="${MIRAGE_API_PASSWORD:-}"
     if [ -z "$password" ]; then
-        [ -t 0 ] || { echo "no RELAY_TUNNEL_PASSWORD, and no terminal to ask on" >&2; exit 2; }
+        [ -t 0 ] || { echo "no MIRAGE_TUNNEL_PASSWORD, and no terminal to ask on" >&2; exit 2; }
         read -rs -p "  tunnel password: " password; echo
         read -rs -p "  API password (Enter for none): " api_password; echo
     fi
@@ -123,7 +123,7 @@ adb shell rm -f "$FILES/auth" "$FILES/auth-windscribe" >/dev/null 2>&1 || true
 # which this is, and a release build would not be. So this is a development
 # convenience and says so rather than pretending to be a feature.
 #
-# The passwords are only passing through relay.xml: the app moves them into
+# The passwords are only passing through mirage.xml: the app moves them into
 # its encrypted store and out of the file the next time it starts (Keys.migrate).
 # The file goes to the phone through stdin, like the credential above.
 
@@ -135,7 +135,7 @@ if [ -n "$domain" ]; then
     <string name=\"tunnelApiPassword\">$(xml_escape "$api_password")</string>
     <string name=\"mode\">single</string>
 </map>"
-    if adb shell "run-as $APP_ID sh -c 'umask 077 && mkdir -p shared_prefs && cat > shared_prefs/relay.xml'" \
+    if adb shell "run-as $APP_ID sh -c 'umask 077 && mkdir -p shared_prefs && cat > shared_prefs/mirage.xml'" \
         <<<"$xml" 2>/dev/null; then
         echo "  tunnel   $domain saved on the phone"
     else
@@ -152,7 +152,7 @@ if [ -n "$domain" ] || [ -n "${auth_handed:-}" ]; then
 fi
 
 echo
-echo "  open Relay. The strip at the top chooses the way out:"
+echo "  open Mirage. The strip at the top chooses the way out:"
 echo "    Provider       races the pinned exits"
 echo "    Your server    /gw  - exits at your own server"
 echo "    Server + exit  /ex  - exits at a provider node it picks"

@@ -1,0 +1,327 @@
+{
+ "note": "Read by app/configs-links-test.py and mobile/core configs tests. Every app that reads links must agree with every line of this file.",
+ "ok": [
+  {
+   "about": "VLESS Reality Vision, the most common shape",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@203.0.113.10:443?encryption=none&security=reality&sni=www.microsoft.com&fp=chrome&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&sid=6ba85179e30d4fc2&spx=%2F&type=tcp&flow=xtls-rprx-vision#%F0%9F%87%A9%F0%9F%87%AA%20Germany",
+   "expect": {
+    "proto": "vless",
+    "host": "203.0.113.10",
+    "port": 443,
+    "uuid": "b831381d-6324-4d53-ad4f-8cda48b30811",
+    "security": "reality",
+    "sni": "www.microsoft.com",
+    "fp": "chrome",
+    "pbk": "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0",
+    "sid": "6ba85179e30d4fc2",
+    "flow": "xtls-rprx-vision",
+    "net": "tcp",
+    "name": "🇩🇪 Germany",
+    "engine": "sing-box",
+    "warnings": [],
+    "label": "VLESS·Reality·Vision"
+   }
+  },
+  {
+   "about": "VLESS over WebSocket and TLS through a CDN, early data in the path",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@104.16.1.1:443?encryption=none&security=tls&sni=cdn.example.com&type=ws&host=cdn.example.com&path=%2Fws%3Fed%3D2048&alpn=h2%2Chttp%2F1.1&fp=firefox#cdn",
+   "expect": {
+    "net": "ws",
+    "path": "/ws",
+    "ed": 2048,
+    "host_header": "cdn.example.com",
+    "security": "tls",
+    "alpn": [
+     "h2",
+     "http/1.1"
+    ],
+    "fp": "firefox",
+    "engine": "sing-box",
+    "warnings": [],
+    "label": "VLESS·WS·TLS"
+   }
+  },
+  {
+   "about": "VLESS xhttp: only Xray carries it",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@x.example.com:443?encryption=none&security=tls&sni=x.example.com&type=xhttp&path=%2Fxh&mode=packet-up#xh",
+   "expect": {
+    "net": "xhttp",
+    "mode": "packet-up",
+    "path": "/xh",
+    "engine": "xray",
+    "label": "VLESS·xhttp·TLS"
+   }
+  },
+  {
+   "about": "VLESS with no TLS at all: said in red",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@203.0.113.11:80?encryption=none&type=ws&path=%2F#plain",
+   "expect": {
+    "security": "none",
+    "warnings": [
+     "plain"
+    ]
+   }
+  },
+  {
+   "about": "Vision asked for over WebSocket is dropped, not refused",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@ws.example.com:443?security=tls&type=ws&flow=xtls-rprx-vision#v",
+   "expect": {
+    "flow": "",
+    "net": "ws"
+   }
+  },
+  {
+   "about": "a short word for an id, as Xray allows",
+   "link": "vless://myid@203.0.113.12:443?security=tls&sni=a.example.com#w",
+   "expect": {
+    "uuid": "9f1c3ad0-bc65-5b82-85f5-6e0f931bc7aa"
+   }
+  },
+  {
+   "about": "gRPC with a service name, and a certificate check the link wants off",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@g.example.com:443?security=tls&type=grpc&serviceName=grpcsvc&allowInsecure=1#g",
+   "expect": {
+    "net": "grpc",
+    "service": "grpcsvc",
+    "mode": "gun",
+    "insecure": true,
+    "warnings": [
+     "insecure"
+    ],
+    "engine": "sing-box"
+   }
+  },
+  {
+   "about": "gRPC multi mode goes to Xray",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@g.example.com:443?security=tls&type=grpc&serviceName=s&mode=multi#g",
+   "expect": {
+    "mode": "multi",
+    "engine": "xray"
+   }
+  },
+  {
+   "about": "VMess over WebSocket and TLS",
+   "link": "vmess://eyJ2IjogIjIiLCAicHMiOiAidm0td3MiLCAiYWRkIjogInZtLmV4YW1wbGUuY29tIiwgInBvcnQiOiAiNDQzIiwgImlkIjogImI4MzEzODFkLTYzMjQtNGQ1My1hZDRmLThjZGE0OGIzMDgxMSIsICJhaWQiOiAiMCIsICJzY3kiOiAiYXV0byIsICJuZXQiOiAid3MiLCAidHlwZSI6ICJub25lIiwgImhvc3QiOiAidm0uZXhhbXBsZS5jb20iLCAicGF0aCI6ICIvdm0iLCAidGxzIjogInRscyIsICJzbmkiOiAidm0uZXhhbXBsZS5jb20iLCAiZnAiOiAiY2hyb21lIn0=",
+   "expect": {
+    "proto": "vmess",
+    "name": "vm-ws",
+    "port": 443,
+    "alter_id": 0,
+    "cipher": "auto",
+    "net": "ws",
+    "path": "/vm",
+    "security": "tls",
+    "warnings": [],
+    "label": "VMess·WS·TLS"
+   }
+  },
+  {
+   "about": "VMess over plain TCP: encrypted by itself, but no certificate",
+   "link": "vmess://eyJ2IjogIjIiLCAicHMiOiAidm0tdGNwIiwgImFkZCI6ICIyMDMuMC4xMTMuMTMiLCAicG9ydCI6IDgwODAsICJpZCI6ICJiODMxMzgxZC02MzI0LTRkNTMtYWQ0Zi04Y2RhNDhiMzA4MTEiLCAiYWlkIjogMCwgIm5ldCI6ICJ0Y3AiLCAidHlwZSI6ICJub25lIiwgInRscyI6ICIifQ==",
+   "expect": {
+    "security": "none",
+    "warnings": [
+     "notls"
+    ],
+    "net": "tcp"
+   }
+  },
+  {
+   "about": "VMess with the cipher off: plain",
+   "link": "vmess://eyJ2IjogIjIiLCAicHMiOiAidm0tbm9uZSIsICJhZGQiOiAiMjAzLjAuMTEzLjE0IiwgInBvcnQiOiAiODAiLCAiaWQiOiAiYjgzMTM4MWQtNjMyNC00ZDUzLWFkNGYtOGNkYTQ4YjMwODExIiwgInNjeSI6ICJub25lIiwgIm5ldCI6ICJ0Y3AiLCAidGxzIjogIiJ9",
+   "expect": {
+    "cipher": "none",
+    "warnings": [
+     "plain"
+    ]
+   }
+  },
+  {
+   "about": "VMess with a fake HTTP header goes to Xray",
+   "link": "vmess://eyJ2IjogIjIiLCAicHMiOiAidm0taHR0cCIsICJhZGQiOiAiMjAzLjAuMTEzLjE1IiwgInBvcnQiOiAiODAiLCAiaWQiOiAiYjgzMTM4MWQtNjMyNC00ZDUzLWFkNGYtOGNkYTQ4YjMwODExIiwgIm5ldCI6ICJ0Y3AiLCAidHlwZSI6ICJodHRwIiwgImhvc3QiOiAid3d3LmV4YW1wbGUuY29tIiwgInBhdGgiOiAiLyIsICJ0bHMiOiAiIn0=",
+   "expect": {
+    "header": "http",
+    "engine": "xray"
+   }
+  },
+  {
+   "about": "VMess over gRPC: the service name is in `path`",
+   "link": "vmess://eyJ2IjogIjIiLCAicHMiOiAidm0tZ3JwYyIsICJhZGQiOiAiZy5leGFtcGxlLmNvbSIsICJwb3J0IjogIjQ0MyIsICJpZCI6ICJiODMxMzgxZC02MzI0LTRkNTMtYWQ0Zi04Y2RhNDhiMzA4MTEiLCAibmV0IjogImdycGMiLCAidHlwZSI6ICJndW4iLCAicGF0aCI6ICJzdmMiLCAidGxzIjogInRscyJ9",
+   "expect": {
+    "net": "grpc",
+    "service": "svc",
+    "mode": "gun"
+   }
+  },
+  {
+   "about": "Trojan with no security word is TLS",
+   "link": "trojan://p%40ss@t.example.com:443?sni=t.example.com#trojan",
+   "expect": {
+    "proto": "trojan",
+    "password": "p@ss",
+    "security": "tls",
+    "warnings": [],
+    "label": "Trojan·TLS"
+   }
+  },
+  {
+   "about": "Shadowsocks, SIP002 with base64 user info",
+   "link": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpzZWNyZXQ@203.0.113.16:8388#ss",
+   "expect": {
+    "proto": "ss",
+    "method": "chacha20-ietf-poly1305",
+    "password": "secret",
+    "port": 8388,
+    "warnings": [
+     "notls"
+    ],
+    "label": "SS"
+   }
+  },
+  {
+   "about": "Shadowsocks 2022, user info percent-encoded",
+   "link": "ss://2022-blake3-aes-128-gcm:AAAAAAAAAAAAAAAAAAAAAA%3D%3D@[2001:db8::1]:8388#ss2022",
+   "expect": {
+    "method": "2022-blake3-aes-128-gcm",
+    "password": "AAAAAAAAAAAAAAAAAAAAAA==",
+    "host": "2001:db8::1"
+   }
+  },
+  {
+   "about": "Shadowsocks, the old whole-link base64",
+   "link": "ss://YWVzLTI1Ni1nY206cHdAMjAzLjAuMTEzLjE3OjQ0Mw==#old",
+   "expect": {
+    "method": "aes-256-gcm",
+    "password": "pw",
+    "host": "203.0.113.17",
+    "port": 443
+   }
+  },
+  {
+   "about": "Hysteria2 with salamander, port hopping taken at its first port",
+   "link": "hysteria2://auth%3Apw@h.example.com:443,20000-30000/?sni=h.example.com&obfs=salamander&obfs-password=ob&insecure=1#hy2",
+   "expect": {
+    "proto": "hysteria2",
+    "password": "auth:pw",
+    "port": 443,
+    "obfs": "salamander",
+    "obfs_password": "ob",
+    "insecure": true,
+    "warnings": [
+     "insecure"
+    ],
+    "label": "Hysteria2"
+   }
+  },
+  {
+   "about": "hy2:// is Hysteria2 too",
+   "link": "hy2://pw@203.0.113.18:8443?sni=h.example.com#short",
+   "expect": {
+    "proto": "hysteria2",
+    "sni": "h.example.com",
+    "port": 8443
+   }
+  },
+  {
+   "about": "TUIC",
+   "link": "tuic://b831381d-6324-4d53-ad4f-8cda48b30811:pw@tu.example.com:443?congestion_control=cubic&udp_relay_mode=quic&alpn=h3&sni=tu.example.com#tuic",
+   "expect": {
+    "proto": "tuic",
+    "uuid": "b831381d-6324-4d53-ad4f-8cda48b30811",
+    "password": "pw",
+    "congestion": "cubic",
+    "udp_relay": "quic",
+    "alpn": [
+     "h3"
+    ],
+    "label": "TUIC"
+   }
+  },
+  {
+   "about": "a name with direction overrides in it, cleaned",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@203.0.113.19:443?security=tls&sni=a.example.com#a%E2%80%AEb%E2%80%8Cc",
+   "expect": {
+    "name": "ab‌c"
+   }
+  },
+  {
+   "about": "an international domain name, as punycode",
+   "link": "trojan://pw@münchen.example:443#idn",
+   "expect": {
+    "host": "xn--mnchen-3ya.example"
+   }
+  }
+ ],
+ "bad": [
+  {
+   "about": "not a link",
+   "link": "hello there",
+   "error": "not a link"
+  },
+  {
+   "about": "an unknown scheme",
+   "link": "wireguard://x@1.2.3.4:51820",
+   "error": "not supported"
+  },
+  {
+   "about": "mKCP",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@203.0.113.1:443?type=kcp",
+   "error": "mKCP"
+  },
+  {
+   "about": "a port out of range",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@203.0.113.1:70000?security=tls",
+   "error": "port"
+  },
+  {
+   "about": "a host that is not a host",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@bad_host!:443",
+   "error": "not a valid name"
+  },
+  {
+   "about": "a host with a shell in it",
+   "link": "trojan://pw@$(reboot).example.com:443",
+   "error": "not a valid name"
+  },
+  {
+   "about": "Reality with no key",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@203.0.113.1:443?security=reality&sni=a.example.com",
+   "error": "public key"
+  },
+  {
+   "about": "Reality with no name to borrow",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@203.0.113.1:443?security=reality&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0",
+   "error": "sni"
+  },
+  {
+   "about": "a flow nobody supports",
+   "link": "vless://b831381d-6324-4d53-ad4f-8cda48b30811@203.0.113.1:443?security=tls&flow=xtls-rprx-direct",
+   "error": "flow"
+  },
+  {
+   "about": "an id that is not one",
+   "link": "vless://not a uuid at all, longer than thirty@203.0.113.1:443",
+   "error": "not a UUID"
+  },
+  {
+   "about": "Shadowsocks with a plugin",
+   "link": "ss://YWVzLTI1Ni1nY206cHc@203.0.113.1:443/?plugin=obfs-local%3Bobfs%3Dhttp",
+   "error": "plugin"
+  },
+  {
+   "about": "Shadowsocks with a method that is not supported",
+   "link": "ss://cmM0LW1kNTpwdw==@203.0.113.1:443",
+   "error": "method"
+  },
+  {
+   "about": "vmess that is not JSON",
+   "link": "vmess://bm90IGpzb24=",
+   "error": "JSON"
+  },
+  {
+   "about": "a link with a line break hidden in it",
+   "link": "trojan://p%0Aw@t.example.com:443",
+   "error": "control characters"
+  }
+ ]
+}

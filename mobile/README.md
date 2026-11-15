@@ -1,6 +1,6 @@
 # mobile
 
-The half of Relay that has to exist on a phone.
+The half of Mirage that has to exist on a phone.
 
 Nothing here replaces anything in `app/` or `core/`. The Python is still the
 thing that was measured and argued over; this is a port of the part a phone
@@ -60,8 +60,8 @@ when nothing is reachable.
 ./build-android.sh
 ```
 
-Out comes `relay.aar`: the Go engine compiled for `arm64-v8a`, `armeabi-v7a`,
-`x86` and `x86_64`, with `Relay` carrying the package-level calls and
+Out comes `mirage.aar`: the Go engine compiled for `arm64-v8a`, `armeabi-v7a`,
+`x86` and `x86_64`, with `Mirage` (Java package `mirage`) carrying the package-level calls and
 `Client`, `Result`, `ServerConfig`, `PinOptions` and the four callback
 interfaces — `Progress`, `ReachProgress`, `PinProgress`, `Namer`, `Protector`
 — beside it. It is gitignored, and the script copies it into
@@ -130,7 +130,7 @@ sends everything into the tun, the socket the core opens *to the exit* is
 routed there too: the exit's address enters the tunnel, comes back out of the
 stack, is dialled again, and the phone spends a core talking to itself.
 Nothing throws. `VpnService.protect(fd)` breaks the loop, and it reaches Go
-through `Relay.setProtector` before anything dials — `net.Dialer.Control` is
+through `Mirage.setProtector` before anything dials — `net.Dialer.Control` is
 where it lands, which is after the socket exists and before it connects.
 
 ## The app
@@ -141,13 +141,13 @@ page in a WebView, and that was slow in the way a whole desktop UI booting
 inside a browser on a phone is slow; it is gone.
 
 ```
-android/app/src/main/kotlin/com/erelay/relay/
-  data/RelayCore.kt         everything the window knows and can do, as flows
+android/app/src/main/kotlin/app/mirage/
+  data/MirageCore.kt         everything the window knows and can do, as flows
   data/Models.kt            the core's JSON, parsed once into Kotlin
   ui/                       the screens, in Compose
   orb/                      the desktop's sphere shader, on OpenGL ES 3
-  RelayVpnService.kt        the tunnel's whole lifetime
-  RelayTile.kt              the quick-settings tile: one press to connect
+  MirageVpnService.kt        the tunnel's whole lifetime
+  MirageTile.kt              the quick-settings tile: one press to connect
   AppFiles.kt               the one writable directory, and what is under it
   Accounts.kt               the roster, and which credential is in use
   Secrets.kt                passwords, in the keystore rather than in prefs
@@ -170,7 +170,7 @@ the sheets that rise over it composite like anything else.
 ## Building it
 
 ```sh
-./build-android.sh                                # relay.aar, into android/app/libs
+./build-android.sh                                # mirage.aar, into android/app/libs
 cd ../android && ./gradlew :app:assembleDebug     # the APK
 cd ../android && ./gradlew :app:assembleFast      # the same, at release speed
 ```
@@ -203,7 +203,7 @@ A cable still works, and is quicker when there is one to hand:
 ```sh
 ./setup-phone.sh                          # app, configs, credentials
 ./setup-phone.sh --tunnel DOMAIN          # and your own server; asks for its passwords
-RELAY_TUNNEL_PASSWORD=… RELAY_API_PASSWORD=… ./setup-phone.sh --tunnel DOMAIN
+MIRAGE_TUNNEL_PASSWORD=… MIRAGE_API_PASSWORD=… ./setup-phone.sh --tunnel DOMAIN
 ```
 
 The server's passwords are never arguments — an argument sits in the shell's
@@ -214,7 +214,7 @@ The configs live in the app's own external files directory, which a file
 manager can see:
 
 ```
-Android/data/com.erelay.relay.debug/files/
+Android/data/app.mirage.debug/files/
   pinned/            the exits the app races
   configs/           Surfshark's inbox, waiting to be pinned
   windscribe/        Windscribe's inbox
@@ -228,7 +228,7 @@ with a cable, and on older Android by any app allowed to read storage, so
 it to the app through `run-as` into the app's private `no_backup/` folder,
 over stdin, and the app moves it into its encrypted store (a keystore-held
 key) and deletes the file the next time it starts. The server's passwords
-pass through `shared_prefs/relay.xml` the same way and leave it on the next
+pass through `shared_prefs/mirage.xml` the same way and leave it on the next
 start. An `auth` file left on shared storage by an older version is read in
 and deleted the same way. `run-as` works on a debuggable build only; on a
 release build, add the account in the app (Settings → Accounts).
@@ -240,8 +240,9 @@ transfer: the secret store is sealed with a key that never leaves the phone.
 does a folder of four hundred pinned exits.
 
 **A release is signed with the repository's release key, or not built.** CI
-refuses to build one without `RELAY_KEYSTORE_B64` and `RELAY_KEYSTORE_PASSWORD`.
-A local release build without `RELAY_KEYSTORE` still falls back to the debug
+refuses to build one without the `RELAY_KEYSTORE_B64` and `RELAY_KEYSTORE_PASSWORD`
+secrets (named before the app was called Mirage).
+A local release build without `MIRAGE_KEYSTORE` still falls back to the debug
 key, for trying it on a phone; an upgrade over a differently-signed copy has
 to be uninstalled first.
 
@@ -319,7 +320,7 @@ TCP     to a Cloudflare edge address on 443
 TLS     ServerName = the domain, and here the name IS announced
 WS      an ordinary upgrade to wss://<domain><path>, binary messages
 smux    version 1, keepalive 10s, otherwise smux's own defaults
-CONNECT one per stream, Basic relay:<password>
+CONNECT one per stream, Basic relay:<password> (the server's user name, kept from before the rename)
 ```
 
 Those numbers were read out of gost's own source, not guessed. The desktop and

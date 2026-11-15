@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="app.css">
 <link rel="stylesheet" href="midnight.css">
 <link rel="stylesheet" href="intro.css">
+<link rel="stylesheet" href="configs.css">
 <script>
   // First thing on the page. A script error used to leave a window that
   // looked fine and did nothing, with no way to find out why - so errors are
@@ -175,6 +176,13 @@
       <button class="icon icon--dead" id="dropOpen" type="button" hidden
               data-n="0" aria-label="Exits that stopped answering">
         <svg class="ico" aria-hidden="true"><use href="#i-archive"/></svg>
+      </button>
+      <!-- Configs: servers bought or given from anywhere (vless://, vmess://,
+           trojan://, ss://, hysteria2://, tuic://, subscriptions). A section
+           of its own, with nothing to do with the provider accounts. -->
+      <button class="icon" id="configsOpen" type="button" aria-label="Configs"
+              aria-haspopup="dialog" title="Configs">
+        <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg>
       </button>
       <button class="icon" id="settings" type="button" aria-label="Settings">
         <svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>
@@ -383,8 +391,12 @@
   </div>
   <div class="reach" id="reach">
     <div class="pair pair--sort" id="sortBy" role="tablist">
+      <button class="pair__opt" type="button" data-sort="windscribe" role="tab"
+              aria-selected="true" aria-label="Windscribe’s order" title="Windscribe’s order">
+        <svg class="ico" aria-hidden="true"><use href="#i-globe"/></svg><span>Order</span>
+      </button>
       <button class="pair__opt" type="button" data-sort="ping" role="tab"
-              aria-selected="true" aria-label="Fastest first" title="Fastest first">
+              aria-selected="false" aria-label="Fastest first" title="Fastest first">
         <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg><span>Ping</span>
       </button>
       <button class="pair__opt" type="button" data-sort="load" role="tab"
@@ -410,6 +422,163 @@
   </div>
   <div class="sheet__list" id="list"></div>
 </dialog>
+
+<!-- Configs: an app of its own inside Mirage. Its own header with the way
+     back (the Mirage | Configs switch), its own Connect, its own settings
+     (#cfgPrefs). What is added, by hand or from a subscription, sits under
+     the Connect, and picking a row picks it - or moves a live connection to
+     it. Everything in it is drawn by configs.js from configs(list); the way
+     in and out is configs-shell.js. -->
+<dialog class="sheet sheet--configs cfgapp" id="configsDlg" aria-labelledby="cfgTitle">
+  <header class="cfgtop">
+    <span class="cfgtop__mark drag-zone">
+      <svg class="bar__logo bar__logo--eye" viewBox="18 30 84 60" aria-hidden="true">
+        <path d="M22 60 Q60 20 98 60" fill="none" stroke="#E0303F" stroke-width="5" stroke-linecap="round"/>
+        <path d="M22 60 Q60 100 98 60" fill="none" stroke="#A3141F" stroke-width="4" stroke-linecap="round" stroke-dasharray="1.5 5.5"/>
+        <circle cx="60" cy="60" r="15" fill="none" stroke="#E0303F" stroke-width="3.4" stroke-dasharray="0.9 3.03"/>
+        <circle cx="60" cy="60" r="7" fill="#E0303F"/>
+        <rect x="44" y="59.3" width="32" height="1.4" fill="#070304"/>
+        <circle cx="70.6" cy="49.4" r="3" fill="#FF5A6C"/>
+      </svg>
+      <span class="sr" id="cfgTitle">Configs</span>
+    </span>
+    <!-- The way back, and where you are: two sections of one app. -->
+    <div class="cfgswitch" role="tablist" aria-label="Section">
+      <button class="cfgswitch__opt" id="cfgToMain" type="button" role="tab"
+              aria-selected="false">Mirage</button>
+      <button class="cfgswitch__opt" type="button" role="tab" aria-selected="true"
+              tabindex="-1">Configs</button>
+    </div>
+    <button class="icon" id="cfgPrefsOpen" type="button" aria-label="Configs settings"
+            aria-haspopup="dialog" title="Configs settings">
+      <svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>
+    </button>
+  </header>
+
+  <!-- Its own home: the state, the one picked, and its own Connect. -->
+  <section class="cfghero" id="cfgHero" data-state="off" aria-label="Configs connection">
+    <div class="cfghero__top">
+      <p class="cfghero__state" id="cfgState" role="status">Disconnected</p>
+      <p class="cfghero__clock mono" id="cfgClock"></p>
+    </div>
+    <div class="cfghero__pick">
+      <span class="cfg__flag cfghero__flag" id="cfgNowFlag" aria-hidden="true"></span>
+      <span class="cfghero__text">
+        <span class="cfghero__name" id="cfgNowName" dir="auto">No config picked</span>
+        <span class="cfghero__sub mono" id="cfgNowSub">Pick one below</span>
+      </span>
+    </div>
+    <!-- The whole system through the config (the adapter), or only what
+         follows Windows' proxy setting. The same as Settings > Connection,
+         here because it is the one people change. -->
+    <label class="cfghero__tun">
+      <span class="cfghero__tuntext"><b>Whole system (TUN)</b>
+        <i id="cfgTunWhy">Every program, not only the ones that follow the proxy setting</i></span>
+      <button class="toggle" id="cfgTun" type="button" role="switch" aria-checked="false"
+              aria-label="Whole system (TUN)"><span></span></button>
+    </label>
+    <button class="go cfghero__go" id="cfgGo" type="button" data-mode="off" disabled>
+      <span class="go__word" data-for="off">Connect</span>
+      <span class="go__word" data-for="busy">Cancel</span>
+      <span class="go__word" data-for="on">Disconnect</span>
+    </button>
+    <p class="note cfghero__note" id="cfgNote"></p>
+  </section>
+
+  <div class="cfgbar">
+    <button class="btn btn--quiet btn--auto cfgbar__lead" id="cfgPaste" type="button"
+            title="Add the vless:// vmess:// trojan:// ss:// hysteria2:// tuic:// links on the clipboard">
+      <svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg><span>Paste links</span>
+    </button>
+    <button class="btn btn--quiet btn--auto" id="cfgSubShow" type="button" aria-expanded="false">
+      <svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg><span>Subscription</span>
+    </button>
+    <button class="btn btn--quiet btn--auto" id="cfgTest" type="button">
+      <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg><span id="cfgTestLabel">Test all</span>
+    </button>
+  </div>
+
+  <form class="cfgform" id="cfgSubForm" hidden autocomplete="off">
+    <label class="field">
+      <span class="field__cap">Subscription address</span>
+      <input class="field__in mono" id="cfgSubUrl" type="url" spellcheck="false"
+             placeholder="https://…" aria-describedby="cfgSubWhy">
+    </label>
+    <p class="note" id="cfgSubWhy">Fetched only when you add it or press
+      update, and through the connection when one is up.</p>
+    <div class="cfgform__acts">
+      <button class="btn btn--quiet btn--auto" id="cfgSubAdd" type="submit">Add and fetch</button>
+    </div>
+  </form>
+
+  <form class="cfgform" id="cfgPasteForm" hidden autocomplete="off">
+    <label class="field">
+      <span class="field__cap">Links</span>
+      <textarea class="field__in mono cfgform__links" id="cfgPasteText" rows="4"
+                spellcheck="false" placeholder="vless://…  one or many, or a base64 list"></textarea>
+    </label>
+    <div class="cfgform__acts">
+      <button class="btn btn--quiet btn--auto" id="cfgPasteAdd" type="submit">Add</button>
+    </div>
+  </form>
+
+  <p class="note cfgsaid" id="cfgSaid" role="status" aria-live="polite"></p>
+
+  <div class="cfgask" id="cfgAsk" hidden role="alertdialog" aria-labelledby="cfgAskText">
+    <p class="cfgask__text" id="cfgAskText"></p>
+    <div class="cfgask__acts">
+      <button class="btn btn--quiet btn--auto cfgask__yes" id="cfgAskYes" type="button">Yes</button>
+      <button class="btn btn--quiet btn--auto" id="cfgAskNo" type="button">Cancel</button>
+    </div>
+  </div>
+
+  <div class="sheet__list cfglist" id="cfgList"></div>
+
+  <footer class="cfgfoot">
+    <label class="cfgfoot__opt">
+      <button class="toggle" id="cfgAuto" type="button" role="switch" aria-checked="false"
+              aria-label="Fastest, automatically"><span></span></button>
+      <span><b>Fastest, automatically</b><i>moves to the next when one stops answering</i></span>
+    </label>
+  </footer>
+</dialog>
+
+<!-- Configs' own settings: screens drawn by configs-prefs.js from the
+     section's settings table, kept apart from Mirage's own. -->
+<dialog class="sheet cfgprefs" id="cfgPrefs" aria-labelledby="cfgPrefsTitle">
+  <header class="sheet__top">
+    <button class="icon icon--back" id="cfgPrefsBack" type="button" aria-label="Back" hidden>
+      <svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg>
+    </button>
+    <span class="sheet__heading">
+      <span class="sheet__kicker">Configs</span>
+      <span class="sheet__title" id="cfgPrefsTitle">Settings</span>
+    </span>
+    <button class="icon" id="cfgPrefsClose" type="button" aria-label="Close">
+      <svg class="ico" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </header>
+  <p class="note cfgsaid" id="cfgPrefsSaid" role="status" aria-live="polite"></p>
+  <div class="sheet__list cfgprefs__body" id="cfgPrefsBody"></div>
+</dialog>
+
+<!-- The way between Mirage and Configs: the eye opens, the ring closes,
+     and the other section is there (configs-shell.js). Transform and
+     opacity only, on a still background. -->
+<div class="cfgveil mi" id="cfgVeil" hidden aria-hidden="true">
+  <svg class="cfgveil__eye" viewBox="0 0 120 120">
+    <path class="mi__low" d="M22 60 Q60 100 98 60"/>
+    <g class="cfgveil__iris">
+      <circle class="mw__tick" cx="60" cy="60" r="15"/>
+      <ellipse class="mi__inner" cx="60" cy="60" rx="11.5" ry="11.5"/>
+      <circle class="mi__pupil" cx="60" cy="60" r="6"/>
+    </g>
+    <rect class="mi__cut" x="44" y="59.4" width="32" height="1.2"/>
+    <path class="mi__lid cfgveil__lid" d="M22 60 Q60 20 98 60"/>
+    <circle class="ms__done cfgveil__ring" cx="60" cy="60" r="34" transform="rotate(-90 60 60)"/>
+  </svg>
+  <p class="cfgveil__word" id="cfgVeilWord">Configs</p>
+</div>
 
 <!-- Where the exits come from. Opened off the head of the list, because that
      is the line already answering "what am I looking at" - and closed again
@@ -996,13 +1165,14 @@
             <span>Have a key?</span>
           </p>
           <p class="pane__why">A server that is set up prints one line starting
-            with <b>relay://</b>. Paste it here and the server, both passwords
+            with <b>mirage://</b> (an older <b>relay://</b> one works too). Paste
+            it here and the server, both passwords
             and its Shadowsocks settings all fill in at once.</p>
           <label class="field">
             <span class="field__cap">Key</span>
             <span class="field__pair">
               <input class="field__in mono" id="tunnelKey" type="password"
-                     placeholder="relay://…" autocomplete="off" spellcheck="false">
+                     placeholder="mirage://…" autocomplete="off" spellcheck="false">
               <button class="field__peek" id="tunnelKeyPeek" type="button"
                       aria-pressed="false" aria-label="Show the key">
                 <svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg>
@@ -1304,6 +1474,21 @@
 
     <section class="screen" data-screen="servers" hidden>
 
+    <!-- 4½ · the one most people need from this screen: get a provider's
+         servers again, whole, when a setup did not finish or some are missing. -->
+    <section class="pane" id="prefSetup">
+      <div class="pane__head">
+        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg></span>
+        <h3 class="pane__title">Your servers</h3>
+      </div>
+      <p class="pane__why">Servers missing, or a setup that did not finish? Set them up
+        again: Mirage fetches that provider's list afresh and pins every server,
+        the same as the first time. Your account and starred places stay.</p>
+      <div class="pane__body">
+        <ul class="setupcards" id="setupCards" aria-label="Servers per provider"></ul>
+      </div>
+    </section>
+
     <!-- 5 · a folder in, a folder out, and the one decision in between.
          Shaped as the route it describes rather than as another form: three
          nodes on a line, which is what the operation is. -->
@@ -1408,33 +1593,6 @@
       <div class="meter" id="pinMeter" hidden><i id="pinBar"></i></div>
       <ol class="tally" id="pinTally" hidden></ol>
       <ul class="chips" id="pinUse" hidden></ul>
-    </section>
-
-    <!-- 5½ · the light one. One exit per country, timed by how quickly its
-         proxy answers - what the list's Fastest first is made of. -->
-    <section class="pane" id="prefQuick">
-      <div class="pane__head">
-        <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-bolt"/></svg></span>
-        <h3 class="pane__title">Quick timing</h3>
-        <span class="pill" id="quickPill" data-state="off">never</span>
-      </div>
-      <p class="pane__why">One exit from each country is asked how quickly its proxy
-        answers - six at a time, a few seconds each, so a minute or so for the
-        whole list and gentle on the line. Only with the tunnel down: through it,
-        every time would be the tunnel's. The bolt on a country in the list times
-        all of its exits.</p>
-      <div class="pane__body">
-        <p class="note" id="quickSaid"></p>
-        <div class="quick__row">
-          <span class="quick__cap">Time the list on its own
-            <span class="quick__sub">when it opens and the last run is over six hours old</span></span>
-          <button class="toggle" id="autoQuick" type="button" role="switch"
-                  aria-checked="true" aria-label="Time the list on its own"><span></span></button>
-        </div>
-        <div class="pane__row">
-          <button class="btn btn--quiet btn--auto" id="quickRun" type="button">Time every country</button>
-        </div>
-      </div>
     </section>
 
     <!-- 6 · the heavy one -->
@@ -2168,5 +2326,8 @@
 <script src="atlas.js"></script>
 <script src="midnight.js"></script>
 <script src="app.js"></script>
+<script src="configs.js"></script>
+<script src="configs-prefs.js"></script>
+<script src="configs-shell.js"></script>
 </body>
 </html>

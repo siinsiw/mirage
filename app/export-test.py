@@ -23,7 +23,7 @@ SS = {'method': 'chacha20-ietf-poly1305', 'password': 'p', 'port': 8388,
 
 def key(body):
     raw = base64.urlsafe_b64encode(json.dumps(body).encode()).decode()
-    return 'relay://' + raw.rstrip('=')
+    return 'mirage://' + raw.rstrip('=')
 
 
 def test_slot_uuids_match_the_installer_and_the_phone():
@@ -49,26 +49,26 @@ def test_key_carries_export():
 
 
 def test_links_by_name():
-    rows = export.links('relay.example.com', 'abcDEF123',
-                        [{'k': 0, 'name': 'Relay · server'},
-                         {'k': 1, 'name': 'Relay · Germany'}],
+    rows = export.links('mirage.example.com', 'abcDEF123',
+                        [{'k': 0, 'name': 'Mirage · server'},
+                         {'k': 1, 'name': 'Mirage · Germany'}],
                         edge='104.16.1.2', ss=SS)
     assert [r['k'] for r in rows] == [0, 1]
     u = urllib.parse.urlsplit(rows[1]['vless'])
     q = dict(urllib.parse.parse_qsl(u.query))
     assert u.scheme == 'vless' and u.username == export.slot_uuid('abcDEF123', 1)
     assert u.hostname == '104.16.1.2' and u.port == 443
-    assert q['sni'] == q['host'] == 'relay.example.com'
+    assert q['sni'] == q['host'] == 'mirage.example.com'
     assert q['type'] == 'ws' and q['path'] == '/vl' and q['security'] == 'tls'
     assert 'allowInsecure' not in q
-    assert urllib.parse.unquote(u.fragment) == 'Relay · Germany'
+    assert urllib.parse.unquote(u.fragment) == 'Mirage · Germany'
 
     vm = json.loads(base64.b64decode(rows[1]['vmess'][len('vmess://'):]))
     assert vm['id'] == export.slot_uuid('abcDEF123', 1) and vm['add'] == '104.16.1.2'
-    assert vm['host'] == 'relay.example.com' and vm['path'] == '/vm'
+    assert vm['host'] == 'mirage.example.com' and vm['path'] == '/vm'
     assert vm['net'] == 'ws' and vm['tls'] == 'tls' and vm['v'] == '2'
 
-    assert rows[0]['ss'].startswith('ss://') and '@relay.example.com:8388#' in rows[0]['ss']
+    assert rows[0]['ss'].startswith('ss://') and '@mirage.example.com:8388#' in rows[0]['ss']
     assert 'ss' not in rows[1], 'only the server itself has a Shadowsocks link'
 
     sub = base64.b64decode(export.subscription(rows)).decode()
@@ -76,7 +76,7 @@ def test_links_by_name():
 
 
 def test_links_by_address():
-    rows = export.links('203.0.113.7', 'x1', [{'k': 2, 'name': 'Relay · France'}],
+    rows = export.links('203.0.113.7', 'x1', [{'k': 2, 'name': 'Mirage · France'}],
                         edge='104.16.1.2')
     u = urllib.parse.urlsplit(rows[0]['vless'])
     q = dict(urllib.parse.parse_qsl(u.query))
@@ -88,7 +88,7 @@ def test_links_by_address():
 def test_links_carry_the_servers_port():
     # A server whose 443 belongs to something else (an Xray): both kinds of
     # link dial the port its key named, as the phone's do.
-    rows = export.links('203.0.113.7', 'x1', [{'k': 1, 'name': 'Relay · Germany'}],
+    rows = export.links('203.0.113.7', 'x1', [{'k': 1, 'name': 'Mirage · Germany'}],
                         port=8443)
     u = urllib.parse.urlsplit(rows[0]['vless'])
     assert u.hostname == '203.0.113.7' and u.port == 8443
@@ -97,7 +97,7 @@ def test_links_carry_the_servers_port():
 
 
 def test_refuses_without_an_export_id():
-    for host, xid, slots in (('relay.example.com', '', [{'k': 0, 'name': 'x'}]),
+    for host, xid, slots in (('mirage.example.com', '', [{'k': 0, 'name': 'x'}]),
                              ('h', 'i', [{'k': 33, 'name': 'x'}])):
         try:
             export.links(host, xid, slots)

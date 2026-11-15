@@ -44,7 +44,7 @@ windscribe.md
 # which is already ignored below.
 .windscribe-auth
 .windscribe-auth.*
-# Cloudflare API token and account id, for deploying worker/relay.js.
+# Cloudflare API token and account id, for deploying the Cloudflare worker.
 cl_api.txt
 
 # pid, log and what-is-connected, written while a tunnel is up.
@@ -67,3 +67,7 @@ tunnel/gost
 tunnel/sing-box.exe
 tunnel/sing-box
 tunnel/sing-box-LICENSE.txt
+# And Xray, which carries the configs sing-box cannot (xhttp).
+tunnel/xray.exe
+tunnel/xray
+tunnel/xray-LICENSE.txt

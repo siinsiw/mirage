@@ -11,13 +11,13 @@ import (
 
 // A real server reached by IP, through the real line - skipped unless given:
 //
-//	RELAY_TEST_SERVER=203.0.113.10 RELAY_TEST_PASSWORD=... RELAY_TEST_API=... go test -run ServerByAddress -v
+//	MIRAGE_TEST_SERVER=203.0.113.10 MIRAGE_TEST_PASSWORD=... MIRAGE_TEST_API=... go test -run ServerByAddress -v
 func TestServerByAddress(t *testing.T) {
-	host := os.Getenv("RELAY_TEST_SERVER")
+	host := os.Getenv("MIRAGE_TEST_SERVER")
 	if host == "" {
-		t.Skip("RELAY_TEST_SERVER not set")
+		t.Skip("MIRAGE_TEST_SERVER not set")
 	}
-	pw := os.Getenv("RELAY_TEST_PASSWORD")
+	pw := os.Getenv("MIRAGE_TEST_PASSWORD")
 
 	// First contact: no pin yet, so nothing is dialled - the certificate is
 	// looked at on a bare handshake and handed back as the pin (here the
@@ -55,7 +55,7 @@ func TestServerByAddress(t *testing.T) {
 	bad.Close()
 
 	// The API answers with the right password and refuses a wrong one.
-	if api := os.Getenv("RELAY_TEST_API"); api != "" {
+	if api := os.Getenv("MIRAGE_TEST_API"); api != "" {
 		if err := SetExit(host, 0, "wrong", pin, ExitHop{IP: "146.70.194.221", User: "CHANGEME", Password: "CHANGEME"}, 10*time.Second); err == nil {
 			t.Fatal("a wrong API password was accepted")
 		}
@@ -67,21 +67,21 @@ func TestServerByAddress(t *testing.T) {
 
 // The upload test tells a throttled exit from a free one, through the server:
 //
-//	RELAY_TEST_SERVER=… RELAY_TEST_PASSWORD=… RELAY_TEST_API=… RELAY_TEST_PIN=…
-//	RELAY_TEST_EXITS=141.255.162.194,31.7.62.50 RELAY_TEST_EXIT_USER=… RELAY_TEST_EXIT_PASS=…
+//	MIRAGE_TEST_SERVER=… MIRAGE_TEST_PASSWORD=… MIRAGE_TEST_API=… MIRAGE_TEST_PIN=…
+//	MIRAGE_TEST_EXITS=141.255.162.194,31.7.62.50 MIRAGE_TEST_EXIT_USER=… MIRAGE_TEST_EXIT_PASS=…
 //	go test -run UploadThroughExits -v
 func TestUploadThroughExits(t *testing.T) {
-	host, exits := os.Getenv("RELAY_TEST_SERVER"), os.Getenv("RELAY_TEST_EXITS")
+	host, exits := os.Getenv("MIRAGE_TEST_SERVER"), os.Getenv("MIRAGE_TEST_EXITS")
 	if host == "" || exits == "" {
-		t.Skip("RELAY_TEST_SERVER or RELAY_TEST_EXITS not set")
+		t.Skip("MIRAGE_TEST_SERVER or MIRAGE_TEST_EXITS not set")
 	}
 	for _, ip := range strings.Split(exits, ",") {
-		if err := SetExit(host, 0, os.Getenv("RELAY_TEST_API"), os.Getenv("RELAY_TEST_PIN"),
-			ExitHop{IP: ip, User: os.Getenv("RELAY_TEST_EXIT_USER"), Password: os.Getenv("RELAY_TEST_EXIT_PASS")}, 15*time.Second); err != nil {
+		if err := SetExit(host, 0, os.Getenv("MIRAGE_TEST_API"), os.Getenv("MIRAGE_TEST_PIN"),
+			ExitHop{IP: ip, User: os.Getenv("MIRAGE_TEST_EXIT_USER"), Password: os.Getenv("MIRAGE_TEST_EXIT_PASS")}, 15*time.Second); err != nil {
 			t.Fatalf("set %s: %v", ip, err)
 		}
-		srv := NewTunnelServer(host, os.Getenv("RELAY_TEST_PASSWORD"), nil, ModeMulti)
-		srv.Pin = os.Getenv("RELAY_TEST_PIN")
+		srv := NewTunnelServer(host, os.Getenv("MIRAGE_TEST_PASSWORD"), nil, ModeMulti)
+		srv.Pin = os.Getenv("MIRAGE_TEST_PIN")
 		rate, err := UploadRate(srv, 256<<10, 4*time.Second)
 		srv.Close()
 		t.Logf("%-16s up %.0f KB/s (err %v)", ip, rate/1024, err)

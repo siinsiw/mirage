@@ -128,7 +128,7 @@ def test_adapter_bypass():
     # and only after the split rules have had their say.
     assert rules[-1] == {'network': 'udp', 'action': 'reject'}
     assert rules.index(dest) < len(rules) - 1
-    assert c['route']['final'] == 'relay'
+    assert c['route']['final'] == 'proxy'
     line = [s for s in c['dns']['servers'] if s['tag'] == 'dns-line']
     assert line == [{'type': 'udp', 'tag': 'dns-line', 'server': '192.168.1.1'}]
     assert rule_with(c['dns']['rules'], 'domain_suffix')[0]['server'] == 'dns-line'
@@ -145,7 +145,7 @@ def test_adapter_only():
     for key in ('process_name', 'domain_suffix'):
         pair = rule_with(rules, key)
         assert [p.get('network') for p in pair] == ['udp', None], pair
-        assert pair[0]['action'] == 'reject' and pair[1]['outbound'] == 'relay'
+        assert pair[0]['action'] == 'reject' and pair[1]['outbound'] == 'proxy'
     assert {'network': 'udp', 'action': 'reject'} not in rules
     # Every lookup still goes through the exit in "only": an unlisted name
     # may belong to a listed program.
@@ -155,7 +155,7 @@ def test_adapter_only():
 def test_adapter_without_split_is_unchanged():
     c = tun.build_config(9090)
     assert c['route']['rules'][0] == {'port': 53, 'action': 'hijack-dns'}
-    assert c['route']['final'] == 'relay'
+    assert c['route']['final'] == 'proxy'
     assert [s['tag'] for s in c['dns']['servers']] == ['dns-remote', 'dns-direct']
 
 
