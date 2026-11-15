@@ -533,7 +533,11 @@
       say(e.error ? `The test did not run: ${e.error}` : 'Fastest first.', !!e.error);
     }
     if (e.kind === 'sub') {
-      if (e.list) draw(e.list);
+      // One fetched in the background that failed: kept on the group, not
+      // drawn over a rename or an open row, and not said.
+      if (e.quiet && !e.ok) return;
+      if (e.list && !(e.quiet && (view.renaming || view.expanded))) draw(e.list);
+      if (e.quiet) return;
       if (e.ok) {
         say(`Updated: ${e.count} configs${e.problems && e.problems.length
           ? `, ${e.problems.length} not taken` : ''}${e.through ? ', fetched through the connection' : ''}.`);

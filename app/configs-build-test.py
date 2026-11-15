@@ -220,7 +220,10 @@ def test_settings_reach_the_connection():
     assert dns['dns-remote']['server'] == 'dns.google'
     assert dns['dns-remote']['domain_resolver'] == 'dns-direct'
     assert dns['dns-direct']['server'] == '9.9.9.9' and 'dns-local' not in dns
-    assert cfg['dns']['strategy'] == 'prefer_ipv6'
+    assert cfg['dns']['strategy'] == 'ipv4_only', 'the adapter carries IPv4 only'
+    proxy = singbox.build(SB, port=18877, clash_port=19090, clash_secret='s',
+                          opts=EVERYTHING)
+    assert proxy['dns']['strategy'] == 'prefer_ipv6'
     tun = next(i for i in cfg['inbounds'] if i['type'] == 'tun')
     assert tun['stack'] == 'gvisor' and tun['mtu'] == 1500 and not tun['strict_route']
     auto = next(o for o in cfg['outbounds'] if o['tag'] == singbox.AUTO)
@@ -230,6 +233,20 @@ def test_settings_reach_the_connection():
         tls = ob.get('tls') or {}
         if tls.get('fragment') or tls.get('record_fragment'):
             assert tls.get('fragment') and not tls.get('record_fragment'), 'tls style only'
+
+
+def test_auto_interval_stays_within_the_idle_timeout():
+    # sing-box refuses to start a urltest whose interval is past 30m.
+    for bad in (45, 60):
+        try:
+            prefs.check('auto_interval', bad)
+        except ValueError:
+            continue
+        raise AssertionError(f'{bad} was taken')
+    cfg = singbox.build(SB, port=18877, clash_port=19090, clash_secret='s', auto=True,
+                        opts=dict(prefs.defaults(), auto_interval=99, auto_tolerance=0))
+    auto = next(o for o in cfg['outbounds'] if o['tag'] == singbox.AUTO)
+    assert auto['interval'] == '30m' and auto['tolerance'] >= 1
 
 
 def test_mux_only_where_it_can_go():

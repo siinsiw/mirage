@@ -257,24 +257,34 @@ class Section:
         if wait(first_wait):
             return
         first = True
+        tried = {}
         while True:
             try:
                 opts = store.settings()
                 hours = int(opts.get('sub_auto_hours') or 0)
                 now = time.time()
-                for g in store.load()['groups']:
+                # Not while a kill switch is holding: with nothing up the
+                # fetch would go out on the very line that is being held.
+                held = self.runner.blocked() or self.owner._engine.blocked()
+                for g in ([] if held else store.load()['groups']):
                     if g.get('kind') != 'sub':
                         continue
                     stale = hours and (now - float(g.get('updated') or 0)) > hours * 3600
-                    if (first and opts.get('sub_on_launch')) or stale:
-                        self._fetch(g['id'])
+                    # A fetch that failed is not tried again for an hour, or
+                    # for the whole interval when that is shorter.
+                    recent = now - tried.get(g['id'], 0) < min(3600, max(hours, 1) * 3600)
+                    if ((first and opts.get('sub_on_launch')) or stale) and not recent:
+                        tried[g['id']] = now
+                        self._fetch(g['id'], quiet=True)
             except Exception:
                 self._log('subs: ' + traceback.format_exc())
             first = False
             if wait(every):
                 return
 
-    def _fetch(self, gid):
+    def _fetch(self, gid, quiet=False):
+        """quiet: a fetch nobody pressed for - its failure is kept on the
+        group, not said over whatever the person is doing."""
         if gid in self._fetching:
             return
         self._fetching.add(gid)
@@ -292,7 +302,7 @@ class Section:
                 if not g.get('name') and name:
                     fields['name'] = name
                 store.update_group(gid, **fields)
-                self._emit('sub', group=gid, ok=True, count=n,
+                self._emit('sub', group=gid, ok=True, count=n, quiet=quiet,
                            problems=problems[:30], through=bool(via),
                            list=self._listing())
             except Exception as e:
@@ -301,7 +311,7 @@ class Section:
                 if not isinstance(e, (subs.Refused, links.Invalid)):
                     self._log('sub: ' + traceback.format_exc())
                 store.update_group(gid, error=said[:200])
-                self._emit('sub', group=gid, ok=False, error=said,
+                self._emit('sub', group=gid, ok=False, error=said, quiet=quiet,
                            list=self._listing())
             finally:
                 self._fetching.discard(gid)
@@ -466,7 +476,7 @@ class Section:
             return False
         eng = self.owner._engine
         # A hold Mirage's own connection raised is Mirage's kill switch's.
-        if eng.running() or eng.engaged():
+        if eng.running() or eng.engaged() or not r.owns_hold:
             return False
         if r.engaged() or eng.tun.held_by_firewall():
             r.disconnect(quiet=True)
@@ -520,6 +530,7 @@ class Section:
         owner._retray('off')
         if held:
             owner._holding = True
+            r.owns_hold = True
             self._reconnect = (None if cur[0] == 'auto' else cur[0], cur[1])
             owner._emit('Blocked', {'reason': 'adapter' if r.mode == 'tun'
                                     else 'dropped', 'status': r.status()})

@@ -76,8 +76,10 @@ SCHEMA = {
     'test_timeout': (('int', 2, 30), 8, False),
     'test_parallel': (('int', 1, 32), 8, False),
     'sort': (('choice', ('speed', 'added', 'name')), 'speed', False),
-    'auto_interval': (('int', 1, 60), 10, True),
-    'auto_tolerance': (('int', 0, 1000), 50, True),
+    # At most 30: sing-box refuses an interval longer than the urltest's
+    # idle timeout, which is 30 minutes.
+    'auto_interval': (('int', 1, 30), 10, True),
+    'auto_tolerance': (('int', 1, 1000), 50, True),
 
     # -- advanced ----------------------------------------------------------------
     'mux': ('bool', False, True),
@@ -119,7 +121,12 @@ def dns_server(url, tag, **extra):
     return out
 
 
-def dns_strategy(opts):
+def dns_strategy(opts, tun=False):
+    """The resolver's strategy. With the adapter it is IPv4 only whatever
+    the setting: the adapter carries IPv4, and an AAAA answer would send a
+    program round it on a line with IPv6."""
+    if tun:
+        return 'ipv4_only'
     return {'off': 'ipv4_only', 'prefer_ipv4': 'prefer_ipv4',
             'prefer_ipv6': 'prefer_ipv6'}.get((opts or {}).get('ipv6'), 'ipv4_only')
 
@@ -170,6 +177,15 @@ def check(key, value):
         text = str(value or '').strip()
         if text and (len(text) > kind[1] or not re.match(r'^https://[^\s/]+', text)):
             raise ValueError('an https:// address')
+        if text:
+            from urllib.parse import urlsplit
+            try:
+                parts = urlsplit(text)
+                parts.port  # noqa: B018 - raises for a port out of range
+            except ValueError:
+                raise ValueError('an https:// address with a port up to 65535') from None
+            if not parts.hostname:
+                raise ValueError('an https:// address')
         return text
     if name == 'domains':
         import split

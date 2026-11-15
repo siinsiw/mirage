@@ -114,7 +114,7 @@
       placeholder: 'https://1.1.1.1/dns-query' },
     { key: 'ipv6', screen: 'dns', type: 'choice',
       name: 'IPv6',
-      why: 'Off unless your line and the config both carry it.',
+      why: 'Off unless your line and the config both carry it. In Whole PC mode it stays off: the adapter carries IPv4 only.',
       choices: [['off', 'Off'], ['prefer_ipv4', 'Prefer IPv4'], ['prefer_ipv6', 'Prefer IPv6']] },
 
     { key: 'sub_auto_hours', screen: 'subs', type: 'int',
@@ -147,7 +147,7 @@
       choices: [['speed', 'Fastest first'], ['added', 'As added'], ['name', 'A–Z']] },
     { key: 'auto_interval', screen: 'tests', type: 'int', group: 'Fastest automatically',
       name: 'Check again every, minutes',
-      why: 'While connected with Fastest automatically, how often the group is timed again.' },
+      why: 'While connected with Fastest automatically, how often the group is timed again. Up to 30.' },
     { key: 'auto_tolerance', screen: 'tests', type: 'int',
       name: 'Move only if faster by, ms',
       why: 'So the connection does not hop between two that are nearly the same.' },

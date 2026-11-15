@@ -142,6 +142,9 @@ class Runner:
         self._poll_stop = threading.Event()
         self._poll = None
         self._prefs = None
+        # Whether a hold that is up now was raised by this section - a
+        # handoff held, or its connection dropped with the kill switch on.
+        self.owns_hold = False
 
     # -- this section's own settings -------------------------------------------
 
@@ -269,8 +272,9 @@ class Runner:
             progress({'phase': 'starting', 'country': '', 'city': cfg['name']})
             fragment = bool(opts.get('fragment'))
             mode = self.want_mode()
-            port = self.port if (self.port and mode == self.mode
-                                 and procs.port_free(self.port)) \
+            # The same port when it is free, whatever the mode was: a new
+            # one would leave whatever still points at the old one there.
+            port = self.port if (self.port and procs.port_free(self.port)) \
                 else self._pick_port()
             clash_port = procs.free_ports(1)[0]
             secret = procs.token()
@@ -317,8 +321,12 @@ class Runner:
                     if self.points_windows():
                         progress({'phase': 'routing'})
                         self.sysproxy.engage('127.0.0.1', port)
-                        if self.engine.tun.held_by_firewall():
-                            self.engine.tun.release_firewall()
+                    elif self.sysproxy.stashed():
+                        # Local port only: Windows is left alone - which
+                        # means put back, not left on the last one's port.
+                        self.sysproxy.restore()
+                    if self.engine.tun.held_by_firewall():
+                        self.engine.tun.release_firewall()
                     # An adapter still up for another port - Mirage's, held
                     # across the handoff, or this section's own from before a
                     # move off the whole-PC mode - is not this connection's,
@@ -334,12 +342,17 @@ class Runner:
                     if not procs.wait(_Never(), self.clash.up, 10):
                         raise RuntimeError('did-not-start: the adapter came up '
                                            'but sing-box did not answer')
+                    # The adapter carries everything now; a proxy setting the
+                    # connection before left pointed at its dead port goes.
+                    if self.sysproxy.stashed():
+                        self.sysproxy.restore()
             except Exception:
                 self.mode, self.port = mode, port
                 self._teardown(release=not held)
                 raise
 
             self.mode, self.port = mode, port
+            self.owns_hold = False
             self.group = group
             self.auto = bool(auto)
             self.current = 'auto' if auto else cid
@@ -450,6 +463,7 @@ class Runner:
 
     def _teardown(self, release=True):
         self._poll_stop.set()
+        self.owns_hold = not release
         if release and self.port:
             try:
                 if self.engine.tun.engaged_for(self.port):

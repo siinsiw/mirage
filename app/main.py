@@ -1153,8 +1153,7 @@ class Api:
         # The firewall hold is one, but a hold a config connection raised is
         # Configs' own kill switch's to let go of, not this one's.
         r = self._configs.runner
-        configs_hold = bool(r.port and not self._engine.engaged() and (
-            r.active() or r.engaged() or self._engine.tun.held_by_firewall()))
+        configs_hold = bool(r.owns_hold and not self._engine.engaged())
         if not on and not self._engine.running() and not configs_hold and (
                 self._engine.engaged()
                 or self._engine.tun.held_by_firewall()):

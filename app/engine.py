@@ -1618,6 +1618,14 @@ class Engine:
         adapter = self.set_system_proxy and self.route_with == 'tun'
         self.hand_split(adapter)
         if not self.set_system_proxy:
+            # Windows left alone - which means put back: not on a port the
+            # connection before this one held, nor under its adapter.
+            if self.sysproxy.stashed():
+                self.sysproxy.restore()
+            if self.tun.running() and not self.tun.engaged_for(self.port):
+                self.tun.stop()
+            if self.tun.held_by_firewall():
+                self.tun.release_firewall()
             return
         if adapter:
             if progress:
@@ -1643,6 +1651,10 @@ class Engine:
                 return
             self.tun.start(self.port, watch=watch, hold=self.kill_switch,
                            **want)
+            # The adapter carries everything now; a proxy setting a config
+            # connection held across the handoff goes.
+            if self.sysproxy.stashed():
+                self.sysproxy.restore()
         else:
             if progress:
                 progress({'phase': 'routing'})

@@ -184,6 +184,7 @@ def _section(r):
 def test_turning_the_kill_switch_off_while_held_lets_go():
     r = _proxy_runner()
     r.box.alive = False           # the program went; Windows still points here
+    r.owns_hold = True            # as watch_drop marks it
     assert r.blocked()
     s = _section(r)
     r._prefs['kill_switch'] = False
@@ -195,6 +196,7 @@ def test_turning_the_kill_switch_off_while_held_lets_go():
 def test_configs_own_kill_switch_turned_off_while_held_lets_go():
     r = _proxy_runner()
     r.box.alive = False           # held: nothing active, Windows still points here
+    r.owns_hold = True
     s = _section(r)
     sent = []
     s.owner._emit = lambda name, payload=None: sent.append(name)
@@ -203,6 +205,16 @@ def test_configs_own_kill_switch_turned_off_while_held_lets_go():
     assert s._apply_live(['kill_switch'], {'kill_switch': False}) is True
     assert not r.sysproxy.engaged_for(PORT) and not s.owner._holding
     assert sent == ['Disconnected']
+
+
+def test_a_hold_this_section_did_not_raise_is_not_let_go():
+    r = _proxy_runner()
+    r.box.alive = False
+    r.owns_hold = False           # Mirage's, say
+    s = _section(r)
+    r._prefs['kill_switch'] = False
+    assert not s.kill_switch_changed(False)
+    assert r.sysproxy.engaged_for(PORT)
 
 
 def test_turning_the_kill_switch_on_or_off_while_up_lets_nothing_go():

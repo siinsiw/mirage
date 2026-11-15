@@ -283,8 +283,8 @@ def build(configs, *, port, clash_port, clash_secret, selected=None,
         obs.append({'type': 'urltest', 'tag': AUTO,
                     'outbounds': tags[:max(1, int(auto_limit))],
                     'url': o.get('test_url') or TEST_URL,
-                    'interval': '%dm' % int(o.get('auto_interval') or 10),
-                    'tolerance': int(o.get('auto_tolerance', 50)),
+                    'interval': '%dm' % min(30, int(o.get('auto_interval') or 10)),
+                    'tolerance': max(1, int(o.get('auto_tolerance', 50))),
                     'idle_timeout': '30m',
                     'interrupt_exist_connections': True})
     obs.append({'type': 'selector', 'tag': PROXY, 'outbounds': members,
@@ -332,7 +332,7 @@ def build(configs, *, port, clash_port, clash_secret, selected=None,
         route['auto_detect_interface'] = True
     return {'log': log,
             'dns': {'servers': servers, 'rules': dns_rules,
-                    'final': 'dns-remote', 'strategy': _prefs.dns_strategy(opts)},
+                    'final': 'dns-remote', 'strategy': _prefs.dns_strategy(opts, tun)},
             'inbounds': inbounds, 'outbounds': obs, 'route': route,
             'experimental': _clash(clash_port, clash_secret)}
 
