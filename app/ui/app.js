@@ -396,7 +396,8 @@ function openPicker() {
   const began = performance.now();
   state.freeze = null;
   $('list').dataset.key = '';
-  maybeQuick();
+  // Nothing is tested on the way in: a test runs only on the row somebody
+  // presses the bolt on.
   $('search').value = '';
   $('searchMain').classList.remove('is-typed');
   $('pickAny').hidden = !state.picked || state.picked === 'auto';
@@ -2612,9 +2613,6 @@ function paintPrefs(info) {
     `${info.serverCount || 0} servers · ${state.countries.length} countries`;
   state.serverCount = info.serverCount || 0;
   state.tunnelReady = !!info.tunnelReady;
-  if (info.quickAt !== undefined) state.quickAt = info.quickAt || 0;
-  if (info.autoQuick !== undefined) state.autoQuick = info.autoQuick !== false;
-  paintQuick();
   $('aboutPaths').textContent = info.about || '';
 
   // Whether anything can connect at all. What is signed in as what is the
@@ -7429,58 +7427,6 @@ async function startReach(code) {
   said($('reachSaid'), `Asking ${r.total} in ${nameOf(code)}…`);
 }
 
-/* One exit per country, six at a time. By hand from Test all or Settings;
-   on its own when the list opens and the last run is over six hours old -
-   never with the tunnel up, where every time would be the tunnel's. */
-async function startQuick(auto) {
-  if (state.testing) {
-    if (state.testing === 'quick' && !auto) await window.pywebview.api.cancelReach();
-    return;
-  }
-  const r = await window.pywebview.api.quickTest();
-  if (!r.ok) {
-    if (!auto) {
-      said($('reachSaid'), r.error, 'bad');
-      said($('quickSaid'), r.error, 'bad');
-    }
-    return;
-  }
-  state.testing = 'quick';
-  paintTesting();
-  said($('reachSaid'), `Timing ${r.total} countries…`);
-}
-
-function maybeQuick() {
-  const stale = Date.now() / 1000 - (state.quickAt || 0) > 6 * 3600;
-  const up = state.mode === 'on' || state.mode === 'busy';
-  if (state.autoQuick !== false && stale && !state.testing && !up) startQuick(true);
-}
-
-/* Settings' Quick timing: when it last ran, whether it runs on its own. */
-function paintQuick() {
-  const pill = $('quickPill');
-  if (!pill) return;
-  const running = state.testing === 'quick';
-  const at = state.quickAt || 0;
-  const mins = at ? Math.floor((Date.now() / 1000 - at) / 60) : null;
-  pill.textContent = running ? 'timing'
-    : mins === null ? 'never'
-      : mins < 60 ? `${mins}m ago`
-        : mins < 1440 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 1440)}d ago`;
-  pill.dataset.state = running || (mins !== null && mins < 360) ? 'on' : 'off';
-  $('autoQuick').setAttribute('aria-checked', String(state.autoQuick !== false));
-  const run = $('quickRun');
-  run.textContent = running ? 'Stop' : 'Time every country';
-  run.disabled = !!state.testing && !running;
-}
-
-$('quickRun').addEventListener('click', () => startQuick(false));
-$('autoQuick').addEventListener('click', async () => {
-  state.autoQuick = state.autoQuick === false;
-  paintQuick();
-  await window.pywebview.api.setAutoQuick(state.autoQuick);
-});
-
 /* The bolt that is running, marked without rebuilding the list under the
    reader. Every other bolt goes quiet with it: a second press would only
    stop the first, and a row that looks pressable while it is not is worse
@@ -7494,7 +7440,6 @@ function paintTesting() {
       : 'Test the servers here');
     el.title = busy ? 'Stop' : 'Test these';
   }
-  paintQuick();
 }
 
 /* Each result as it lands, written straight onto the row it belongs to.
@@ -7572,17 +7517,6 @@ window.onReach = (p) => {
 };
 
 window.onReachDone = (r) => {
-  const quick = r.code === 'quick';
-  // A quick run over an open list keeps the list where it is: the order
-  // and which rows count as timed are taken now, before the new answers.
-  if (quick && r.ok && $('picker').open && !$('search').value.trim()) {
-    state.freeze = {
-      order: rows().map((x) => x.dataset.code)
-        .filter((code) => code && code !== 'auto' && !/[/:]/.test(code)),
-      tested: new Set((state.countries || []).filter((c) => c.tested).map((c) => c.code)),
-    };
-  }
-  if (quick && r.quickAt) state.quickAt = r.quickAt;
   state.testing = null;
   paintTesting();
   $('reachBar').style.setProperty('--at', '0%');
@@ -7593,7 +7527,7 @@ window.onReachDone = (r) => {
   // Named, because a run is now about one place and the line under the list
   // is the only thing that says which. "30 of 37 answered" over a list of
   // ninety countries is a sentence about nothing in particular.
-  const where = r.code && !quick ? ` in ${nameOf(r.code)}` : '';
+  const where = r.code ? ` in ${nameOf(r.code)}` : '';
   // A run where the exits turned the account away is not a run about the
   // exits, and "0 of 37 answered" reads as thirty-seven broken servers. The
   // same account is at every one of those addresses, so the count is one
@@ -7627,12 +7561,8 @@ window.onReachDone = (r) => {
         : refused
           ? `${answered} of ${r.tested} answered${where}. `
             + `${refused} turned these credentials away.`
-          : quick
-            ? `${answered} of ${r.tested} countries answered.`
-              + (state.freeze ? ' New times are in — press Fastest first to put them in order.' : '')
-            : `${answered} of ${r.tested} answered${where}.`,
+          : `${answered} of ${r.tested} answered${where}.`,
     answered ? 'good' : 'bad');
-  if (quick) said($('quickSaid'), `${answered} of ${r.tested} countries answered.`);
   // The list is rebuilt rather than patched: every row's order can change,
   // because answering ones sort above blocked ones.
   $('list').dataset.key = '';
@@ -7780,7 +7710,9 @@ async function toggleExits(code, after) {
       said_.append(bubble);
     }
 
-    row.append(sign, name, meta, said_);
+    // Its own bolt: one server is the smallest thing worth asking about,
+    // and with no test-all left, the only way to time just this one.
+    row.append(sign, name, meta, said_, testMark(`file:${x.file}`));
     box.append(row);
   }
   after.insertAdjacentElement('afterend', box);
