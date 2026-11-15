@@ -31,7 +31,8 @@ import split
 import tun
 import windscribe
 from sweep import CREATE_NO_WINDOW, _ps_array, _ps_string, discard, elevated
-from countries import aliases, canon, city_name, continent, country_name
+from countries import (aliases, canon, city_name, continent, country_name,
+                       listing_order)
 
 HERE = paths.APP_DIR
 ROOT = paths.DATA_DIR
@@ -659,6 +660,23 @@ class Engine:
             if s.seconds is not None and (c['best'] is None
                                           or s.seconds < c['best']):
                 c['best'] = s.seconds
+        # Windscribe's own order, countries and the cities inside them: the
+        # order its client shows, and the one people coming from it expect.
+        listed = windscribe.order()
+        place = listing_order(list(by_country), listed['countries'] or None)
+        city_at = {}
+        for cc, names in listed['cities'].items():
+            for i, name in enumerate(names):
+                city_at.setdefault((canon(cc), city_key(name)), i)
+
+        def city_rank(x):
+            # A city every exit of which was refused still goes to the
+            # bottom; the rest keep Windscribe's order, and cities it does
+            # not list follow A-Z.
+            at = city_at.get((x['country'], x['code']))
+            return (bool(x['tested'] and not x['ok']), at is None,
+                    at if at is not None else 0, x['name'])
+
         out = []
         for code, c in by_country.items():
             out.append({'code': code,
@@ -666,16 +684,12 @@ class Engine:
                         # Which group of the list it sits in.
                         'continent': continent(code),
                         'alias': aliases(code),
+                        # Where it goes in Windscribe's order.
+                        'order': place.get(code, float(len(place))),
                         'cities': len(c['cities']),
-                        # The cities themselves, quickest first, so that
-                        # opening a country shows the one worth taking at the
-                        # top rather than whichever is alphabetically first.
                         'cityList': sorted(
                             (v for k, v in cities.items() if k[0] == code),
-                            key=lambda x: (x['tested'] and not x['ok'],
-                                           x['ping'] is None,
-                                           x['ping'] if x['ping'] is not None
-                                           else 0, x['name'])),
+                            key=city_rank),
                         'count': c['count'],
                         'by': c['by'],
                         'tested': c['tested'],
@@ -685,22 +699,13 @@ class Engine:
                         'byTested': c['byTested'],
                         'byPing': c['byPing'],
                         'best': c['best']})
-        # Answering first, then quickest, then the rest.
-        #
-        # A country every one of whose addresses was refused belongs at the
-        # bottom whatever its name: it is the one thing about a list of
-        # places to connect through that is worth reordering for. Untested
-        # sits between the two - not known to be blocked, not known to be
-        # quick - and an unmeasured exit is still not a fast one.
-
-        def rank(c):
-            blocked = c['tested'] and not c['ok']
-            return (bool(blocked),
-                    c['ping'] is None,
-                    c['ping'] if c['ping'] is not None else 0,
-                    c['best'] is None, c['best'] or 0, c['name'])
-
-        out.sort(key=rank)
+        # Windscribe's order, with a country every one of whose addresses was
+        # refused at the bottom whatever its place: it is the one thing about
+        # a list of places to connect through that is worth reordering for.
+        # Nothing here is ranked by speed any more - a test runs only when
+        # someone asks for one, so most rows have no time to rank by.
+        out.sort(key=lambda c: (bool(c['tested'] and not c['ok']),
+                                c['order'], c['name']))
         return out
 
     # -- credentials -------------------------------------------------------

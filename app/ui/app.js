@@ -66,7 +66,7 @@ const state = {
   providers: null,      // which providers the exit list is drawn from
   testing: null,        // which row is being tested, if any
   favourites: [],       // picker codes kept at the top of the list
-  sortBy: 'ping',       // ping | name | load
+  sortBy: 'windscribe', // windscribe | ping | name | load
   openCities: new Set(),  // countries showing their cities
   openExits: null,      // which row has its individual exits showing
   exits: {},            // and those exits, once fetched, by that row's code
@@ -486,12 +486,12 @@ function drawList(query) {
     return;
   }
 
-  /* The sections, by what is useful rather than by geography - the question
-     here is "where do I connect", and the answer is rarely "which continent":
+  /* The sections:
        Starred        your own short list, first
-       Fastest now    the few quickest measured round trips (when two or more were timed)
-       All locations  everything else, in the order the sort chose
+       All locations  everything else, in Windscribe's order unless another sort was chosen
        Not answering  the places whose every exit turned the test away, at the foot
+     Nothing is ranked by speed unless the reader asks for it: a test runs only
+     on the row somebody presses, so there is no "fastest now" to show.
      A search is one list of results. Every section is open; an empty one is
      not drawn. */
   const groups = [];
@@ -502,21 +502,19 @@ function drawList(query) {
     const starred = found.filter(starredIn);
     if (starred.length) groups.push(['Starred', starred, 'Your short list']);
     const others = found.filter((c) => !starredIn(c));
-    const live = others.filter((c) => !deadHere(c));
-    const quick = live.filter((c) => c.tested && c.ok && c.ping !== null && c.ping !== undefined)
-      .sort((a, b) => a.ping - b.ping);
-    const fastest = quick.length >= 2 ? quick.slice(0, 4) : [];
-    if (fastest.length) groups.push(['Fastest now', fastest, 'The quickest round trips from here, just measured']);
-    const rest = live.filter((c) => !fastest.includes(c));
-    const said = ({ ping: 'Quickest first', load: 'Least busy first', name: 'A to Z' })[state.sortBy || 'ping'] || '';
-    if (rest.length) groups.push([fastest.length || starred.length ? 'All locations' : 'Locations', rest, said]);
+    const rest = others.filter((c) => !deadHere(c));
+    const said = ({
+      windscribe: 'In Windscribe’s order', ping: 'Quickest first',
+      load: 'Least busy first', name: 'A to Z',
+    })[state.sortBy || 'windscribe'] || '';
+    if (rest.length) groups.push([starred.length ? 'All locations' : 'Locations', rest, said]);
     const dead = others.filter(deadHere).sort((a, b) => a.name.localeCompare(b.name));
     if (dead.length) groups.push(['Not answering', dead, 'Their exits turned the last test away']);
   }
 
   // Fastest first is only honest about the countries that were timed; within
   // a group the rest go below their own heading, in alphabetical order.
-  const byPing = !q && (state.sortBy || 'ping') === 'ping';
+  const byPing = !q && state.sortBy === 'ping';
   const timed = (c) => (state.freeze ? state.freeze.tested.has(c.code) : !!c.tested);
 
   const jobs = [];
@@ -550,8 +548,8 @@ function drawList(query) {
 
     let ordered = items;
     let untimedAt = -1;
-    // Fastest now is already in order of its times; Not answering has none.
-    if (byPing && name !== 'Fastest now' && name !== 'Not answering') {
+    // Not answering has no times to order by.
+    if (byPing && name !== 'Not answering') {
       const yes = items.filter(timed);
       const no = items.filter((c) => !timed(c))
         .sort((a, b) => a.name.localeCompare(b.name));
@@ -7909,10 +7907,13 @@ async function toggleFavourite(code) {
    exit is not a good answer to "sort by name" either - and starred places
    come above everything, which is the whole point of starring one. */
 function sortCountries(list) {
-  const kind = state.sortBy || 'ping';
+  const kind = state.sortBy || 'windscribe';
   const dead = (c) => (c.tested && !c.ok ? 1 : 0);
   const fav = (c) => (starredIn(c) ? 0 : 1);
   const cmp = {
+    // Windscribe's own client's order, which the catalogue sends as `order`.
+    windscribe: (a, b) => (a.order ?? 1e6) - (b.order ?? 1e6)
+      || a.name.localeCompare(b.name),
     ping: (a, b) => (a.ping === null) - (b.ping === null)
       || (a.ping || 0) - (b.ping || 0) || a.name.localeCompare(b.name),
     name: (a, b) => a.name.localeCompare(b.name),
@@ -8085,7 +8086,7 @@ function buildCity(c, city, via) {
 
 function paintSort() {
   for (const b of $('sortBy').querySelectorAll('.pair__opt')) {
-    b.setAttribute('aria-selected', String(b.dataset.sort === (state.sortBy || 'ping')));
+    b.setAttribute('aria-selected', String(b.dataset.sort === (state.sortBy || 'windscribe')));
   }
   slideSort();
 }

@@ -148,6 +148,51 @@ def continent(code):
     return _CONTINENT_OF.get((code or '').lower(), 'Elsewhere')
 
 
+# The order Windscribe's own client lists its locations in, as its published
+# server list gave it on 2026-11-15. It is the order the picker keeps by
+# default. A fetch of that list writes the live order beside the configs
+# (windscribe.order()) and that wins; this is for a copy that has never
+# fetched one - a Surfshark-only account, or before the first setup.
+WINDSCRIBE_ORDER = (
+    'us', 'ca', 'at', 'be', 'bg', 'hr', 'cy', 'cz', 'dk', 'ee', 'fi', 'fr',
+    'de', 'gr', 'hu', 'is', 'ie', 'il', 'it', 'lv', 'lt', 'lu', 'md', 'nl',
+    'mk', 'no', 'pl', 'pt', 'ro', 'sk', 'es', 'se', 'ch', 'gb', 'al', 'ba',
+    'ge', 'in', 'ke', 'ng', 'ru', 'rs', 'si', 'za', 'tr', 'ua', 'au', 'nz',
+    'hk', 'id', 'jp', 'my', 'ph', 'sg', 'kr', 'tw', 'th', 'ae', 'vn', 'ar',
+    'br', 'cl', 'co', 'ec', 'sv', 'gt', 'mx', 'pa', 'py', 'pe', 'uy', 'aq')
+
+
+def listing_order(codes, order=None):
+    """Where each country goes in the list, as {code: position}.
+
+    Windscribe's order for the countries it has. A country only another
+    provider has goes in straight after the last Windscribe country of the
+    same part of the world - Qatar after the Emirates, Egypt after South
+    Africa - and A-Z among others slotted into the same place. One that
+    shares no part of the world with any of them goes at the end, A-Z.
+    """
+    order = [canon(c) for c in (order or WINDSCRIBE_ORDER)]
+    at = {}
+    for i, code in enumerate(order):
+        at.setdefault(code, i)
+    last_in = {}
+    for code, i in at.items():
+        last_in[continent(code)] = max(last_in.get(continent(code), -1), i)
+    others = sorted((c for c in codes if canon(c) not in at),
+                    key=lambda c: country_name(c))
+    pos = {}
+    for code in codes:
+        if canon(code) in at:
+            pos[code] = float(at[canon(code)])
+    end = len(order)
+    for n, code in enumerate(others, 1):
+        base = last_in.get(continent(code))
+        # Below the next whole place: up to a thousand slotted in after one
+        # country still sort among themselves and before the one after it.
+        pos[code] = (base if base is not None else end) + n / 1000.0
+    return pos
+
+
 def country_name(code):
     return NAMES.get((code or '').lower(), (code or '').upper())
 

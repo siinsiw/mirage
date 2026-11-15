@@ -518,6 +518,13 @@ class Api:
         self._tray = None
         self._busy = False
         self._settings = self._settings_early
+        # Once: the list now opens in Windscribe's order. A sort saved
+        # before that order existed was a default nobody chose, so it moves
+        # with it; one chosen afterwards stays.
+        if not self._settings.get('sortWs'):
+            self._settings['sortWs'] = True
+            self._settings['sortBy'] = 'windscribe'
+            save_settings(self._settings)
         self._since = None
         self._real_ip = None
         self._stop = threading.Event()
@@ -784,7 +791,7 @@ class Api:
                 'defaultPort': engine.DEFAULT_PORT,
                 'picked': self._settings.get('picked', 'auto'),
                 'favourites': self._settings.get('favourites') or [],
-                'sortBy': self._settings.get('sortBy', 'ping'),
+                'sortBy': self._settings.get('sortBy', 'windscribe'),
                 'quickAt': self._settings.get('quickAt', 0),
                 'autoQuick': self._settings.get('autoQuick', True),
                 'connected': bool(self._engine.running()),
@@ -2783,7 +2790,8 @@ class Api:
         """How the list is ordered. Answering-first stays underneath every
         one of them: a blocked exit is not a good answer to "sort by name"
         either."""
-        kind = kind if kind in ('ping', 'name', 'load') else 'ping'
+        kind = (kind if kind in ('windscribe', 'ping', 'name', 'load')
+                else 'windscribe')
         self._settings['sortBy'] = kind
         save_settings(self._settings)
         return {'ok': True, 'sortBy': kind}

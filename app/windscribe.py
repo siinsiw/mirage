@@ -102,6 +102,8 @@ CONFIG_DIR = os.path.join(paths.DATA_DIR, 'windscribe')
 # says what it was *like* when the list was fetched. Nothing breaks if it is
 # missing; the rows simply say less.
 META_PATH = os.path.join(paths.STATE_DIR, 'windscribe-meta.json')
+# The order the published list gave its countries and cities in.
+ORDER_PATH = os.path.join(paths.STATE_DIR, 'windscribe-order.json')
 
 # What marks a config as Windscribe's, in the filename and nowhere else. The
 # app decides two things from it - which credential to use, and whether a
@@ -800,6 +802,25 @@ def write_configs(dest=None, free_only=False, per_city=None):
     except OSError:
         pass
 
+    # The order the list came in, which is the order Windscribe's own client
+    # shows - countries, and the cities inside each. Kept apart from the
+    # notes, which are filed by config and read row by row.
+    countries, cities = [], {}
+    for s in fleet:
+        if s['country'] not in countries:
+            countries.append(s['country'])
+        names = cities.setdefault(s['country'], [])
+        if s['city'] not in names:
+            names.append(s['city'])
+    try:
+        os.makedirs(paths.STATE_DIR, exist_ok=True)
+        tmp = f'{ORDER_PATH}.{os.getpid()}'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'countries': countries, 'cities': cities}, f)
+        os.replace(tmp, ORDER_PATH)
+    except OSError:
+        pass
+
     # Nothing written, and nothing there from before: the next step would
     # only say "Nothing waiting in ..." without the reason, so this says it.
     if fleet and not written and not any(
@@ -846,6 +867,23 @@ def meta():
         return got if isinstance(got, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def order():
+    """The last fetched list's order: {'countries': [cc...], 'cities':
+    {cc: [city name...]}}, or empty lists when it has never been fetched."""
+    try:
+        with open(ORDER_PATH, encoding='utf-8') as f:
+            got = json.load(f)
+    except (OSError, ValueError):
+        got = None
+    if not isinstance(got, dict):
+        return {'countries': [], 'cities': {}}
+    countries = [c for c in got.get('countries') or [] if isinstance(c, str)]
+    cities = got.get('cities') if isinstance(got.get('cities'), dict) else {}
+    return {'countries': countries,
+            'cities': {k: [n for n in v if isinstance(n, str)]
+                       for k, v in cities.items() if isinstance(v, list)}}
 
 
 def verify_tunnel(px, ip, host, user, password, timeout=15):
