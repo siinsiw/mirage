@@ -63,6 +63,7 @@ if os.name == 'nt':
 # Held, never closed: the claim is the handle, and it lasts exactly as long
 # as this process does - Windows lets go of it however the process ends.
 _held = []
+_legacy = []
 
 
 def claim():
@@ -87,6 +88,13 @@ def claim():
         return True
     if not taken:
         _held.extend(h for h in (mutex, show) if h)
+        # The old Relay's names too, held by this copy: an old shortcut or a
+        # pinned Relay.exe then finds a copy already running and brings this
+        # one forward, instead of a second app with its hands on the proxy
+        # setting.
+        legacy_show = _CreateEventW(None, False, False, LEGACY_EVENT)
+        legacy_mutex = _CreateMutexW(None, False, LEGACY_MUTEX)
+        _legacy.extend(h for h in (legacy_mutex, legacy_show) if h)
         return True
 
     _CloseHandle(mutex)
@@ -118,15 +126,17 @@ def listen(on_show, stop):
     not hold the claim."""
     if len(_held) < 2:
         return
-    show = _held[1]
+    shows = [_held[1]] + _legacy[1:2]
 
     def wait():
         while not stop.is_set():
-            # A timeout rather than forever, so that stop is seen.
-            if _WaitForSingleObject(show, 500) == WAIT_OBJECT_0:
-                try:
-                    on_show()
-                except Exception:
-                    pass
+            # A timeout rather than forever, so that stop is seen; each
+            # event in turn - Mirage's own and the old Relay's.
+            for show in shows:
+                if _WaitForSingleObject(show, 250) == WAIT_OBJECT_0:
+                    try:
+                        on_show()
+                    except Exception:
+                        pass
 
     threading.Thread(target=wait, daemon=True).start()

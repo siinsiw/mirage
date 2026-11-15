@@ -190,6 +190,35 @@ def test_legacy_data_folder_moves():
         assert Path(paths.adopt_legacy_data(str(local))) == local / 'Mirage'
         assert (local / 'Mirage').is_dir() and not (local / 'Relay').exists()
 
+    with tempfile.TemporaryDirectory() as tmp:
+        # The old Relay still running: its folder is not moved from under it.
+        local = Path(tmp)
+        (local / 'Relay').mkdir()
+        spec = importlib.util.spec_from_file_location(
+            'mirage_paths_running', Path(__file__).with_name('paths.py'))
+        paths = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(paths)
+        paths._legacy_running = lambda: True
+        assert Path(paths.adopt_legacy_data(str(local))) == local / 'Relay'
+        assert (local / 'Relay').is_dir() and not (local / 'Mirage').exists()
+        paths._legacy_running = lambda: False
+        assert Path(paths.adopt_legacy_data(str(local))) == local / 'Mirage'
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Moved before, but a settings file still names the old folder (its
+        # rewrite failed once): it is put right on the next start.
+        local = Path(tmp)
+        (local / 'Mirage' / '.state').mkdir(parents=True)
+        stale = {'folder': str(local / 'Relay' / 'servers')}
+        (local / 'Mirage' / '.state' / 'settings.json').write_text(json.dumps(stale))
+        spec = importlib.util.spec_from_file_location(
+            'mirage_paths_retry', Path(__file__).with_name('paths.py'))
+        paths = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(paths)
+        assert Path(paths.adopt_legacy_data(str(local))) == local / 'Mirage'
+        got = json.loads((local / 'Mirage' / '.state' / 'settings.json').read_text())
+        assert got['folder'] == str(local / 'Mirage' / 'servers')
+
 
 if __name__ == '__main__':
     test_frozen_data_outside_install()

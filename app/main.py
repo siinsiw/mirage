@@ -3185,10 +3185,16 @@ class Api:
                                  f" {q(f'/etc/nginx/sites-{d}/{n}-{host}.conf')}"
                                  for n in ('mirage', 'relay')
                                  for d in ('enabled', 'available'))
-                             + " /etc/nginx/conf.d/mirage-api-limit.conf"
-                             " /etc/nginx/conf.d/relay-api-limit.conf"
-                             " /etc/letsencrypt/renewal-hooks/deploy/mirage-nginx-reload.sh"
-                             " /etc/letsencrypt/renewal-hooks/deploy/relay-nginx-reload.sh;"
+                             + ";"
+                             # The rate-limit zone and the renewal hook are
+                             # shared by every Mirage site on the box: they go
+                             # only when no site left still names the zone, or
+                             # nginx would refuse to load at its next restart.
+                             " for z in mirage relay; do"
+                             " grep -qs \"zone=${z}_api\" /etc/nginx/sites-enabled/*"
+                             " || rm -f \"/etc/nginx/conf.d/${z}-api-limit.conf\""
+                             " \"/etc/letsencrypt/renewal-hooks/deploy/${z}-nginx-reload.sh\";"
+                             " done;"
                              " rm -rf /etc/gost /etc/sing-box /etc/mirage /opt/mirage"
                              " /etc/relay /opt/relay;"
                              " systemctl daemon-reload; systemctl reload nginx;"

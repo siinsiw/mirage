@@ -65,7 +65,7 @@ def _repoint(record, old, new):
 
 
 def adopt_legacy_data(local):
-    """The data folder under `local` (LocalAppData), moving the old one in.
+    r"""The data folder under `local` (LocalAppData), moving the old one in.
 
     Mirage was called Relay, and so was its folder. On the first start after
     the rename %LOCALAPPDATA%\Relay is renamed to %LOCALAPPDATA%\Mirage -
@@ -83,13 +83,47 @@ def adopt_legacy_data(local):
     """
     new = os.path.join(local, DATA_NAME)
     old = os.path.join(local, LEGACY_DATA_NAME)
+    if os.path.isdir(new):
+        # Moved already - but a rewrite below that failed once (a settings
+        # file held by an antivirus scan) is tried again on every start.
+        _repoint_state(new, old)
+        return new
     if os.path.lexists(new) or not os.path.isdir(old):
         return new
+    # The old Relay still running: its folder is not moved out from under
+    # it. This copy only lives long enough to bring that window forward
+    # (oneinstance), and the move happens on the first start without it.
+    if _legacy_running():
+        return old
     try:
         os.rename(old, new)
     except OSError:
         # Another copy starting at the same moment may have won the move.
         return new if os.path.isdir(new) else old
+    _repoint_state(new, old)
+    return new
+
+
+def _legacy_running():
+    """Whether the old Relay.exe holds its single-instance claim now."""
+    if os.name != 'nt':
+        return False
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.OpenMutexW.restype = ctypes.c_void_p
+        h = k32.OpenMutexW(0x00100000, False, r'Local\Relay.SingleInstance')
+        if h:
+            k32.CloseHandle(ctypes.c_void_p(h))
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _repoint_state(new, old):
+    """Point the settings and the set-aside index at the new folder where
+    they still name the old one. Quiet, and done again next time if not."""
     state = os.path.join(new, '.state')
     for name in ('settings.json', 'settings.json.bak', 'dropped.json'):
         target = os.path.join(state, name)
@@ -105,7 +139,6 @@ def adopt_legacy_data(local):
             os.replace(tmp, target)
         except (OSError, ValueError, TypeError):
             continue
-    return new
 
 
 if FROZEN:

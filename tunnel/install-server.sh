@@ -79,9 +79,9 @@
 #
 # A server set up when the app was still called Relay is moved over by running
 # this again: /etc/relay and /opt/relay become /etc/mirage and /opt/mirage with
-# every password, id and certificate kept, the relay-* nginx sites and any
-# relay-* units give way to mirage-* ones, and /etc/relay stays behind as a
-# link to /etc/mirage for anything that still reads the old path.
+# every password, id and certificate kept, the relay-* nginx sites it wrote
+# give way to mirage-* ones, and /etc/relay stays behind as a link to
+# /etc/mirage for anything that still reads the old path.
 set -euo pipefail
 # Everything this writes - the passwords, the gost and sing-box configs, the
 # key - is a secret, so nothing is ever created readable by others, not even
@@ -295,6 +295,14 @@ if ! id -u "$RUNAS" >/dev/null 2>&1; then
   useradd --system --user-group --no-create-home --home-dir /nonexistent \
     --shell /usr/sbin/nologin "$RUNAS"
 fi
+# A server set up under the old name runs gost and sing-box as ${OLD_RUNAS}
+# until the units are rewritten and restarted near the end. The folders go to
+# group ${RUNAS} below, so ${OLD_RUNAS} joins that group meanwhile: if this run
+# stops anywhere in between, a reboot still finds services that can read their
+# configuration. The account itself goes once nothing runs as it any more.
+if [ "$OLD_RUNAS" != "$RUNAS" ] && id -u "$OLD_RUNAS" >/dev/null 2>&1; then
+  usermod -aG "$RUNAS" "$OLD_RUNAS" >/dev/null 2>&1 || true
+fi
 
 # certbot renews on its own timer but nothing told nginx, which kept serving
 # the old certificate until something else reloaded it. Only nginx reads the
@@ -348,49 +356,43 @@ migrate_dir() {  # $1 = old, $2 = new, $3 = keep | drop
 say "moving Relay's files to Mirage, if any"
 if [ -d /etc/relay ] && [ ! -L /etc/relay ]; then
   migrate_dir /etc/relay /etc/mirage keep
-fi
-if [ ! -e /etc/relay ] && [ -d /etc/mirage ]; then
-  # Moved just now (or the link was deleted since): whatever still reads the
-  # old path - a person following an old note, an older app - finds the same
-  # files there. Nothing is ever written through it by this script.
-  ln -s /etc/mirage /etc/relay
+  # Moved just now: whatever still reads the old path - a person following
+  # an old note, an older app - finds the same files there. Only on a server
+  # that had the old folder; a new one never gets the old name. Nothing is
+  # ever written through it by this script.
+  if [ ! -e /etc/relay ] && [ ! -L /etc/relay ] && [ -d /etc/mirage ]; then
+    ln -s /etc/mirage /etc/relay
+  fi
 fi
 migrate_dir /opt/relay /opt/mirage drop
-# Units this script never wrote itself, but if anything named relay-* is
-# there it belonged to the old name: stopped, disabled and removed before the
-# new ones go in.
-UNITS_GONE=0
-for u in /etc/systemd/system/relay-*; do
-  [ -e "$u" ] || [ -L "$u" ] || continue
-  case "$u" in
-    *.service|*.timer|*.socket|*.path)
-      systemctl disable --now "${u##*/}" >/dev/null 2>&1 || true ;;
-  esac
-  rm -rf "$u"
-  echo "  removed unit ${u##*/}"
-  UNITS_GONE=1
-done
-if [ "$UNITS_GONE" = 1 ]; then systemctl daemon-reload; fi
+# No systemd units to move: this script's units were always gost.service and
+# sing-box.service, rewritten below. Anything else named relay-* on the box is
+# somebody else's and is left alone.
 # nginx sites relay-<host>.conf become mirage-<host>.conf: for this host the
 # file is written again further down; for any other host on the box it is the
 # same site under the new name, pointed at the new rate-limit zone and the
 # new certificate path. Enabled stays enabled.
+# Only sites this installer wrote move - they carry its rate-limit zone,
+# zone=relay_api; a relay-*.conf without it is somebody else's and stays.
 for f in /etc/nginx/sites-available/relay-*.conf /etc/nginx/sites-enabled/relay-*.conf; do
-  [ -e "$f" ] || [ -L "$f" ] || continue
+  [ -f "$f" ] && [ ! -L "$f" ] && grep -q 'zone=relay_api' "$f" || continue
   dir="${f%/*}" base="${f##*/relay-}"
-  if [ -f "$f" ] && [ ! -L "$f" ] && [ ! -e "$dir/mirage-$base" ]; then
+  if [ ! -e "$dir/mirage-$base" ]; then
     sed -e 's/zone=relay_api/zone=mirage_api/g' -e 's#/etc/relay/#/etc/mirage/#g' \
       "$f" > "$dir/mirage-$base"
     chmod 644 "$dir/mirage-$base"
-    if [ "$dir" = /etc/nginx/sites-available ] \
-        && { [ -e "/etc/nginx/sites-enabled/relay-$base" ] || [ -L "/etc/nginx/sites-enabled/relay-$base" ]; }; then
+  fi
+  if [ "$dir" = /etc/nginx/sites-available ]; then
+    enabled="/etc/nginx/sites-enabled/relay-$base"
+    if [ -L "$enabled" ] && [ "$(readlink -f "$enabled")" = "$(readlink -f "$f")" ]; then
       ln -sf "$dir/mirage-$base" /etc/nginx/sites-enabled/
+      rm -f "$enabled"
     fi
   fi
   rm -f "$f"
   echo "  nginx: ${f} removed, ${dir}/mirage-${base} in its place"
 done
-unset dir base
+unset dir base enabled
 # The API's rate limit (see the site below) lives in conf.d, read once inside
 # http {}, so a second Mirage site on the same box does not declare it twice.
 # Written here, before nginx is first asked to check anything, because a site
