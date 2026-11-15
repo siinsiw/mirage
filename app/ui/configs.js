@@ -20,7 +20,13 @@
     testing: null,      // {done, total} while a test runs
     fresh: true,        // animate rows in on the next draw
     mine: false,        // a connect started here, until the line is down again
+    by: 'country',      // the list by country, or by where it came from ('group')
+    open: new Set(),    // the countries whose configs are shown
+    opened: false,      // whether the picked country was opened yet
   };
+  try {
+    if (localStorage.getItem('cfgView') === 'group') view.by = 'group';
+  } catch (e) { /* storage refused: by country */ }
 
   const WARN = {
     plain: ['No encryption', 'Nothing encrypts this on the way to the server; anyone on the line can read it.'],
@@ -127,13 +133,10 @@
     if (current) r.dataset.on = '1';
     if (view.list.selected === c.id) r.dataset.picked = '1';
 
-    const flag = el('span', 'cfg__flag');
-    const cc = c.last && c.last.country;
-    if (cc) flag.style.backgroundImage = flagUrl(canonCode(cc));
-    r.appendChild(flag);
+    r.appendChild(flagOf(c));
 
     const main = el('span', 'cfg__main');
-    const name = el('span', 'cfg__name', c.name);
+    const name = el('span', 'cfg__name', shownName(c));
     name.dir = 'auto';
     main.appendChild(name);
     const meta = el('span', 'cfg__meta');
@@ -167,6 +170,30 @@
     more.appendChild(icon('chev-down'));
     r.appendChild(more);
     return r;
+  }
+
+  /* The name as shown beside its flag: a flag emoji in it goes, since the
+     flag is drawn already - and Windows has no flag emoji, so it would read
+     as two stray capitals ("DE Frankfurt"). The name kept is untouched. */
+  function shownName(c) {
+    const plain = String(c.name || '').replace(/[\u{1F1E6}-\u{1F1FF}]{2}\s*/gu, '').trim();
+    return plain || c.name;
+  }
+
+  /* The flag a row carries: the tested exit's, or - before any test - the
+     one its name gives, a shade quieter and said to be a guess. */
+  function flagOf(c) {
+    const flag = el('span', 'cfg__flag');
+    if (c.country) {
+      flag.style.backgroundImage = flagUrl(canonCode(c.country));
+      if (c.countryFrom === 'name') {
+        flag.dataset.guess = '1';
+        flag.title = `${c.countryName} - from its name; a test reads the real exit`;
+      } else {
+        flag.title = c.countryName;
+      }
+    }
+    return flag;
   }
 
   function actions(c) {
@@ -276,13 +303,143 @@
     return head;
   }
 
+  /* ------------------------------------------------------ by country */
+
+  /* Countries as Mirage's own list has them: one card each, the fastest
+     time of its configs, a Connect that takes the fastest of them, and the
+     configs inside when it is opened. Configs whose name gives no country
+     and that were never tested go last, under "Country not known". */
+  function countries(list) {
+    const by = new Map();
+    for (const c of list.configs) {
+      const cc = c.country || '';
+      if (!by.has(cc)) by.set(cc, { code: cc, name: c.countryName || 'Country not known', rows: [] });
+      by.get(cc).rows.push(c);
+    }
+    const out = [...by.values()];
+    for (const k of out) {
+      const ok = k.rows.filter((c) => c.last && c.last.ms);
+      k.best = ok.length ? Math.min(...ok.map((c) => c.last.ms)) : 0;
+      k.tested = k.rows.filter((c) => c.last).length;
+      k.dead = k.tested === k.rows.length && !ok.length;
+      k.rows.sort((a, b) => ((a.last && a.last.ms) || 1e9) - ((b.last && b.last.ms) || 1e9));
+    }
+    out.sort((a, b) => {
+      if (!a.code !== !b.code) return a.code ? -1 : 1;
+      if (a.dead !== b.dead) return a.dead ? 1 : -1;
+      if (a.best !== b.best) {
+        if (!a.best) return 1;
+        if (!b.best) return -1;
+        return a.best - b.best;
+      }
+      return a.name.localeCompare(b.name);
+    });
+    return out;
+  }
+
+  function countryCard(k, n) {
+    const list = view.list;
+    const live = list.live || {};
+    const card = el('div', 'cfgc');
+    card.dataset.cc = k.code;
+    card.style.setProperty('--i', String(Math.min(n, 30)));
+    const on = !!live.on && (live.country
+      ? live.country === k.code
+      : k.rows.some((c) => c.id === (live.using || live.current)));
+    if (on) card.dataset.on = '1';
+    if (!live.on && list.country && list.country === k.code) card.dataset.picked = '1';
+    const open = view.open.has(k.code);
+    card.dataset.open = open ? '1' : '0';
+    if (k.dead) card.dataset.dead = '1';
+
+    const head = el('button', 'cfgc__head');
+    head.type = 'button';
+    head.setAttribute('aria-expanded', String(open));
+    const flag = el('span', 'cfgc__flag');
+    if (k.code) flag.style.backgroundImage = flagUrl(canonCode(k.code));
+    else flag.appendChild(icon('globe'));
+    head.appendChild(flag);
+    const text = el('span', 'cfgc__text');
+    text.appendChild(el('span', 'cfgc__name', k.name));
+    const bits = [`${k.rows.length} config${k.rows.length === 1 ? '' : 's'}`];
+    if (k.dead) bits.push('none answered');
+    else if (k.tested < k.rows.length) {
+      bits.push(k.tested ? `${k.rows.length - k.tested} not tested` : 'not tested');
+    }
+    text.appendChild(el('span', 'cfgc__meta', bits.join(' · ')));
+    head.appendChild(text);
+    const ms = el('span', 'cfg__ms cfgc__ms');
+    if (k.best) {
+      ms.textContent = `${k.best} ms`;
+      ms.dataset.q = k.best < 300 ? 'fast' : (k.best < 900 ? 'fair' : 'slow');
+    } else {
+      ms.textContent = k.dead ? 'failed' : '—';
+      ms.dataset.q = k.dead ? 'fail' : 'none';
+    }
+    head.appendChild(ms);
+    const chev = icon('chev-down');
+    chev.classList.add('cfgc__chev');
+    head.appendChild(chev);
+    card.appendChild(head);
+
+    if (k.code) {
+      const go = el('button', 'cfgc__go', on ? 'Connected' : 'Connect');
+      go.type = 'button';
+      go.dataset.state = on ? 'on' : 'off';
+      go.title = `The fastest of the ${k.rows.length} in ${k.name}, moving on when one stops answering`;
+      card.appendChild(go);
+    }
+    if (open) {
+      const inner = el('div', 'cfgc__in');
+      k.rows.forEach((c, i) => {
+        inner.appendChild(row(c, i));
+        if (view.expanded === c.id) inner.appendChild(actions(c));
+      });
+      card.appendChild(inner);
+    }
+    return card;
+  }
+
+  /* The country in use, or picked, or the picked config's - or null. */
+  function homeCountry(list) {
+    const live = list.live || {};
+    if (live.on && live.country) return live.country;
+    if (!live.on && list.country) return list.country;
+    const c = find(live.on ? (live.using || live.current) : list.selected);
+    return c ? (c.country || '') : null;
+  }
+
+  function drawCountries(list, host) {
+    const ks = countries(list);
+    if (!view.opened) {
+      // The country in use, or picked, opens itself once per visit.
+      view.opened = true;
+      const cc = homeCountry(list);
+      if (cc !== null && ks.some((k) => k.code === cc)) view.open.add(cc);
+    }
+    // Each subscription keeps its own line here too - how much is left, and
+    // its update and remove - so none is only reachable from the other view,
+    // and one whose fetch failed is not a blank list.
+    for (const g of list.groups) {
+      if (g.kind !== 'sub') continue;
+      host.appendChild(groupHead(g, list.configs.filter((c) => c.group === g.id)));
+    }
+    ks.forEach((k, n) => host.appendChild(countryCard(k, n)));
+    return list.configs.length;
+  }
+
   function draw(list) {
     if (!list) return;
     view.list = list;
     const host = $('cfgList');
     host.textContent = '';
+    host.dataset.by = view.by;
+    for (const b of $('cfgView').querySelectorAll('.cfgview__opt')) {
+      b.setAttribute('aria-selected', String(b.dataset.view === view.by));
+    }
     let n = 0;
-    for (const g of list.groups) {
+    if (view.by === 'country') n = drawCountries(list, host);
+    else for (const g of list.groups) {
       const members = list.configs.filter((c) => c.group === g.id);
       if (g.kind === 'manual' && !members.length) continue;
       host.appendChild(groupHead(g, members));
@@ -301,7 +458,15 @@
         + 'subscription address your seller gave you.'));
       host.appendChild(empty);
     }
-    $('cfgAuto').setAttribute('aria-checked', list.auto ? 'true' : 'false');
+    // A country is always the fastest of its configs: the switch says so and
+    // holds, rather than offering a choice that would leave the country.
+    const byCountry = (list.live && list.live.on) ? !!list.live.country : !!list.country;
+    const auto = $('cfgAuto');
+    auto.setAttribute('aria-checked', (list.auto || byCountry) ? 'true' : 'false');
+    auto.disabled = byCountry;
+    auto.closest('.cfgsw').title = byCountry
+      ? 'A country always uses the fastest of its configs'
+      : 'Moves to the next when one stops answering';
     if (list.engines && !list.engines.singbox) {
       say('sing-box.exe is not beside Mirage, so configs cannot connect or be tested.', true);
     }
@@ -344,12 +509,24 @@
       || ($('status').textContent || 'Not connected');
     $('cfgState').textContent = word;
     $('cfgClock').textContent = hs === 'on' && state.since
-      ? clockText(Date.now() / 1000 - state.since) : '';
+      ? clockText(Date.now() / 1000 - state.since) : '00:00:00';
+    if (hs !== 'on') paintFlux(null);
+    // A country picked, or connected, as a whole.
+    const cc = live.on ? live.country : view.list.country;
+    const members = cc ? view.list.configs.filter((x) => x.country === cc) : [];
     const flag = $('cfgNowFlag');
-    const cc = c && c.last && c.last.country;
-    flag.style.backgroundImage = cc ? flagUrl(canonCode(cc)) : '';
-    if (c) {
-      $('cfgNowName').textContent = (live.on && live.auto ? 'Fastest · ' : '') + c.name;
+    const fc = cc || (c && c.country);
+    flag.style.backgroundImage = fc ? flagUrl(canonCode(fc)) : '';
+    if (cc && members.length) {
+      $('cfgNowName').textContent = members[0].countryName || cc.toUpperCase();
+      const best = members.filter((x) => x.last && x.last.ms).map((x) => x.last.ms);
+      $('cfgNowSub').textContent = hs === 'busy'
+        ? ($('statusWhere').textContent || '').trim() || 'Starting'
+        : (live.on && c
+          ? `Fastest now: ${shownName(c)}`
+          : `Fastest of ${members.length}${best.length ? ` · best ${Math.min(...best)} ms` : ''}`);
+    } else if (c) {
+      $('cfgNowName').textContent = (live.on && live.auto ? 'Fastest · ' : '') + shownName(c);
       const r = c.last;
       const t = !r ? 'not tested' : r.ms ? `${r.ms} ms` : (FAIL[r.error] || 'failed');
       $('cfgNowSub').textContent = hs === 'busy'
@@ -357,13 +534,13 @@
         : `${c.label} · ${t}`;
     } else {
       $('cfgNowName').textContent = view.list.configs.length ? 'No config picked' : 'No configs yet';
-      $('cfgNowSub').textContent = view.list.configs.length ? 'Pick one below' : 'Paste links or add a subscription below';
+      $('cfgNowSub').textContent = view.list.configs.length ? 'Pick a country below' : 'Press Add to paste links or a subscription';
     }
     $('cfgTun').setAttribute('aria-checked', view.list.mode === 'tun' ? 'true' : 'false');
     const go = $('cfgGo');
     go.dataset.mode = hs === 'fail' ? 'off' : (hs === 'held' ? 'on' : hs);
     // Busy with a connect that is not this section's: wait for it.
-    go.disabled = (hs === 'off' && (!c || state.mode === 'busy'));
+    go.disabled = (hs === 'off' && ((!c && !members.length) || state.mode === 'busy'));
     const provider = !live.on && (state.mode === 'on' || (state.mode === 'busy' && !view.mine));
     $('cfgNote').textContent = hs === 'held'
       ? 'The connection dropped and the kill switch is holding: nothing leaves on your normal line. Disconnect to use it again, or pick a config to reconnect.'
@@ -379,7 +556,7 @@
      asked for less motion. */
   function reveal(host) {
     if (!window.gsap) return;
-    const rows = Array.from(host.querySelectorAll('.cfg, .cfggroup')).slice(0, 30);
+    const rows = Array.from(host.querySelectorAll('.cfg, .cfggroup, .cfgc')).slice(0, 30);
     if (!rows.length) return;
     const mm = window.gsap.matchMedia();
     mm.add('(prefers-reduced-motion: no-preference)', () => {
@@ -428,6 +605,35 @@
     }
   }
 
+  /* A country's Connect: the fastest of its configs, moving on when one
+     stops answering - Mirage's own list connects a country the same way. */
+  async function connectCountry(cc) {
+    if (!cc || state.mode === 'busy') return;
+    const live = view.list.live || {};
+    if (live.on && live.country === cc) return;
+    const members = view.list.configs.filter((c) => c.country === cc);
+    if (!members.length) return;
+    // The same question a single config without encryption gets: the race
+    // may well land on it.
+    const plain = members.filter((c) => (c.warnings || []).includes('plain'));
+    if (plain.length && !(await ask(
+      `${plain.length} of the ${members.length} configs in ${members[0].countryName} send `
+      + 'your traffic without any encryption, and the fastest may be one of them. '
+      + 'Anyone on the line in between could read it. Connect anyway?', 'Connect anyway'))) return;
+    view.mine = true;
+    state.mode = 'busy';
+    render();
+    setStatus('Connecting', 'busy', `The fastest in ${members[0].countryName}`, '');
+    setHint('');
+    const r = await call('connect', { country: cc });
+    if (!r.ok) {
+      state.mode = 'off';
+      view.mine = false;
+      render();
+      say(r.error, true);
+    }
+  }
+
   /* A row pressed: with this section's connection up, it moves there (live,
      within a group); otherwise it becomes the one Connect will use. */
   async function choose(id) {
@@ -458,7 +664,8 @@
       refresh();
       return;
     }
-    if (view.list && view.list.selected) connectTo(view.list.selected);
+    if (view.list && view.list.country) connectCountry(view.list.country);
+    else if (view.list && view.list.selected) connectTo(view.list.selected);
   });
 
   async function test(what) {
@@ -522,7 +729,9 @@
         const c = find(e.id);
         if (c) r.querySelector('.cfg__ms').replaceWith(msCell(c, e.result));
         if (e.result.country) {
-          r.querySelector('.cfg__flag').style.backgroundImage = flagUrl(canonCode(e.result.country));
+          const f = r.querySelector('.cfg__flag');
+          f.style.backgroundImage = flagUrl(canonCode(e.result.country));
+          delete f.dataset.guess;
         }
       }
     }
@@ -551,6 +760,8 @@
   window.cfgSection = {
     opened() {
       view.fresh = true;
+      view.opened = false;
+      view.open.clear();
       view.expanded = null;
       view.renaming = null;
       say('');
@@ -574,13 +785,117 @@
     },
   };
 
-  $('cfgPaste').addEventListener('click', () => addLinks());
+  /* ------------------------------------------------------ the Add menu */
+
+  const calmMenu = matchMedia('(prefers-reduced-motion: reduce)');
+  function addMenu(open) {
+    const menu = $('cfgAddMenu');
+    const btn = $('cfgAddOpen');
+    const want = open === undefined ? menu.hidden : open;
+    if (!want && menu.hidden) return;
+    btn.setAttribute('aria-expanded', String(want));
+    if (!want) { menu.hidden = true; return; }
+    menu.hidden = false;
+    if (window.gsap && !calmMenu.matches) {
+      window.gsap.fromTo(menu, { opacity: 0, y: -4, scale: 0.98 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.16, ease: 'power2.out',
+          clearProps: 'transform,opacity' });
+    }
+    menu.querySelector('.cfgadd__item').focus();
+  }
+  $('cfgAddOpen').addEventListener('click', (e) => { e.stopPropagation(); addMenu(); });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.cfgadd')) addMenu(false);
+  });
+  $('cfgAddMenu').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      addMenu(false);
+      $('cfgAddOpen').focus();
+      return;
+    }
+    // A menu's own keys: up and down move between its three, wrapping.
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const items = [...$('cfgAddMenu').querySelectorAll('.cfgadd__item')];
+      const at = items.indexOf(document.activeElement);
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      items[(at + step + items.length) % items.length].focus();
+    }
+  });
+
+  $('cfgPaste').addEventListener('click', () => { addMenu(false); addLinks(); });
+  $('cfgPasteHand').addEventListener('click', () => {
+    addMenu(false);
+    $('cfgSubForm').hidden = true;
+    $('cfgSubShow').setAttribute('aria-expanded', 'false');
+    $('cfgPasteForm').hidden = false;
+    $('cfgPasteText').focus();
+  });
+
+  /* The home's place card: down to the list, with the country it names
+     opened. */
+  $('cfgLoc').addEventListener('click', () => {
+    const list = view.list;
+    if (!list) return;
+    const cc = homeCountry(list);
+    let target = $('cfgList');
+    if (view.by === 'country' && cc !== null) {
+      view.open.add(cc);
+      draw(list);
+      target = $('cfgList').querySelector(`.cfgc[data-cc="${CSS.escape(cc)}"]`) || target;
+    }
+    target.scrollIntoView({ block: 'start',
+      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  });
+
+  $('cfgView').addEventListener('click', (e) => {
+    const b = e.target.closest('.cfgview__opt');
+    if (!b || b.dataset.view === view.by) return;
+    view.by = b.dataset.view;
+    try { localStorage.setItem('cfgView', view.by); } catch (err) { /* this run only */ }
+    view.fresh = true;
+    draw(view.list);
+  });
+
+  /* ---------------------------------------------------------- the speed */
+
+  const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+  function parts(n) {
+    let v = Math.max(0, n || 0);
+    let u = 0;
+    while (v >= 1024 && u < UNITS.length - 1) { v /= 1024; u += 1; }
+    return [v.toFixed(u === 0 ? 0 : (v >= 100 ? 0 : (v >= 10 ? 1 : 2))), UNITS[u]];
+  }
+  /* The figures the home's meter and the one over the top of the screen
+     show, from the same reading; dimmed to zero while nothing is up. */
+  function paintFlux(t) {
+    const live = !!(t && t.live);
+    $('cfgFlux').dataset.live = live ? '1' : '0';
+    const put = (id, n, rate) => {
+      const [v, u] = parts(live ? n : 0);
+      $(id).textContent = v;
+      $(`${id}U`).textContent = rate ? `${u}/s` : u;
+    };
+    put('cfgDownRate', t && t.downRate, true);
+    put('cfgUpRate', t && t.upRate, true);
+    put('cfgDownSum', t && t.down, false);
+    put('cfgUpSum', t && t.up, false);
+  }
+  const homeTraffic = window.onTraffic;
+  window.onTraffic = (t) => {
+    if (typeof homeTraffic === 'function') homeTraffic(t);
+    if ($('configsDlg').open) paintFlux(t && t.live && heroState() === 'on' ? t : null);
+  };
   $('cfgPasteForm').addEventListener('submit', (e) => {
     e.preventDefault();
     addLinks($('cfgPasteText').value);
   });
 
   $('cfgSubShow').addEventListener('click', () => {
+    addMenu(false);
+    $('cfgPasteForm').hidden = true;
     const f = $('cfgSubForm');
     f.hidden = !f.hidden;
     $('cfgSubShow').setAttribute('aria-expanded', f.hidden ? 'false' : 'true');
@@ -604,6 +919,7 @@
 
   $('cfgAuto').addEventListener('click', async () => {
     const b = $('cfgAuto');
+    if (b.disabled) return;
     const on = b.getAttribute('aria-checked') !== 'true';
     b.setAttribute('aria-checked', on ? 'true' : 'false');
     const live = (view.list && view.list.live) || {};
@@ -622,6 +938,17 @@
   });
 
   $('cfgList').addEventListener('click', (e) => {
+    const card = e.target.closest('.cfgc');
+    if (card && e.target.closest('.cfgc__go')) {
+      connectCountry(card.dataset.cc);
+      return;
+    }
+    if (card && e.target.closest('.cfgc__head')) {
+      const cc = card.dataset.cc;
+      if (view.open.has(cc)) view.open.delete(cc); else view.open.add(cc);
+      draw(view.list);
+      return;
+    }
     const more = e.target.closest('.cfg__more');
     const r = e.target.closest('.cfg');
     if (!r) return;

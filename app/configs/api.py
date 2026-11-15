@@ -20,6 +20,7 @@ import time
 import traceback
 
 import paths
+import split
 
 from . import links, prefs, probe, runner, store, subs
 
@@ -109,6 +110,7 @@ class Section:
         r = self.runner
         out['live'] = {'on': r.alive(), 'current': r.current,
                        'auto': r.auto, 'using': r.now_using() if r.alive() else None,
+                       'country': r.country if r.alive() else '',
                        'blocked': r.blocked() if r.port else False}
         out['testing'] = self._cancel is not None
         return out
@@ -166,14 +168,65 @@ class Section:
                 'reconnect': self.runner.alive()}
 
     def do_pick(self, p):
-        """The one Connect will use, without connecting."""
+        """The one Connect will use, without connecting: a config ({id}),
+        or a country as a whole ({country}) - the fastest of its configs."""
+        country = str(p.get('country') or '').lower()
+        if country:
+            rows = store.in_country(country)
+            if not rows:
+                raise ValueError('no config is filed under that country')
+            store.set_option('selected', rows[0]['id'])
+            store.set_option('country', country)
+            return {'list': self._listing()}
         cid = str(p.get('id') or '')
         if not store.find(cid):
             raise ValueError('that config is not there any more')
         store.set_option('selected', cid)
+        store.set_option('country', '')
         return {'list': self._listing()}
 
     # -- the section's own settings ------------------------------------------
+
+    # -- split tunnelling, edited with Mirage's own pane ----------------------
+
+    def do_split(self, p):
+        """This section's split, in the shape Mirage's split pane reads, with
+        the counts of the Iranian lists it ships."""
+        values = store.settings()
+        return {'split': split.clean(prefs.split_of(values))[0],
+                'splitLists': split.iran_counts(),
+                'routeWith': 'tun' if values.get('mode') == 'tun' else 'proxy',
+                'live': self.runner.alive()}
+
+    def do_setSplit(self, p):
+        """The pane's Apply. Cleaned as Mirage's own is, and what could not be
+        a rule handed back. sing-box takes its rules when it starts, so a
+        connection that is up is made again with them."""
+        cleaned, rejected = split.clean(p if isinstance(p, dict) else {})
+        before = split.rules(prefs.split_of(store.settings()))
+        store.set_settings({'split_mode': cleaned['mode'],
+                            'split_iran': cleaned['iran'],
+                            'split_apps': cleaned['apps'],
+                            'split_domains': cleaned['domains']})
+        self.runner.prefs_changed()
+        r = self.runner
+        if not r.alive():
+            return {'split': cleaned, 'rejected': rejected, 'applied': 'next'}
+        if split.rules(cleaned) == before:
+            # Nothing in force changed (a list edited while it is Off, say):
+            # the connection that is up is left alone.
+            return {'split': cleaned, 'rejected': rejected, 'applied': 'now'}
+        applied = 'next'
+        if not self.owner._busy:
+            again = {'id': None if r.current == 'auto' else r.current,
+                     'auto': r.auto, 'country': r.country}
+            try:
+                self.do_connect(again)
+                applied = 'reconnect'
+            except ValueError:
+                # Saved either way; it takes over on the next connect.
+                pass
+        return {'split': cleaned, 'rejected': rejected, 'applied': applied}
 
     def do_settings(self, p):
         return {'values': store.settings()}
@@ -363,8 +416,28 @@ class Section:
     # -- the connection --------------------------------------------------
 
     def do_connect(self, p):
-        cid = str(p.get('id') or store.load().get('selected') or '')
+        """{id, auto} for one config (or its group's fastest), {country} for
+        the fastest of a country's configs, or neither for the pick saved."""
+        cid = str(p.get('id') or '')
+        country = str(p.get('country') or '').lower()
         auto = bool(p.get('auto'))
+        if not cid and not country:
+            saved = store.load()
+            cid = str(saved.get('selected') or '')
+            country = str(saved.get('country') or '')
+        if country:
+            rows = store.in_country(country)
+            if rows:
+                # The fastest of the country leads, whatever was picked
+                # inside it last - the pick may have moved country since.
+                cid = rows[0]['id']
+                auto = True
+            elif cid and not p.get('country'):
+                # The saved country emptied by a test since: the config
+                # picked with it is what is left of the pick.
+                country = ''
+            else:
+                raise ValueError('no config is filed under that country')
         if not cid:
             raise ValueError('pick a config first')
         owner = self.owner
@@ -388,7 +461,8 @@ class Section:
                 except Exception:
                     pass
                 status = self.runner.connect(
-                    cid, lambda ph: owner._emit('Progress', ph), auto=auto)
+                    cid, lambda ph: owner._emit('Progress', ph), auto=auto,
+                    country=country)
                 owner._since = time.time()
                 owner._holding = False
                 owner._retray('on')
@@ -407,7 +481,7 @@ class Section:
                     pass
                 owner._holding = blocked
                 if blocked:
-                    self._reconnect = (cid, auto)
+                    self._reconnect = (cid, auto, country)
                 owner._retray('off')
                 owner._emit('Failed', {'kind': kind, 'detail': str(e)[:600],
                                        'port': self.runner.port or 0,
@@ -446,7 +520,11 @@ class Section:
                 return {'started': False}
         except Exception:
             return {'started': False}
-        self.do_connect({'id': cid, 'auto': how == 'fastest'})
+        if state.get('country'):
+            # A country picked as a whole comes back as that country.
+            self.do_connect({'country': state['country']})
+        else:
+            self.do_connect({'id': cid, 'auto': how == 'fastest'})
         return {'started': True}
 
     def _confirm(self):
@@ -522,7 +600,7 @@ class Section:
                 return
             r.expected_up = False
             held = r.blocked()
-            cur = (r.current, r.auto)
+            cur = (r.current, r.auto, r.country)
         finally:
             r.lock.release()
         owner = self.owner
@@ -531,7 +609,8 @@ class Section:
         if held:
             owner._holding = True
             r.owns_hold = True
-            self._reconnect = (None if cur[0] == 'auto' else cur[0], cur[1])
+            self._reconnect = (None if cur[0] == 'auto' else cur[0], cur[1],
+                               cur[2])
             owner._emit('Blocked', {'reason': 'adapter' if r.mode == 'tun'
                                     else 'dropped', 'status': r.status()})
         else:
@@ -540,10 +619,10 @@ class Section:
             except Exception:
                 pass
             # Settings > Connection > Reconnect when it drops.
-            if r.prefs().get('reconnect_on_drop') and cur[0]:
+            if r.prefs().get('reconnect_on_drop') and (cur[0] or cur[2]):
                 try:
                     self.do_connect({'id': None if cur[0] == 'auto' else cur[0],
-                                     'auto': cur[1]})
+                                     'auto': cur[1], 'country': cur[2]})
                     return
                 except ValueError:
                     pass

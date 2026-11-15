@@ -4421,10 +4421,24 @@ const splitPane = (() => {
   });
 
   const MODES = ['off', 'bypass', 'only'];
+
+  /* Which split the pane is editing. Mirage's own, here in its Settings; or
+     the Configs section's, when Configs' Settings > Routing borrows the pane
+     (mount) - the same pane, so both sides get the same Iranian lists, the
+     program picker and the running list, with their own rules behind them. */
+  let side = 'main';
+  const cfg = { split: null, lists: null, routeWith: 'proxy', live: false };
+  const T = {
+    get split() { return side === 'main' ? state.split : cfg.split; },
+    set split(v) { if (side === 'main') state.split = v; else cfg.split = v; },
+    get lists() { return side === 'main' ? state.splitLists : cfg.lists; },
+    get routeWith() { return side === 'main' ? state.routeWith : cfg.routeWith; },
+  };
+  const who = () => (side === 'main' ? 'Mirage' : 'the config');
   const SAID = {
-    off: 'Everything goes through Mirage. The list waits here until one of the other two is chosen.',
-    bypass: 'Everything goes through Mirage except what is listed, which goes straight out.',
-    only: 'Only what is listed goes through Mirage; everything else goes straight out.',
+    off: () => `Everything goes through ${who()}. The list waits here until one of the other two is chosen.`,
+    bypass: () => `Everything goes through ${who()} except what is listed, which goes straight out.`,
+    only: () => `Only what is listed goes through ${who()}; everything else goes straight out.`,
   };
   // The pill is what is in force, not what is on screen - the two differ
   // between an edit and its Apply, and that difference is worth seeing.
@@ -4460,12 +4474,13 @@ const splitPane = (() => {
     if (!info || !info.split) {
       // A backend from before split tunnelling has nothing to stand this
       // pane on, so the pane is not there at all.
-      if (!state.split) pane.hidden = true;
+      if (!state.split && side === 'main') pane.hidden = true;
       return;
     }
     const was = state.split;
     state.split = tidy(info.split);
     if (info.splitLists) state.splitLists = info.splitLists;
+    if (side !== 'main') return;
     if (!draft || same(draft, was)) draft = copy(state.split);
     paint();
   }
@@ -4479,7 +4494,8 @@ const splitPane = (() => {
     for (const b of seg.querySelectorAll('.seg__opt')) {
       b.setAttribute('aria-pressed', String(b.dataset.split === d.mode));
     }
-    $('splitSaid').textContent = SAID[d.mode];
+    $('splitSaid').textContent = SAID[d.mode]();
+    $('splitWho').textContent = who();
     $('splitIran').setAttribute('aria-checked', String(d.iran));
     paintLists();
     chips(apps, d.apps, 'program');
@@ -4489,7 +4505,7 @@ const splitPane = (() => {
                                && !d.apps.length && !d.domains.length);
     paintPill();
     if (applying) return;
-    const dirty = !same(d, state.split);
+    const dirty = !same(d, T.split);
     apply.disabled = !dirty;
     if (answer) said(told, answer.text, answer.kind);
     else said(told, dirty ? 'Not applied yet.' : '');
@@ -4497,7 +4513,7 @@ const splitPane = (() => {
 
   function paintPill() {
     const pill = $('splitPill');
-    const mode = (state.split || {}).mode || 'off';
+    const mode = (T.split || {}).mode || 'off';
     pill.dataset.state = mode === 'off' ? '' : 'on';
     if (pill.textContent === PILL[mode]) return;
     pill.textContent = PILL[mode];
@@ -4507,7 +4523,7 @@ const splitPane = (() => {
      is a copy without them, and saying so beats a switch that matches
      nothing while looking as though it matches all of Iran. */
   function paintLists() {
-    const l = state.splitLists;
+    const l = T.lists;
     const n = (x) => Number(x || 0).toLocaleString('en-US');
     $('splitIranSaid').textContent = !l
       ? 'Iranian domains and Iranian address ranges'
@@ -4521,10 +4537,12 @@ const splitPane = (() => {
      it, so a program that ignores the setting is not "except" anything - it
      was never coming through in the first place. */
   function note() {
-    $('splitAppsNote').textContent = state.routeWith === 'tun'
+    $('splitAppsNote').textContent = T.routeWith === 'tun'
       ? 'Every program is affected.'
       : 'In proxy mode only programs that use the Windows proxy setting are '
-        + 'affected — switch to Tunnel above to cover every program.';
+        + (side === 'main'
+          ? 'affected — switch to Tunnel above to cover every program.'
+          : 'affected — turn on Whole system on the Configs home to cover every program.');
   }
 
   /* -------------------------------------------------------------- chips */
@@ -4902,24 +4920,30 @@ const splitPane = (() => {
      the adapter coming back - possibly behind a UAC prompt, so possibly
      behind a person. */
   async function commit() {
-    if (applying || !draft || same(draft, state.split)) return;
+    if (applying || !draft || same(draft, T.split)) return;
     hide(false);
     const want = copy(draft);
-    const before = state.split;
+    const before = T.split;
     // Only a tunnel that is up has an adapter to restart, and a list saved
     // under Off that stays Off gives it no reason to.
-    const tunUp = state.mode === 'on' && state.systemProxy && state.routeWith === 'tun'
+    const tunUp = side === 'main' && state.mode === 'on' && state.systemProxy
+      && T.routeWith === 'tun'
       && !(want.mode === 'off' && (!before || before.mode === 'off'));
+    // The Configs side's connection takes its rules when it starts, so a
+    // change to a live one is a reconnect.
+    const again = side === 'configs' && cfg.live;
     applying = true;
     answer = null;
     busy(apply, true);
     said(told, tunUp
       ? `Restarting the network adapter with the new list…${
         state.elevated ? '' : ' Windows may ask for approval.'}`
-      : 'Applying…', 'work');
+      : (again ? 'Connecting again with the new list…' : 'Applying…'), 'work');
     let r = null;
     try {
-      r = await window.pywebview.api.setSplit(want);
+      r = side === 'main'
+        ? await window.pywebview.api.setSplit(want)
+        : await window.pywebview.api.configs('setSplit', want);
     } catch (err) {
       r = null;
     }
@@ -4930,16 +4954,16 @@ const splitPane = (() => {
     const moved = !same(draft, want);
     let fresh = [];
     if (!r || r.ok === false) {
-      if (r && r.split) state.split = tidy(r.split);
+      if (r && r.split) T.split = tidy(r.split);
       answer = { text: (r && r.error) || 'That could not be applied.', kind: 'bad' };
     } else {
-      state.split = tidy(r.split || want);
+      T.split = tidy(r.split || want);
       if (!moved) {
         // What the backend made of what was typed replaces it - so the
         // chips that changed spelling are the ones that arrive again.
         const sent = new Set([...want.apps, ...want.domains]);
-        fresh = [...state.split.apps, ...state.split.domains].filter((v) => !sent.has(v));
-        draft = copy(state.split);
+        fresh = [...T.split.apps, ...T.split.domains].filter((v) => !sent.has(v));
+        draft = copy(T.split);
       }
       const rejected = Array.isArray(r.rejected) ? r.rejected.map(String) : [];
       siteErr = rejected.length ? 'rejected' : '';
@@ -4949,15 +4973,17 @@ const splitPane = (() => {
       // Three different things a press of Apply can have done, and each
       // says only what it did. A list saved under Off changes nothing that
       // is running, so "in force" would be a claim about nothing.
-      const now = r.applied === 'now';
+      const now = r.applied === 'now' || r.applied === 'reconnect';
+      const name = side === 'main' ? 'Mirage' : 'a config';
       let text;
-      if (state.split.mode !== 'off') {
-        text = !now ? 'Saved. It takes effect the next time Mirage connects.'
-          : tunUp ? 'In force — the adapter is back up with the new list.'
-            : 'In force on the connection that is up now.';
+      if (T.split.mode !== 'off') {
+        text = !now ? `Saved. It takes effect the next time ${name} connects.`
+          : r.applied === 'reconnect' ? 'In force — connecting again with the new list.'
+            : tunUp ? 'In force — the adapter is back up with the new list.'
+              : 'In force on the connection that is up now.';
       } else if (before && before.mode !== 'off') {
-        text = now ? 'Off. Everything goes through Mirage again.'
-          : 'Saved. It is off from the next time Mirage connects.';
+        text = now ? `Off. Everything goes through ${who()} again.`
+          : `Saved. It is off from the next time ${name} connects.`;
       } else {
         text = 'Saved. The list is kept for when it is turned on.';
       }
@@ -4971,7 +4997,59 @@ const splitPane = (() => {
 
   apply.addEventListener('click', commit);
 
-  return { take, paint, note, hide };
+  /* The pane into Configs' Settings > Routing (`host`), editing the
+     section's own split - or, with 'main', back where it lives. */
+  let home = null;
+  let kept = null;      // Mirage's own draft, unapplied, while the pane is lent
+  async function mount(which, host) {
+    if (which === 'configs') {
+      if (!home) home = { parent: pane.parentNode, next: pane.nextSibling };
+      if (host && pane.parentNode !== host) host.appendChild(pane);
+      if (open) hide(false);
+      if (side === 'main') kept = draft;
+      side = 'configs';
+      draft = null;
+      answer = null;
+      siteErr = '';
+      pane.hidden = true;
+      let r = null;
+      try { r = await window.pywebview.api.configs('split'); } catch (e) { r = null; }
+      if (side !== 'configs') return;
+      if (!r || r.ok === false) {
+        // Nothing of Mirage's is left showing under Configs' heading: the
+        // pane stays away, and the screen says why.
+        pane.hidden = true;
+        if (host) {
+          const why = document.createElement('p');
+          why.className = 'note';
+          why.textContent = (r && r.error) || 'The Configs split could not be read.';
+          host.appendChild(why);
+        }
+        return;
+      }
+      cfg.split = tidy(r.split);
+      cfg.lists = r.splitLists || state.splitLists;
+      cfg.routeWith = r.routeWith === 'tun' ? 'tun' : 'proxy';
+      cfg.live = !!r.live;
+      draft = copy(cfg.split);
+      siteErr = '';
+      said(siteSaid, '');
+      paint();
+      return;
+    }
+    if (side === 'main') return;
+    if (open) hide(false);
+    side = 'main';
+    if (home) home.parent.insertBefore(pane, home.next);
+    draft = kept || (state.split ? copy(state.split) : null);
+    kept = null;
+    answer = null;
+    siteErr = '';
+    said(siteSaid, '');
+    paint();
+  }
+
+  return { take, paint, note, hide, mount };
 })();
 
 /* Other devices: the server set up under Your own tunnel, handed to a phone.

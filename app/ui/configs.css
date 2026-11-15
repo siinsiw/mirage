@@ -12,11 +12,11 @@
    back. Motion is opacity and transform only (configs.js, GSAP).
    ========================================================================= */
 
-/* The three ways in, left to right in the order they are reached for:
-   pasting is most of it, so it leads, and only it is lit. */
+/* One row under the home: how the list is shown on the left, the test and
+   the one way to add on the right. Only Add is lit. */
 .cfgbar {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   padding: 0 16px 10px;
 }
@@ -24,10 +24,13 @@
 .cfgbar .btn {
   height: 32px;
   gap: 6px;
+  padding: 0 12px;
   font-size: 12.5px;
 }
 
 .cfgbar .ico { width: 15px; height: 15px; }
+
+.cfgbar__test { margin-left: auto; }
 
 .cfgbar__lead {
   background: var(--accent);
@@ -36,6 +39,37 @@
 }
 
 .cfgbar__lead:hover { filter: brightness(1.08); background: var(--accent); }
+
+.cfgview {
+  display: inline-flex; gap: 2px; padding: 3px;
+  border-radius: 999px; background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.cfgview__opt {
+  height: 26px; padding: 0 11px; border-radius: 999px;
+  font-size: 12.5px; color: var(--text-2);
+}
+.cfgview__opt:hover { color: var(--text); }
+.cfgview__opt[aria-selected='true'] { background: var(--surface-2); color: var(--text); cursor: default; }
+
+/* Add: one button, three ways in a small menu under it. */
+.cfgadd { position: relative; }
+.cfgadd__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 5;
+  display: grid; gap: 2px; width: 248px; padding: 6px;
+  border-radius: 14px; background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--stroke), 0 14px 32px rgba(0, 0, 0, 0.55);
+  transform-origin: top right;
+}
+.cfgadd__menu[hidden] { display: none; }
+.cfgadd__item {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 10px;
+  width: 100%; padding: 9px 10px; border-radius: 10px; text-align: left; color: var(--text);
+}
+.cfgadd__item:hover, .cfgadd__item:focus-visible { background: var(--control-hover); outline: 0; }
+.cfgadd__item .ico { width: 15px; height: 15px; color: var(--text-2); }
+.cfgadd__item b { display: block; font-size: 13px; font-weight: 550; }
+.cfgadd__item i { display: block; font-size: 11.5px; font-style: normal; color: var(--text-3); }
 
 #cfgTest[data-on='1'] {
   color: var(--work);
@@ -332,43 +366,6 @@
   color: var(--text);
 }
 
-/* ---------------------------------------------------------------- footer */
-
-.cfgfoot {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 22px;
-  padding: 12px 16px 16px;
-  border-top: 1px solid var(--stroke);
-}
-
-.cfgfoot__opt {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  cursor: pointer;
-}
-
-.cfgfoot__opt b {
-  display: block;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.cfgfoot__opt i {
-  display: block;
-  font-size: 11px;
-  font-style: normal;
-  color: var(--text-3);
-}
-
-.cfgfoot .toggle[aria-checked='true'] { background: var(--accent-mid); }
-
-.cfgfoot .toggle[aria-checked='true'] span { background: #fff; }
-
-
 /* ---------------------------------------------------------------------------
    Configs as an app of its own: its header with the way back, its home, its
    settings, and the veil the two sections pass through.
@@ -397,27 +394,74 @@
   cursor: default;
 }
 
-/* The home: state and clock on one line, the picked config under it, the
-   one button. Left-aligned like Mirage's own, and smaller - the list under
-   it is what this section is mostly about. */
+/* The home, as Mirage's own: the clock big and centred with the state
+   under it, the speed, the place as a card with a round flag, the white
+   button, and the two switches people change. */
 .cfghero {
   display: grid; gap: 12px;
-  margin: 0 16px 14px; padding: 16px;
+  margin: 0 16px 14px; padding: 18px 16px 16px;
   border-radius: 18px; background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
 }
-.cfghero__top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.cfghero__state { margin: 0; font-size: 20px; font-weight: 600; color: var(--text); }
+.cfghero__top { display: grid; justify-items: center; gap: 2px; }
+.cfghero__clock {
+  margin: 0; font-size: 34px; line-height: 1; letter-spacing: -0.02em;
+  color: var(--text-3); font-variant-numeric: tabular-nums;
+}
+.cfghero[data-state='on'] .cfghero__clock { color: var(--text); }
+.cfghero__state { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-2); }
+.cfghero[data-state='on'] .cfghero__state { color: var(--text); }
 .cfghero[data-state='busy'] .cfghero__state { color: var(--work); }
 .cfghero[data-state='fail'] .cfghero__state { color: var(--fail); }
-.cfghero__clock { margin: 0; font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums; }
-.cfghero__pick { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 12px; }
-.cfghero__flag { width: 28px; height: 28px; }
-.cfghero__text { display: grid; gap: 2px; min-width: 0; }
-.cfghero__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; color: var(--text); }
-.cfghero__sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-2); }
+
+/* The speed: dimmed until something is up, the same figures as the meter
+   over the top of the screen. Fixed widths, so numbers changing every
+   second do not shove each other about. */
+.cfgflux {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  min-height: 22px; font-size: 12px; color: var(--text-3);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  transition: opacity 0.25s;
+}
+.cfgflux[data-live='0'] { opacity: 0.4; }
+.cfgflux__cell { display: inline-flex; align-items: center; gap: 4px; }
+.cfgflux__cell b { min-width: 3.6ch; text-align: right; font-weight: 500; color: var(--text); }
+.cfgflux__cell i { font-style: normal; color: var(--text-3); }
+.cfgflux__ar { width: 10px; height: 10px; fill: none; stroke: var(--text); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.cfgflux__cell--up .cfgflux__ar { stroke: #e0303f; }
+.cfgflux__cell--sum .cfgflux__ar { stroke: var(--text-3); }
+.cfgflux__cell--sum b { color: var(--text-2); }
+.cfgflux__rule { width: 1px; height: 12px; background: var(--stroke); }
+
+.cfgloc {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; min-height: 56px; padding: 8px 14px 8px 10px;
+  border-radius: 16px; text-align: left; color: var(--text);
+  background: var(--bg); box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.cfgloc:hover { background: var(--surface-2); }
+.cfgloc__flag {
+  display: grid; place-items: center; flex: none;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--surface-2) center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.cfgloc__flag .ico { width: 18px; height: 18px; color: var(--text-2); }
+.cfgloc__flag[style*='url'] .ico { display: none; }
+.cfgloc__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.cfgloc__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; unicode-bidi: plaintext; }
+.cfgloc__sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-2); }
+.cfgloc__chev { flex: none; width: 16px; height: 16px; color: var(--text-3); }
+
 .cfghero__go { height: 48px; }
-.cfghero__note { margin: 0; }
+.cfghero__opts { display: flex; justify-content: center; gap: 22px; }
+.cfgsw { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.cfgsw__text { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+.cfgsw__text b { font-size: 12.5px; font-weight: 550; color: var(--text); }
+.cfgsw__text i { font-size: 11px; font-style: normal; color: var(--text-3); }
+.cfgsw .toggle[aria-checked='true'] { background: var(--accent-mid); }
+.cfgsw .toggle[aria-checked='true'] span { background: #fff; }
+.cfghero__note { margin: 0; text-align: center; }
 .cfghero__note:empty { display: none; }
 
 /* The list under the home scrolls with it rather than in a box of its own. */
@@ -480,7 +524,58 @@
 }
 .cfgapp[open] { overflow-y: auto; animation: none; }
 .cfgopt[data-off='1'] { pointer-events: none; }
-.cfghero__tun { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
-.cfghero__tuntext { display: grid; gap: 2px; min-width: 0; }
-.cfghero__tuntext b { font-size: 13.5px; font-weight: 500; color: var(--text); }
-.cfghero__tuntext i { font-style: normal; font-size: 12px; color: var(--text-2); }
+
+/* A flag read off the name, not from a test: there, a shade quieter. */
+.cfg__flag[data-guess='1'] { opacity: 0.62; }
+
+/* ------------------------------------------------------- by country
+   One card a country, as Mirage's own list: the round flag, the name and
+   how many, the best time, the chevron; Connect on its own on the right.
+   The configs sit inside when it is opened. */
+.cfglist[data-by='country'] { display: grid; gap: 6px; padding-top: 2px; }
+.cfgc {
+  position: relative;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+  border-radius: 14px; background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.cfgc[data-on='1'] { box-shadow: inset 0 0 0 1px rgba(224, 48, 63, 0.55); }
+.cfgc[data-on='1']::before {
+  content: ''; position: absolute; left: 0; top: 14px; height: 24px; width: 3px;
+  border-radius: 2px; background: var(--accent); box-shadow: var(--accent-glow);
+}
+.cfgc[data-picked='1'] { box-shadow: inset 0 0 0 1px var(--text-3); }
+.cfgc[data-dead='1'] .cfgc__name { color: var(--text-3); }
+.cfgc__head {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 16px; align-items: center; gap: 10px;
+  min-height: 52px; padding: 8px 6px 8px 12px; text-align: left; color: var(--text);
+  border-radius: 14px;
+}
+.cfgc__head:hover { background: var(--control-hover); }
+.cfgc__head:focus-visible { outline: 0; box-shadow: inset 0 0 0 1.5px var(--focus); }
+.cfgc__flag {
+  display: grid; place-items: center;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--surface-2) center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.cfgc__flag .ico { width: 15px; height: 15px; color: var(--text-3); }
+.cfgc__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cfgc__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
+.cfgc__meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-3); }
+.cfgc__ms { min-width: 0; }
+.cfgc__chev { width: 14px; height: 14px; color: var(--text-3); transition: transform 0.2s; }
+.cfgc[data-open='1'] .cfgc__chev { transform: rotate(180deg); }
+.cfgc__go {
+  height: 30px; margin-right: 10px; padding: 0 14px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; color: var(--bg); background: var(--text);
+}
+.cfgc__go:hover { filter: brightness(0.92); }
+.cfgc__go[data-state='on'] {
+  color: #fff; background: var(--accent); box-shadow: var(--accent-glow); cursor: default;
+}
+.cfgc__in {
+  grid-column: 1 / -1;
+  display: grid; gap: 1px; padding: 2px 6px 8px;
+  border-top: 1px solid var(--stroke);
+}

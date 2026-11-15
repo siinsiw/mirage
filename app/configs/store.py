@@ -21,7 +21,7 @@ import uuid
 import paths
 import settingsfile
 
-from . import links, prefs
+from . import links, prefs, where
 
 PATH = os.path.join(paths.STATE_DIR, 'configs.json')
 MANUAL = 'manual'
@@ -31,7 +31,7 @@ MAX_GROUPS = 32
 _LOCK = threading.RLock()
 
 DEFAULTS = {'v': 1, 'groups': [{'id': MANUAL, 'kind': 'manual', 'name': ''}],
-            'configs': [], 'selected': None, 'auto': False,
+            'configs': [], 'selected': None, 'country': '', 'auto': False,
             'fragment': False, 'settings': {}, 'seeded': False}
 
 
@@ -182,11 +182,11 @@ def set_results(results, path=None):
 
 
 def set_option(key, value, path=None):
-    if key not in ('selected', 'auto', 'fragment'):
+    if key not in ('selected', 'auto', 'fragment', 'country'):
         raise ValueError(f'{key} is not an option')
 
     def go(state):
-        state[key] = value if key == 'selected' else bool(value)
+        state[key] = value if key in ('selected', 'country') else bool(value)
     return _edit(go, path)
 
 
@@ -275,6 +275,13 @@ def find(cid, state=None):
     return next((c for c in state['configs'] if c['id'] == cid), None)
 
 
+def in_country(code, state=None):
+    """Every config filed under country `code`, fastest first."""
+    state = state or load()
+    code = (code or '').lower()
+    return ordered([c for c in state['configs'] if where.of(c)[0] == code])
+
+
 def group_of(cid, state=None):
     """Every config in the same group as cid, in the order they are shown."""
     state = state or load()
@@ -346,8 +353,20 @@ def listing(state=None):
                    or c.get('proto') in ('hysteria2', 'tuic'),
             'allowInsecure': bool(c.get('allow_insecure')),
             'last': c.get('last')})
+        # The country to file it under and flag it with: the test's, else
+        # the one its name gives ('name'), so a list never tested yet still
+        # has flags and countries.
+        cc, how = where.of(c)
+        configs[-1].update(country=cc, countryFrom=how,
+                           countryName=where.name(cc) if cc else '')
     return {'groups': [_public_group(g) for g in state['groups']],
             'configs': configs, 'selected': state.get('selected'),
+            # A country picked as a whole (the fastest of its configs), or
+            # '' when the pick is the one config in `selected`.
+            # ...and only while some config is still filed there: a test
+            # that moves them all elsewhere leaves the config itself picked.
+            'country': (state.get('country') or '')
+            if any(x['country'] == state.get('country') for x in configs) else '',
             # The one setting the home shows: whole PC or not.
             'mode': settings(state).get('mode'),
             'auto': bool(state.get('auto')),

@@ -21,7 +21,7 @@
     { id: 'dns', name: 'DNS', icon: 'globe',
       sub: 'Which resolver, IPv6' },
     { id: 'routing', name: 'Routing', icon: 'route',
-      sub: 'Iranian sites direct, ads, per program' },
+      sub: 'Split tunnelling: Iranian sites and apps direct, your own list' },
     { id: 'subs', name: 'Subscriptions', icon: 'refresh',
       sub: 'Updating on their own' },
     { id: 'tests', name: 'Tests and choosing', icon: 'gauge',
@@ -47,24 +47,10 @@
       why: 'If the connection drops, nothing leaves on your normal line until you reconnect or disconnect. Separate from Mirage’s own.',
       when: (v) => v.mode !== 'local' },
 
-    { key: 'split_mode', screen: 'routing', type: 'choice',
-      name: 'Split tunnelling',
-      why: 'Everything through the config, everything except the list, or only the list.',
-      choices: [['off', 'Everything'], ['bypass', 'All but the list'], ['only', 'Only the list']] },
-    { key: 'split_iran', screen: 'routing', type: 'bool',
-      name: 'Iranian sites and addresses in the list',
-      why: 'Iran’s address ranges and Iranian services, from the lists Mirage ships. With “All but the list” they go straight out, as banks and government sites need.',
-      when: (v) => v.split_mode !== 'off' },
-    { key: 'split_domains', screen: 'routing', type: 'apps',
-      name: 'Sites and addresses',
-      why: 'One per line: a name (it covers everything under it), an address or a prefix.',
-      placeholder: 'example.com\n1.2.3.0/24',
-      when: (v) => v.split_mode !== 'off' },
-    { key: 'split_apps', screen: 'routing', type: 'apps',
-      name: 'Programs',
-      why: 'By file name, one per line. Only the whole-PC mode sees which program a connection is from.',
-      placeholder: 'chrome.exe\nTelegram.exe',
-      when: (v) => v.split_mode !== 'off' },
+    // Split tunnelling is Mirage's own pane, borrowed (app.js splitPane.mount):
+    // the Iranian lists, the program picker and what is running now, the
+    // sites and addresses - saved as this section's split, not Mirage's.
+    { key: 'split', screen: 'routing', type: 'splitpane' },
 
     { key: 'auto_connect', screen: 'connection', type: 'choice',
       name: 'Connect on opening',
@@ -274,6 +260,9 @@
 
   function draw() {
     const body = $('cfgPrefsBody');
+    // Mirage's split pane, if it was lent to the Routing screen, goes home
+    // before the screen is cleared - it is not this sheet's to throw away.
+    if (typeof splitPane !== 'undefined') splitPane.mount('main');
     body.textContent = '';
     if (!view.values) return;
     const screen = SCREENS.find((s) => s.id === view.screen);
@@ -305,6 +294,12 @@
         group = f.group;
         body.appendChild(el('p', 'cfgprefs__group', group));
       }
+      if (f.type === 'splitpane') {
+        const host = el('div', 'cfgprefs__split');
+        body.appendChild(host);
+        splitPane.mount('configs', host);
+        continue;
+      }
       body.appendChild(fieldRow(f));
     }
   }
@@ -335,6 +330,12 @@
     e.stopImmediatePropagation();
     back();
   }, { capture: true });
+
+  // However the sheet goes - Close, Esc, a click outside - a borrowed split
+  // pane goes back to Mirage's Settings.
+  $('cfgPrefs').addEventListener('close', () => {
+    if (typeof splitPane !== 'undefined') splitPane.mount('main');
+  });
 
   window.cfgPrefs = { open, SCREENS, FIELDS };
 }());

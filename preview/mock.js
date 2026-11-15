@@ -24,6 +24,7 @@
 
   // Configs' sample list: one subscription and two added by hand. Nothing
   // here connects; connect answers as the real section does, by events.
+  const CFN = { de: 'Germany', tr: 'Turkey', nl: 'Netherlands', fi: 'Finland', us: 'United States' };
   const CF = {
     groups: [
       { id: 'manual', kind: 'manual', name: '' },
@@ -36,23 +37,37 @@
       ['c2', 'manual', 'Friend in Istanbul', 'Trojan', 'tr', 96],
       ['c3', 's-1', '🇳🇱 Amsterdam 01', 'VMess · WS', 'nl', 231],
       ['c4', 's-1', '🇫🇮 Helsinki 02', 'Hysteria2', 'fi', 205],
-      ['c5', 's-1', '🇺🇸 New York 05', 'VLESS · gRPC', null, null],
-    ].map(([id, group, name, label, cc, ms]) => ({
+      ['c5', 's-1', '🇺🇸 New York 05', 'VLESS · gRPC', null, null, 'us'],
+      ['c6', 's-1', '🇩🇪 Frankfurt 03', 'VLESS · WS', null, null, 'de'],
+      ['c7', 's-1', '🇳🇱 Amsterdam 02', 'Trojan', 'nl', 288],
+      ['c8', 's-1', 'VIP 443 fast', 'VLESS · Reality', null, null, ''],
+    ].map(([id, group, name, label, cc, ms, guess]) => ({
       id, group, name, label, proto: label.split(' ')[0].toLowerCase(),
       host: `${id}.example.net`, port: 443, warnings: [], engine: 'singbox',
       tls: true, allowInsecure: false,
+      country: cc || guess || '', countryFrom: cc ? 'test' : (guess ? 'name' : ''),
+      countryName: CFN[cc || guess] || '',
       last: ms ? { ms, country: cc, at: now() - 600 } : null })),
     selected: 'c1', auto: false, fragment: false,
     settings: {"mode": "system", "kill_switch": true, "auto_connect": "off", "reconnect_on_drop": false, "split_mode": "bypass", "split_iran": true, "split_apps": [], "split_domains": [], "fragment": false, "fragment_style": "both", "fragment_engine": "singbox", "fragment_packets": "tlshello", "fragment_length": "100-200", "fragment_interval": "10-20", "remote_dns": "https://1.1.1.1/dns-query", "direct_dns": "https://1.1.1.1/dns-query", "ipv6": "off", "sub_auto_hours": 12, "sub_on_launch": false, "sub_user_agent": "", "test_kind": "real", "test_url": "https://www.cloudflare.com/cdn-cgi/trace", "test_timeout": 8, "test_parallel": 8, "sort": "speed", "auto_interval": 10, "auto_tolerance": 50, "mux": false, "mux_protocol": "h2mux", "mux_streams": 8, "mux_padding": false, "tun_stack": "auto", "tun_mtu": 9000, "strict_route": true},
     live: { on: false, current: null, auto: false, using: null, blocked: false },
   };
-  const cfList = () => ({ groups: CF.groups, configs: CF.configs, selected: CF.selected, mode: CF.settings.mode,
+  const cfList = () => ({ groups: CF.groups, configs: CF.configs, selected: CF.selected, country: CF.country || '', mode: CF.settings.mode,
     auto: CF.auto, fragment: CF.settings.fragment, engines: { singbox: true, xray: true },
     live: CF.live, testing: false });
   function configsMock(action, p) {
     switch (action) {
       case 'list': return { ok: true, list: cfList() };
-      case 'pick': CF.selected = p.id; return { ok: true, list: cfList() };
+      case 'pick':
+        if (p.country) { CF.country = p.country; CF.selected = CF.configs.find((c) => c.country === p.country).id; }
+        else { CF.selected = p.id; CF.country = ''; }
+        return { ok: true, list: cfList() };
+      case 'split': return { ok: true, split: { mode: CF.settings.split_mode, iran: CF.settings.split_iran,
+        apps: CF.settings.split_apps, domains: CF.settings.split_domains },
+        splitLists: { domains: 102, ranges: 1749 }, routeWith: CF.settings.mode === 'tun' ? 'tun' : 'proxy', live: CF.live.on };
+      case 'setSplit':
+        Object.assign(CF.settings, { split_mode: p.mode, split_iran: p.iran, split_apps: p.apps, split_domains: p.domains });
+        return { ok: true, split: p, rejected: [], applied: CF.live.on ? 'reconnect' : 'next' };
       case 'settings': return { ok: true, values: { ...CF.settings } };
       case 'set':
         Object.assign(CF.settings, p.values || {});
@@ -60,11 +75,13 @@
           reconnect: CF.live.on };
       case 'connect':
       case 'switch': {
-        const id = p.id || CF.selected;
+        const country = p.country || '';
+        const id = country ? CF.configs.find((c) => c.country === country).id : (p.id || CF.selected);
         CF.selected = id;
+        CF.country = country;
         later(500, () => emit('Progress', { phase: 'starting' }));
         later(1300, () => {
-          CF.live = { on: true, current: id, auto: !!p.auto, using: id, blocked: false };
+          CF.live = { on: true, current: country ? 'auto' : id, auto: !!p.auto || !!country, using: id, blocked: false, country };
           const c = CF.configs.find((x) => x.id === id) || {};
           S.connected = true; S.since = now();
           emit('Connected', { state: 'on', since: now(), configs: true,
@@ -78,7 +95,8 @@
         const ids = p.ids || CF.configs.map((c) => c.id);
         ids.forEach((id, i) => later(250 * (i + 1), () => {
           const c = CF.configs.find((x) => x.id === id);
-          c.last = { ms: 90 + Math.round(Math.random() * 300), country: (c.last && c.last.country) || 'us', at: now() };
+          c.last = { ms: 90 + Math.round(Math.random() * 300), country: (c.last && c.last.country) || c.country || 'us', at: now() };
+          c.country = c.last.country; c.countryFrom = 'test'; c.countryName = CFN[c.country] || c.country;
           emit('Configs', { kind: 'test', done: i + 1, total: ids.length, id, result: c.last });
         }));
         later(250 * (ids.length + 1), () => emit('Configs', { kind: 'tested', list: cfList() }));
