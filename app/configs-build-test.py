@@ -17,7 +17,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import paths                                                   # noqa: E402
-from configs import links, singbox, xray                       # noqa: E402
+from configs import links, prefs, singbox, xray                # noqa: E402
 
 with open(os.path.join(HERE, '..', 'tests', 'links-fixtures.json'),
           encoding='utf-8') as f:
@@ -200,6 +200,66 @@ def test_the_cores_accept_it():
         assert got[0] == 0, got[1]
     for line in said:
         print('  (' + line + ')')
+
+
+# -- Configs' own settings in what is built -----------------------------------
+
+EVERYTHING = dict(prefs.defaults(), fragment=True, fragment_style='tls',
+                  remote_dns='https://dns.google/dns-query',
+                  direct_dns='https://9.9.9.9/dns-query', ipv6='prefer_ipv6',
+                  mux=True, mux_protocol='smux', mux_streams=4, mux_padding=True,
+                  tun_stack='gvisor', tun_mtu=1500, strict_route=False,
+                  auto_interval=3, auto_tolerance=150,
+                  test_url='https://www.gstatic.com/generate_204')
+
+
+def test_settings_reach_the_connection():
+    cfg = singbox.build(SB, port=18877, clash_port=19090, clash_secret='s',
+                        auto=True, mode='tun', fragment=True, opts=EVERYTHING)
+    dns = {s['tag']: s for s in cfg['dns']['servers']}
+    assert dns['dns-remote']['server'] == 'dns.google'
+    assert dns['dns-remote']['domain_resolver'] == 'dns-direct'
+    assert dns['dns-direct']['server'] == '9.9.9.9' and 'dns-local' not in dns
+    assert cfg['dns']['strategy'] == 'prefer_ipv6'
+    tun = next(i for i in cfg['inbounds'] if i['type'] == 'tun')
+    assert tun['stack'] == 'gvisor' and tun['mtu'] == 1500 and not tun['strict_route']
+    auto = next(o for o in cfg['outbounds'] if o['tag'] == singbox.AUTO)
+    assert auto['interval'] == '3m' and auto['tolerance'] == 150
+    assert auto['url'] == 'https://www.gstatic.com/generate_204'
+    for ob in cfg['outbounds']:
+        tls = ob.get('tls') or {}
+        if tls.get('fragment') or tls.get('record_fragment'):
+            assert tls.get('fragment') and not tls.get('record_fragment'), 'tls style only'
+
+
+def test_mux_only_where_it_can_go():
+    for cfg in SB:
+        ob = singbox.outbound(cfg, 't', None, False, EVERYTHING)
+        if cfg.get('flow') or cfg['proto'] in ('hysteria2', 'tuic'):
+            assert 'multiplex' not in ob, cfg['proto']
+        else:
+            assert ob['multiplex']['protocol'] == 'smux', cfg['proto']
+
+
+def test_xray_fragment_takes_the_tls_configs():
+    opts = dict(prefs.defaults(), fragment=True, fragment_engine='xray',
+                fragment_packets='1-3', fragment_length='20-60')
+    moved = [c for c in SB if prefs.engine_for(c, opts) == 'xray']
+    assert moved and all(c['proto'] in ('vless', 'vmess', 'trojan')
+                         and c.get('security') in ('tls', 'reality') for c in moved)
+    entries = [(c, 20000 + n, 'u', 'p') for n, c in enumerate(moved)]
+    built = xray.build(entries, fragment=True, opts=opts)
+    frag = next(o for o in built['outbounds'] if o['tag'] == 'fragment')
+    assert frag['settings']['fragment'] == {'packets': '1-3', 'length': '20-60',
+                                            'interval': '10-20'}
+    sb = paths.singbox_exe()
+    got = _check(_xray_exe(), ['run', '-test', '-c'], built)
+    assert got is None or got[0] == 0, got and got[1]
+    got = _check(sb, ['check', '-c'], singbox.build(
+        SB, port=18877, clash_port=19090, clash_secret='s', fragment=True,
+        xray={c['id']: (20000 + n, 'u', 'p') for n, c in enumerate(moved)},
+        opts=opts))
+    assert got is None or got[0] == 0, got and got[1]
 
 
 if __name__ == '__main__':

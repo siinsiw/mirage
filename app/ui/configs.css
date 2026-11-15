@@ -478,3 +478,4 @@
   color: var(--mi-ink);
 }
 .cfgapp[open] { overflow-y: auto; animation: none; }
+.cfgopt[data-off='1'] { pointer-events: none; }

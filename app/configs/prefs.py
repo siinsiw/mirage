@@ -21,12 +21,20 @@ reconnect: whether a live connection has to be made again for it to apply.
 
 import re
 
+from . import links
+
 SCHEMA = {
     # -- connection ---------------------------------------------------------
     # system: a local proxy, and Windows pointed at it; tun: the whole PC
     # through an adapter; local: only the local port, Windows left alone.
     'mode': (('choice', ('system', 'tun', 'local')), 'system', True),
     'kill_switch': ('bool', True, False),
+    # On opening the app: nothing, the last one used, or the fastest of its
+    # group (Fastest automatically).
+    'auto_connect': (('choice', ('off', 'last', 'fastest')), 'off', False),
+    # The line dropped with the kill switch off: connect the same one again
+    # rather than leave the machine on the bare line.
+    'reconnect_on_drop': ('bool', False, False),
 
     # -- routing (the split, kept apart from Mirage's own) ------------------
     'split_mode': (('choice', ('off', 'bypass', 'only')), 'off', True),
@@ -36,7 +44,84 @@ SCHEMA = {
 
     # -- anti-filtering ---------------------------------------------------
     'fragment': ('bool', False, True),
+    # sing-box's own split: the hello across TCP segments, across TLS
+    # records, or both.
+    'fragment_style': (('choice', ('tls', 'record', 'both')), 'both', True),
+    # Or Xray's, with sizes and gaps of the person's choosing: every
+    # VLESS/VMess/Trojan config with TLS or Reality is then carried by Xray.
+    'fragment_engine': (('choice', ('singbox', 'xray')), 'singbox', True),
+    'fragment_packets': (('choice', ('tlshello', '1-1', '1-2', '1-3', '1-5')),
+                         'tlshello', True),
+    'fragment_length': (('range', 1, 2000), '100-200', True),
+    'fragment_interval': (('range', 0, 1000), '10-20', True),
+
+    # -- DNS -----------------------------------------------------------------
+    # Through the config, for everything that goes through it.
+    'remote_dns': (('url', 300), 'https://1.1.1.1/dns-query', True),
+    # Straight from this line: the servers' own names, and what the split
+    # sends direct. Never the line's own resolver, which forges answers.
+    'direct_dns': (('url', 300), 'https://1.1.1.1/dns-query', True),
+    'ipv6': (('choice', ('off', 'prefer_ipv4', 'prefer_ipv6')), 'off', True),
+
+    # -- subscriptions ---------------------------------------------------------
+    'sub_auto_hours': (('int', 0, 168), 12, False),
+    'sub_on_launch': ('bool', False, False),
+    'sub_user_agent': (('text', 120), '', False),
+
+    # -- tests and choosing ----------------------------------------------------
+    # real: a page loaded through the config; tcp: only the time to open a
+    # connection to the server, which says nothing about whether it carries.
+    'test_kind': (('choice', ('real', 'tcp')), 'real', False),
+    'test_url': (('url', 300), 'https://www.cloudflare.com/cdn-cgi/trace', False),
+    'test_timeout': (('int', 2, 30), 8, False),
+    'test_parallel': (('int', 1, 32), 8, False),
+    'sort': (('choice', ('speed', 'added', 'name')), 'speed', False),
+    'auto_interval': (('int', 1, 60), 10, True),
+    'auto_tolerance': (('int', 0, 1000), 50, True),
+
+    # -- advanced ----------------------------------------------------------------
+    'mux': ('bool', False, True),
+    'mux_protocol': (('choice', ('h2mux', 'smux', 'yamux')), 'h2mux', True),
+    'mux_streams': (('int', 1, 64), 8, True),
+    'mux_padding': ('bool', False, True),
+    'tun_stack': (('choice', ('auto', 'system', 'gvisor', 'mixed')), 'auto', True),
+    'tun_mtu': (('int', 1280, 9000), 9000, True),
+    'strict_route': ('bool', True, True),
 }
+
+XRAY_FRAGMENTS = ('vless', 'vmess', 'trojan')
+
+
+def engine_for(cfg, opts=None):
+    """'singbox' or 'xray': which engine carries this config under these
+    settings. links.engine_for says what each can carry at all; with Xray's
+    fragment chosen, the TLS configs Xray can carry go to it as well."""
+    base = links.engine_for(cfg)
+    o = opts or {}
+    if (base != 'xray' and o.get('fragment')
+            and o.get('fragment_engine') == 'xray'
+            and cfg.get('proto') in XRAY_FRAGMENTS
+            and cfg.get('security') in ('tls', 'reality')):
+        return 'xray'
+    return base
+
+
+def dns_server(url, tag, **extra):
+    """A DoH address as a sing-box DNS server."""
+    from urllib.parse import urlsplit
+    parts = urlsplit(url or 'https://1.1.1.1/dns-query')
+    out = {'type': 'https', 'tag': tag, 'server': parts.hostname or '1.1.1.1'}
+    if parts.port:
+        out['server_port'] = parts.port
+    if parts.path and parts.path != '/dns-query':
+        out['path'] = parts.path
+    out.update(extra)
+    return out
+
+
+def dns_strategy(opts):
+    return {'off': 'ipv4_only', 'prefer_ipv4': 'prefer_ipv4',
+            'prefer_ipv6': 'prefer_ipv6'}.get((opts or {}).get('ipv6'), 'ipv4_only')
 
 
 def defaults():

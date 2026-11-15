@@ -20,6 +20,7 @@ is the same: it is in the selector, it is tested the same way.
 """
 
 from . import links
+from . import prefs as _prefs
 
 TEST_URL = 'https://www.cloudflare.com/cdn-cgi/trace'
 DOH = '1.1.1.1'
@@ -42,7 +43,7 @@ def _server_name(cfg):
     return '' if links.is_address(cfg['host']) else cfg['host']
 
 
-def _tls(cfg, fragment):
+def _tls(cfg, fragment, opts=None):
     if cfg.get('security') not in ('tls', 'reality'):
         return None
     t = {'enabled': True}
@@ -68,8 +69,11 @@ def _tls(cfg, fragment):
         # from the link asking for it (links.py keeps the two apart).
         t['insecure'] = True
     if fragment:
-        t['fragment'] = True
-        t['record_fragment'] = True
+        style = (opts or {}).get('fragment_style', 'both')
+        if style in ('tls', 'both'):
+            t['fragment'] = True
+        if style in ('record', 'both'):
+            t['record_fragment'] = True
     return t
 
 
@@ -111,14 +115,30 @@ def _transport(cfg):
     return None
 
 
-def outbound(cfg, tag, xray=None, fragment=False):
+MUX_PROTOS = ('vless', 'vmess', 'trojan', 'ss')
+
+
+def _mux(cfg, opts):
+    """sing-box's multiplex, where the person turned it on and this config
+    can take it: not with VLESS's flow (Vision), which mux breaks."""
+    o = opts or {}
+    if not o.get('mux') or cfg.get('proto') not in MUX_PROTOS or cfg.get('flow'):
+        return None
+    out = {'enabled': True, 'protocol': o.get('mux_protocol') or 'h2mux',
+           'max_streams': int(o.get('mux_streams') or 8)}
+    if o.get('mux_padding'):
+        out['padding'] = True
+    return out
+
+
+def outbound(cfg, tag, xray=None, fragment=False, opts=None):
     """One config as a sing-box outbound.
 
     xray is (port, user, password) of the Xray inbound that carries this
     config, for one engine_for() sends there; it then becomes a SOCKS hop on
     the loopback, with a password so nothing else on the machine can use it.
     """
-    if links.engine_for(cfg) == 'xray':
+    if _prefs.engine_for(cfg, opts) == 'xray':
         if not xray:
             raise ValueError('this config needs Xray, and none was given')
         port, user, password = xray
@@ -128,8 +148,12 @@ def outbound(cfg, tag, xray=None, fragment=False):
     proto = cfg['proto']
     base = {'tag': tag, 'server': cfg['host'], 'server_port': int(cfg['port'])}
     if proto == 'ss':
-        return dict(base, type='shadowsocks', method=cfg['method'],
-                    password=cfg['password'])
+        ob = dict(base, type='shadowsocks', method=cfg['method'],
+                  password=cfg['password'])
+        mux = _mux(cfg, opts)
+        if mux:
+            ob['multiplex'] = mux
+        return ob
     if proto == 'hysteria2':
         ob = dict(base, type='hysteria2', password=cfg['password'],
                   tls=_quic_tls(cfg))
@@ -156,12 +180,15 @@ def outbound(cfg, tag, xray=None, fragment=False):
         ob = dict(base, type='trojan', password=cfg['password'])
     else:
         raise ValueError(f'unknown protocol {proto!r}')
-    tls = _tls(cfg, fragment)
+    tls = _tls(cfg, fragment, opts)
     if tls:
         ob['tls'] = tls
     tr = _transport(cfg)
     if tr:
         ob['transport'] = tr
+    mux = _mux(cfg, opts)
+    if mux:
+        ob['multiplex'] = mux
     return ob
 
 
@@ -195,10 +222,34 @@ def _clash(port, secret):
                           'secret': secret}}
 
 
-def _outbounds(configs, xray, fragment):
+def _outbounds(configs, xray, fragment, opts=None):
     xray = xray or {}
-    return [outbound(c, tag_of(c), xray.get(c['id']), fragment)
+    return [outbound(c, tag_of(c), xray.get(c['id']), fragment, opts)
             for c in configs]
+
+
+def _dns_servers(opts, split_dns, line_resolver):
+    """The resolvers: the remote one through the config, the direct one
+    straight from this line, and the line's own only for what the split
+    sends direct. A DoH address given by name is itself looked up by the
+    direct one, or - when that is a name too - by the system's."""
+    from urllib.parse import urlsplit
+    o = opts or {}
+    remote = o.get('remote_dns') or 'https://1.1.1.1/dns-query'
+    direct = o.get('direct_dns') or 'https://1.1.1.1/dns-query'
+    need_local = not links.is_address(urlsplit(direct).hostname or '')
+    remote_named = not links.is_address(urlsplit(remote).hostname or '')
+    servers = [
+        _prefs.dns_server(remote, 'dns-remote', detour=PROXY,
+                          **({'domain_resolver': 'dns-direct'} if remote_named else {})),
+        _prefs.dns_server(direct, 'dns-direct',
+                          **({'domain_resolver': 'dns-local'} if need_local else {})),
+    ]
+    if need_local:
+        servers.append({'type': 'local', 'tag': 'dns-local'})
+    if split_dns:
+        servers.append({'type': 'udp', 'tag': 'dns-line', 'server': line_resolver})
+    return servers
 
 
 # -- the connection ------------------------------------------------------------
@@ -206,7 +257,7 @@ def _outbounds(configs, xray, fragment):
 def build(configs, *, port, clash_port, clash_secret, selected=None,
           auto=False, mode='proxy', split_rules=None, line_resolver=None,
           xray=None, fragment=False, own=(), carriers=(), log_path=None,
-          auto_limit=50):
+          auto_limit=50, opts=None):
     """The whole configuration for one connection, as a dict.
 
     configs   the group, in the order the person sees it (fastest first
@@ -220,8 +271,9 @@ def build(configs, *, port, clash_port, clash_secret, selected=None,
     """
     if not configs:
         raise ValueError('no configs to connect with')
-    obs = _outbounds(configs, xray, fragment)
-    tags = [o['tag'] for o in obs]
+    o = opts or {}
+    obs = _outbounds(configs, xray, fragment, opts)
+    tags = [ob['tag'] for ob in obs]
     chosen = None
     if selected:
         chosen = next((t for t in tags if t == 'c-' + selected), None)
@@ -230,7 +282,9 @@ def build(configs, *, port, clash_port, clash_secret, selected=None,
         members = [AUTO] + members
         obs.append({'type': 'urltest', 'tag': AUTO,
                     'outbounds': tags[:max(1, int(auto_limit))],
-                    'url': TEST_URL, 'interval': '10m', 'tolerance': 50,
+                    'url': o.get('test_url') or TEST_URL,
+                    'interval': '%dm' % int(o.get('auto_interval') or 10),
+                    'tolerance': int(o.get('auto_tolerance', 50)),
                     'idle_timeout': '30m',
                     'interrupt_exist_connections': True})
     obs.append({'type': 'selector', 'tag': PROXY, 'outbounds': members,
@@ -262,17 +316,12 @@ def build(configs, *, port, clash_port, clash_secret, selected=None,
         dns_rules.append({'process_path_regex': carried, 'action': 'route',
                           'server': 'dns-direct'})
     dns_rules.extend(split_dns)
-    servers = [{'type': 'https', 'tag': 'dns-remote', 'server': DOH,
-                'detour': PROXY},
-               {'type': 'https', 'tag': 'dns-direct', 'server': DOH}]
-    if split_dns:
-        servers.append({'type': 'udp', 'tag': 'dns-line',
-                        'server': line_resolver})
+    servers = _dns_servers(opts, split_dns, line_resolver)
 
     inbounds = [{'type': 'mixed', 'tag': 'mixed-in', 'listen': '127.0.0.1',
                  'listen_port': int(port)}]
     if tun:
-        inbounds.append(_tun_inbound())
+        inbounds.append(_tun_inbound(opts))
 
     log = {'level': 'warn', 'timestamp': True}
     if log_path:
@@ -283,17 +332,21 @@ def build(configs, *, port, clash_port, clash_secret, selected=None,
         route['auto_detect_interface'] = True
     return {'log': log,
             'dns': {'servers': servers, 'rules': dns_rules,
-                    'final': 'dns-remote', 'strategy': 'ipv4_only'},
+                    'final': 'dns-remote', 'strategy': _prefs.dns_strategy(opts)},
             'inbounds': inbounds, 'outbounds': obs, 'route': route,
             'experimental': _clash(clash_port, clash_secret)}
 
 
-def _tun_inbound():
+def _tun_inbound(opts=None):
     import tun
-    return {'type': 'tun', 'tag': 'tun-in', 'interface_name': tun.ADAPTER,
-            'address': [tun.ADDRESS], 'mtu': 9000, 'auto_route': True,
-            'strict_route': True,
-            'route_exclude_address': list(tun.LOCAL_NETS)}
+    o = opts or {}
+    out = {'type': 'tun', 'tag': 'tun-in', 'interface_name': tun.ADAPTER,
+           'address': [tun.ADDRESS], 'mtu': int(o.get('tun_mtu') or 9000),
+           'auto_route': True, 'strict_route': bool(o.get('strict_route', True)),
+           'route_exclude_address': list(tun.LOCAL_NETS)}
+    if o.get('tun_stack') in ('system', 'gvisor', 'mixed'):
+        out['stack'] = o['tun_stack']
+    return out
 
 
 def _path_rx(path):
@@ -304,10 +357,10 @@ def _path_rx(path):
 # -- the latency test ----------------------------------------------------------
 
 def build_probe(configs, ports, *, clash_port, clash_secret, xray=None,
-                fragment=False, log_path=None):
+                fragment=False, log_path=None, opts=None):
     """One loopback inbound per config (ports: id -> port), each routed to
     that config alone. Nothing else is reachable through it."""
-    obs = _outbounds(configs, xray, fragment)
+    obs = _outbounds(configs, xray, fragment, opts)
     inbounds, rules = [], []
     for cfg, ob in zip(configs, obs):
         tag = 'in-' + cfg['id']
@@ -321,9 +374,9 @@ def build_probe(configs, ports, *, clash_port, clash_secret, xray=None,
     if log_path:
         log['output'] = log_path
     return {'log': log,
-            'dns': {'servers': [{'type': 'https', 'tag': 'dns-direct',
-                                 'server': DOH}],
-                    'final': 'dns-direct', 'strategy': 'ipv4_only'},
+            'dns': {'servers': [x for x in _dns_servers(opts, [], None)
+                                if x['tag'] != 'dns-remote'],
+                    'final': 'dns-direct', 'strategy': _prefs.dns_strategy(opts)},
             'inbounds': inbounds, 'outbounds': obs,
             'route': {'rules': rules,
                       'default_domain_resolver': 'dns-direct'},

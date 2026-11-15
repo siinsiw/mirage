@@ -70,6 +70,10 @@ class Section:
             store.seed_settings(prefs.from_mirage(owner._engine))
         except Exception:
             self._log('seed: ' + traceback.format_exc())
+        # Subscriptions brought up to date on their own, while the app is
+        # open: at start when asked, then every N hours (Settings >
+        # Subscriptions). Nothing else here runs unasked.
+        threading.Thread(target=self._keep_subs_fresh, daemon=True).start()
 
     # -- the one door ------------------------------------------------------
 
@@ -241,6 +245,29 @@ class Section:
                              'connected - disconnect first')
         return {'removed': store.remove_group(gid), 'list': self._listing()}
 
+    def _keep_subs_fresh(self, first_wait=30, every=300):
+        stop = getattr(self.owner, '_stop', None)
+        wait = (stop.wait if stop is not None else time.sleep)
+        if wait(first_wait):
+            return
+        first = True
+        while True:
+            try:
+                opts = store.settings()
+                hours = int(opts.get('sub_auto_hours') or 0)
+                now = time.time()
+                for g in store.load()['groups']:
+                    if g.get('kind') != 'sub':
+                        continue
+                    stale = hours and (now - float(g.get('updated') or 0)) > hours * 3600
+                    if (first and opts.get('sub_on_launch')) or stale:
+                        self._fetch(g['id'])
+            except Exception:
+                self._log('subs: ' + traceback.format_exc())
+            first = False
+            if wait(every):
+                return
+
     def _fetch(self, gid):
         if gid in self._fetching:
             return
@@ -249,7 +276,9 @@ class Section:
 
         def work():
             try:
-                configs, problems, info, name = subs.fetch(store.group_url(gid), via)
+                agent = store.settings().get('sub_user_agent') or None
+                configs, problems, info, name = subs.fetch(
+                    store.group_url(gid), via, user_agent=agent)
                 n = store.replace_group(gid, configs)
                 fields = {'info': info, 'updated': time.time(), 'error': None}
                 state = store.load()
@@ -289,12 +318,13 @@ class Section:
         if not configs:
             raise ValueError('nothing to test')
         cancel = self._cancel = threading.Event()
-        fragment = bool(store.settings(state).get('fragment'))
+        opts = store.settings(state)
+        fragment = bool(opts.get('fragment'))
 
         def work():
             try:
                 results = probe.test(
-                    configs, fragment=fragment, cancel=cancel,
+                    configs, fragment=fragment, cancel=cancel, opts=opts,
                     progress=lambda done, total, cid, r: self._emit(
                         'test', done=done, total=total, id=cid, result=r))
                 store.set_results({k: v for k, v in results.items()
@@ -385,6 +415,24 @@ class Section:
     def do_disconnect(self, p):
         return self.owner.disconnect()
 
+    def do_autostart(self, p):
+        """At start, Settings > Connection > Connect on opening: the last one
+        used, or the fastest of its group. Only with nothing up and nothing
+        under way."""
+        how = store.settings().get('auto_connect')
+        state = store.load()
+        cid = state.get('selected')
+        owner = self.owner
+        if how not in ('last', 'fastest') or not cid or not store.find(cid, state):
+            return {'started': False}
+        try:
+            if owner._busy or self.runner.active() or owner._engine.running():
+                return {'started': False}
+        except Exception:
+            return {'started': False}
+        self.do_connect({'id': cid, 'auto': how == 'fastest'})
+        return {'started': True}
+
     def _confirm(self):
         def work():
             info = self.runner.info
@@ -469,4 +517,12 @@ class Section:
                 r.disconnect(quiet=True)
             except Exception:
                 pass
+            # Settings > Connection > Reconnect when it drops.
+            if r.prefs().get('reconnect_on_drop') and cur[0]:
+                try:
+                    self.do_connect({'id': None if cur[0] == 'auto' else cur[0],
+                                     'auto': cur[1]})
+                    return
+                except ValueError:
+                    pass
             owner._emit('Dropped', {'status': r.status()})

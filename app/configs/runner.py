@@ -251,12 +251,13 @@ class Runner:
             sb = paths.singbox_exe()
             if not sb:
                 raise RuntimeError('engine-missing: sing-box.exe was not found')
+            opts = self.prefs()
             xbin = paths.xray_exe()
             if not xbin:
-                if links.engine_for(cfg) == 'xray':
+                if _prefs.engine_for(cfg, opts) == 'xray':
                     raise RuntimeError('xray-missing: this config needs Xray '
                                        '(xray.exe), which was not found')
-                group = [c for c in group if links.engine_for(c) != 'xray']
+                group = [c for c in group if _prefs.engine_for(c, opts) != 'xray']
 
             # A switch with the kill switch on keeps the machine pointed here
             # while the old programs go and the new ones come up - and if the
@@ -264,7 +265,7 @@ class Runner:
             held = self.holding()
             self.disconnect(quiet=True, hold=held)
             progress({'phase': 'starting', 'country': '', 'city': cfg['name']})
-            fragment = bool(store.settings(state).get('fragment'))
+            fragment = bool(opts.get('fragment'))
             mode = self.want_mode()
             port = self.port if (self.port and mode == self.mode
                                  and procs.port_free(self.port)) \
@@ -273,15 +274,15 @@ class Runner:
             secret = procs.token()
 
             hops = {}
-            for_xray = [c for c in group if links.engine_for(c) == 'xray']
+            for_xray = [c for c in group if _prefs.engine_for(c, opts) == 'xray']
             try:
                 if for_xray:
                     ports = procs.free_ports(len(for_xray))
                     entries = [(c, ports[n], 'relay', procs.token())
                                for n, c in enumerate(for_xray)]
                     hops = {c['id']: (p, u, pw) for c, p, u, pw in entries}
-                    path = procs.write_config(xray.build(entries, fragment),
-                                              'xray')
+                    path = procs.write_config(xray.build(entries, fragment,
+                                                         opts=opts), 'xray')
                     try:
                         self.xray, xlog = procs.start(xbin, ['run', '-c', path],
                                                       'xray.log')
@@ -299,7 +300,7 @@ class Runner:
                     split_rules=split_rules,
                     line_resolver=tunmod.line_dns() if split_rules else None,
                     xray=hops, fragment=fragment, own=[sys.executable],
-                    carriers=[xbin, sb])
+                    carriers=[xbin, sb], opts=opts)
                 self.clash = procs.Clash(clash_port, secret)
                 if mode == 'proxy':
                     path = procs.write_config(config, 'run')

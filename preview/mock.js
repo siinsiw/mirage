@@ -43,8 +43,7 @@
       tls: true, allowInsecure: false,
       last: ms ? { ms, country: cc, at: now() - 600 } : null })),
     selected: 'c1', auto: false, fragment: false,
-    settings: { mode: 'system', kill_switch: true, split_mode: 'bypass', split_iran: true,
-      split_apps: [], split_domains: [], fragment: false },
+    settings: {"mode": "system", "kill_switch": true, "auto_connect": "off", "reconnect_on_drop": false, "split_mode": "bypass", "split_iran": true, "split_apps": [], "split_domains": [], "fragment": false, "fragment_style": "both", "fragment_engine": "singbox", "fragment_packets": "tlshello", "fragment_length": "100-200", "fragment_interval": "10-20", "remote_dns": "https://1.1.1.1/dns-query", "direct_dns": "https://1.1.1.1/dns-query", "ipv6": "off", "sub_auto_hours": 12, "sub_on_launch": false, "sub_user_agent": "", "test_kind": "real", "test_url": "https://www.cloudflare.com/cdn-cgi/trace", "test_timeout": 8, "test_parallel": 8, "sort": "speed", "auto_interval": 10, "auto_tolerance": 50, "mux": false, "mux_protocol": "h2mux", "mux_streams": 8, "mux_padding": false, "tun_stack": "auto", "tun_mtu": 9000, "strict_route": true},
     live: { on: false, current: null, auto: false, using: null, blocked: false },
   };
   const cfList = () => ({ groups: CF.groups, configs: CF.configs, selected: CF.selected,

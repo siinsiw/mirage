@@ -28,6 +28,7 @@ import time
 import paths
 
 from . import links, procs, singbox, xray
+from . import prefs as _prefs
 
 TRACE_HOST = 'www.cloudflare.com'
 TRACE_PATH = '/cdn-cgi/trace'
@@ -51,14 +52,26 @@ def classify(said):
     return 'failed'
 
 
-def through(port, timeout=TIMEOUT):
-    """(ms, ip, country) through one loopback HTTP proxy port."""
+def _target(url):
+    """(host, port, path) of the page a test loads."""
+    from urllib.parse import urlsplit
+    parts = urlsplit(url or '')
+    if parts.scheme != 'https' or not parts.hostname:
+        return TRACE_HOST, 443, TRACE_PATH
+    return parts.hostname, parts.port or 443, parts.path or '/'
+
+
+def through(port, timeout=TIMEOUT, url=None):
+    """(ms, ip, country) through one loopback HTTP proxy port. The country
+    and address only come back from Cloudflare's trace page; another page
+    gives a time and nothing else."""
+    host, hport, path = _target(url)
     began = time.monotonic()
     raw = socket.create_connection(('127.0.0.1', int(port)), timeout=timeout)
     try:
         raw.settimeout(timeout)
-        raw.sendall(f'CONNECT {TRACE_HOST}:443 HTTP/1.1\r\n'
-                    f'Host: {TRACE_HOST}:443\r\n\r\n'.encode('ascii'))
+        raw.sendall(f'CONNECT {host}:{hport} HTTP/1.1\r\n'
+                    f'Host: {host}:{hport}\r\n\r\n'.encode('ascii'))
         head = b''
         while b'\r\n\r\n' not in head:
             chunk = raw.recv(1024)
@@ -70,8 +83,8 @@ def through(port, timeout=TIMEOUT):
         if b' 200' not in head.split(b'\r\n', 1)[0]:
             raise OSError('the local proxy refused')
         tls = ssl.create_default_context().wrap_socket(
-            raw, server_hostname=TRACE_HOST)
-        tls.sendall((f'GET {TRACE_PATH} HTTP/1.1\r\nHost: {TRACE_HOST}\r\n'
+            raw, server_hostname=host)
+        tls.sendall((f'GET {path} HTTP/1.1\r\nHost: {host}\r\n'
                      'User-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n')
                     .encode('ascii'))
         body = b''
@@ -86,8 +99,9 @@ def through(port, timeout=TIMEOUT):
     finally:
         raw.close()
     text = body.decode('latin-1')
-    if ' 200' not in text.split('\r\n', 1)[0]:
-        raise OSError('the trace page did not answer')
+    status = text.split('\r\n', 1)[0]
+    if not any(f' {c}' in status for c in ('200', '204', '301', '302')):
+        raise OSError('the test page did not answer')
     seen = dict(line.split('=', 1) for line in text.splitlines()
                 if '=' in line and ' ' not in line.split('=', 1)[0])
     return took, seen.get('ip', ''), (seen.get('loc') or '').lower()[:2]
@@ -106,11 +120,13 @@ def reason_in_log(log_path, tag):
     return ''
 
 
-def _one(cfg, port, log_path, cancel):
+def _one(cfg, port, log_path, cancel, opts=None):
     if cancel is not None and cancel.is_set():
         return {'ms': None, 'error': 'cancelled'}
+    o = opts or {}
     try:
-        ms, ip, country = through(port)
+        ms, ip, country = through(port, float(o.get('test_timeout') or TIMEOUT),
+                                  o.get('test_url'))
         return {'ms': max(1, ms), 'ip': ip, 'country': country, 'error': None}
     except Exception as e:
         time.sleep(0.2)     # the log line is written as the dial fails
@@ -118,10 +134,24 @@ def _one(cfg, port, log_path, cancel):
         return {'ms': None, 'error': classify(said), 'said': said[-160:]}
 
 
-def test(configs, progress=None, fragment=False, cancel=None):
+def tcp_time(cfg, timeout=TIMEOUT):
+    """How long a TCP connection to the server itself takes to open - no
+    TLS, no proxy, no page. Quick, and says nothing about whether the config
+    carries anything, or about a server behind a CDN; it is offered because
+    some people want it."""
+    began = time.monotonic()
+    s = socket.create_connection((cfg['host'], int(cfg['port'])), timeout=timeout)
+    s.close()
+    return max(1, int((time.monotonic() - began) * 1000))
+
+
+def test(configs, progress=None, fragment=False, cancel=None, opts=None):
     """id -> {'ms', 'ip', 'country', 'error', 'said'} for every config.
 
     progress(done, total, id, result) after each one."""
+    o = opts or {}
+    if o.get('test_kind') == 'tcp':
+        return _tcp_all(configs, progress, cancel, o)
     sb = paths.singbox_exe()
     if not sb:
         raise RuntimeError('engine-missing: sing-box.exe was not found')
@@ -141,17 +171,48 @@ def test(configs, progress=None, fragment=False, cancel=None):
     for start in range(0, total, BATCH):
         if cancel is not None and cancel.is_set():
             break
-        _batch(sb, configs[start:start + BATCH], note, fragment, cancel)
+        _batch(sb, configs[start:start + BATCH], note, fragment, cancel, o)
     return results
 
 
-def _batch(sb, batch, note, fragment, cancel):
+def _tcp_all(configs, progress, cancel, o):
+    results, done = {}, [0]
+    timeout = float(o.get('test_timeout') or TIMEOUT)
+
+    def one(cfg):
+        if cancel is not None and cancel.is_set():
+            return {'ms': None, 'error': 'cancelled'}
+        try:
+            return {'ms': tcp_time(cfg, timeout), 'error': None}
+        except Exception as e:
+            return {'ms': None, 'error': classify(str(e)), 'said': str(e)[-160:]}
+
+    with concurrent.futures.ThreadPoolExecutor(int(o.get('test_parallel') or CONCURRENCY)) as pool:
+        jobs = {pool.submit(one, c): c for c in configs}
+        for job in concurrent.futures.as_completed(jobs):
+            c = jobs[job]
+            r = job.result()
+            # The country is kept from the last real test: a TCP time
+            # cannot say where the traffic comes out.
+            if c.get('last') and c['last'].get('country'):
+                r['country'] = c['last']['country']
+            results[c['id']] = r
+            done[0] += 1
+            if progress:
+                try:
+                    progress(done[0], len(configs), c['id'], r)
+                except Exception:
+                    pass
+    return results
+
+
+def _batch(sb, batch, note, fragment, cancel, opts=None):
     xbin = paths.xray_exe()
-    for_xray = [c for c in batch if links.engine_for(c) == 'xray']
+    for_xray = [c for c in batch if _prefs.engine_for(c, opts) == 'xray']
     if for_xray and not xbin:
         for c in for_xray:
             note(c['id'], {'ms': None, 'error': 'xray-missing'})
-        batch = [c for c in batch if links.engine_for(c) != 'xray']
+        batch = [c for c in batch if _prefs.engine_for(c, opts) != 'xray']
         for_xray = []
     if not batch:
         return
@@ -168,7 +229,8 @@ def _batch(sb, batch, note, fragment, cancel):
             entries = [(c, xports[n], 'relay', procs.token())
                        for n, c in enumerate(for_xray)]
             hops = {c['id']: (p, u, pw) for c, p, u, pw in entries}
-            path = procs.write_config(xray.build(entries, fragment), 'probe-xray')
+            path = procs.write_config(xray.build(entries, fragment, opts=opts),
+                                      'probe-xray')
             files.append(path)
             xchild, xlog = procs.start(xbin, ['run', '-c', path], 'probe-xray.log')
             if not procs.wait(xchild, lambda: all(procs.listening(p)
@@ -185,7 +247,7 @@ def _batch(sb, batch, note, fragment, cancel):
             return
         config = singbox.build_probe(batch, own, clash_port=clash_port,
                                      clash_secret=secret, xray=hops,
-                                     fragment=fragment)
+                                     fragment=fragment, opts=opts)
         path = procs.write_config(config, 'probe')
         files.append(path)
         child, log = procs.start(sb, ['run', '-c', path, '--disable-color'],
@@ -195,8 +257,9 @@ def _batch(sb, batch, note, fragment, cancel):
             raise RuntimeError('probe-failed: ' + (procs.tail(log, 300)
                                                    or 'sing-box did not start'))
         procs.forget(path)
-        with concurrent.futures.ThreadPoolExecutor(CONCURRENCY) as pool:
-            jobs = {pool.submit(_one, c, own[c['id']], log, cancel): c
+        width = int((opts or {}).get('test_parallel') or CONCURRENCY)
+        with concurrent.futures.ThreadPoolExecutor(width) as pool:
+            jobs = {pool.submit(_one, c, own[c['id']], log, cancel, opts): c
                     for c in batch}
             for job in concurrent.futures.as_completed(jobs):
                 c = jobs[job]

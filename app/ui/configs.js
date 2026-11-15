@@ -532,6 +532,19 @@
     refresh,
     list: () => view.list,
     draw,
+    // Settings > Connection > Connect on opening, once, at start.
+    async autostart() {
+      if (state.mode !== 'off') return;
+      try {
+        const r = await call('autostart');
+        if (r.ok && r.started) {
+          view.mine = true;
+          state.mode = 'busy';
+          render();
+          setStatus('Connecting', 'busy', 'Starting your config', '');
+        }
+      } catch (e) { /* a preference, not worth a failure at start */ }
+    },
   };
 
   $('cfgPaste').addEventListener('click', () => addLinks());

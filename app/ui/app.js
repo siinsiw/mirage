@@ -3583,6 +3583,10 @@ async function bootSteps() {
       && !document.querySelector('dialog[open]')) {
     window.cfgShell.enter(true);
   }
+  // Configs' own Connect on opening, when it is set and nothing is up.
+  if (window.cfgSection && s.state !== 'on' && !s.blocked && !lacking.length) {
+    window.cfgSection.autostart();
+  }
 }
 
 /* --------------------------------------------------------------- wiring */

@@ -327,7 +327,13 @@ def listing(state=None):
     """What the page draws: no id, password or subscription address."""
     state = state or load()
     configs = []
-    for c in state['configs']:
+    how = settings(state).get('sort')
+    rows = state['configs']
+    if how == 'speed':
+        rows = ordered(rows)
+    elif how == 'name':
+        rows = sorted(rows, key=lambda c: (c.get('name') or '').lower())
+    for c in rows:
         configs.append({
             'id': c['id'], 'group': c.get('group') or MANUAL,
             'name': c.get('name') or '', 'label': links.label(c),
