@@ -144,8 +144,8 @@
     surfshark: { servers: 0, account: false, waiting: 0, usable: false },
     windscribe: { servers: 0, account: false, waiting: 0, usable: false },
   } : {
-    surfshark: { servers: 84, account: true, waiting: 0, usable: true, setupAt: Math.floor(now() - 86400 * 2), setupFail: null },
-    windscribe: { servers: 41, account: true, waiting: 12, usable: true, setupAt: Math.floor(now() - 86400 * 5),
+    surfshark: { servers: 84, countries: 26, account: true, waiting: 0, usable: true, setupAt: Math.floor(now() - 86400 * 2), setupFail: null },
+    windscribe: { servers: 41, countries: 24, account: true, waiting: 12, usable: true, setupAt: Math.floor(now() - 86400 * 5),
                   setupFail: { at: Math.floor(now() - 3600), why: 'The server check stopped answering. Press Try again.' } },
   });
 

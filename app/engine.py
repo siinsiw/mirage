@@ -547,6 +547,14 @@ class Engine:
             out[s.provider] = out.get(s.provider, 0) + 1
         return out
 
+    def countries_by_provider(self):
+        """How many countries each provider covers, whatever is selected -
+        counted off the same unfiltered scan as counts_by_provider."""
+        seen = {}
+        for s in self.scan():
+            seen.setdefault(s.provider, set()).add(s.country)
+        return {k: len(v) for k, v in seen.items()}
+
     def scan(self):
         out, seen = [], set()
         for folder in self.sources():

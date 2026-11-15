@@ -638,6 +638,7 @@ class Api:
         which is a chooser nobody can act on.
         """
         counts = self._engine.counts_by_provider()
+        lands = self._engine.countries_by_provider()
         waiting = self._unpinned_by_provider()
         roster = accounts.listing()
         done = self._settings.get('setupAt') or {}
@@ -649,6 +650,7 @@ class Api:
             at = done.get(name) if isinstance(done, dict) else None
             fail = failed.get(name)
             out[name] = {'servers': servers, 'account': signed,
+                         'countries': lands.get(name, 0),
                          'waiting': waiting.get(name, 0),
                          'usable': bool(servers) and signed,
                          # When its servers were last set up whole, and the
@@ -658,6 +660,20 @@ class Api:
                          'setupFail': (fail if fail and (not at or fail['at'] > at)
                                        else None)}
         return out
+
+    @staticmethod
+    def _provider_of_folder(folder):
+        """surfshark or windscribe when folder is that provider's own
+        download folder, else None."""
+        try:
+            here = os.path.normcase(os.path.abspath(folder or ''))
+            for name, mine in (('surfshark', surfshark.CONFIG_DIR),
+                               ('windscribe', windscribe.CONFIG_DIR)):
+                if here == os.path.normcase(os.path.abspath(mine)):
+                    return name
+        except (TypeError, ValueError):
+            pass
+        return None
 
     def setupDone(self, provider=None):
         """A setup that got to the end: fetched and pinned. Stamped so the
@@ -2499,6 +2515,12 @@ class Api:
                 if isinstance(p, dict) and p.get('phase') == 'finished':
                     self._apply_sources()
                     self._sync_providers()
+                    # A run that pinned a provider's own folder is that
+                    # provider set up, whichever screen started it - the
+                    # setup sheet or Settings' Pin by hand.
+                    who = self._provider_of_folder(was)
+                    if who and p.get('written') and not p.get('error'):
+                        self.setupDone(who)
             except Exception as e:
                 _log_line('setup.log', f'refreshing the server list after '
                                        f'pinning failed: {e}')

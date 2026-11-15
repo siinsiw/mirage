@@ -7438,9 +7438,10 @@ function paintTesting() {
     const busy = el.dataset.test === state.testing;
     el.dataset.busy = String(busy);
     el.dataset.idle = String(!!state.testing && !busy);
+    const one = el.dataset.test.startsWith('file:');
     el.setAttribute('aria-label', busy ? 'Stop testing this one'
-      : 'Test the servers here');
-    el.title = busy ? 'Stop' : 'Test these';
+      : one ? 'Test this server' : 'Test the servers here');
+    el.title = busy ? 'Stop' : one ? 'Test this one' : 'Test these';
   }
 }
 
@@ -7759,9 +7760,10 @@ function testMark(code) {
   el.dataset.test = code;
   el.dataset.busy = String(busy);
   el.setAttribute('role', 'button');
+  const one = code.startsWith('file:');
   el.setAttribute('aria-label', busy ? 'Stop testing this one'
-    : 'Test the servers here');
-  el.title = busy ? 'Stop' : 'Test these';
+    : one ? 'Test this server' : 'Test the servers here');
+  el.title = busy ? 'Stop' : one ? 'Test this one' : 'Test these';
   el.append(icon('#i-bolt', 'ico rowtest__ico'));
   return el;
 }
@@ -8267,7 +8269,7 @@ function paintSetupCards(info) {
     const nm = document.createElement('b');
     nm.textContent = PROVIDER_NAMES[key];
     head.append(providerMark(key, 'ico setupcard__mark'), nm);
-    const countries = (state.countries || []).filter((c) => (c.by || {})[key]).length;
+    const countries = p.countries || 0;
     const line = document.createElement('p');
     line.className = 'setupcard__line';
     line.textContent = !p.account ? 'Not signed in'
@@ -8284,9 +8286,12 @@ function paintSetupCards(info) {
     const go = document.createElement('button');
     go.type = 'button';
     go.className = 'btn btn--quiet btn--auto setupcard__go';
-    go.textContent = p.account ? 'Set up again' : 'Sign in first';
-    go.disabled = !p.account;
-    go.addEventListener('click', () => prepareServers(key));
+    // Not under a live connection: the lookups and the reachability checks
+    // would go out through the tunnel and judge every address from its exit.
+    const up = state.mode === 'on' || state.mode === 'busy';
+    go.textContent = !p.account ? 'Sign in first' : up ? 'Disconnect first' : 'Set up again';
+    go.disabled = !p.account || up;
+    go.addEventListener('click', () => { setup.queue = []; prepareServers(key); });
     li.append(go);
     box.append(li);
   }
@@ -8306,14 +8311,18 @@ function setupAgainNote(text) {
     const go = document.createElement('button');
     go.type = 'button';
     go.className = 'btn btn--quiet btn--auto';
-    go.textContent = signed.length > 1 ? 'Set up all servers again' : 'Set up servers again';
-    go.addEventListener('click', async () => {
+    const up = state.mode === 'on' || state.mode === 'busy';
+    go.textContent = up ? 'Disconnect first, then set the servers up again'
+      : signed.length > 1 ? 'Set up all servers again' : 'Set up servers again';
+    go.disabled = up;
+    go.addEventListener('click', () => {
       shut($('picker'));
-      for (const key of signed) {
-        // One after the other: they share the pinning run.
-        // eslint-disable-next-line no-await-in-loop
-        if (!(await prepareServers(key))) break;
-      }
+      // One after the other, in the one sheet: they share the pinning run,
+      // and the next starts only when the one before has finished (see the
+      // end of prepareServers). A failure stops there, and its Try again
+      // carries on with the rest.
+      setup.queue = signed.slice(1);
+      prepareServers(signed[0]);
     });
     p.append(go);
   }
@@ -8827,7 +8836,7 @@ $('welcomeServer').addEventListener('click', () => {
 /* The setup: an account's servers fetched and then pinned, with each step
    shown as it happens. What the Android app does on its own after a sign-in
    - and what this app used to leave to two buttons in Settings. */
-const setup = { provider: null, finish: null, lastPin: 0, watch: null };
+const setup = { provider: null, finish: null, lastPin: 0, watch: null, queue: [], closing: null };
 
 // How long a pinning run may go without a single word before the sheet stops
 // waiting. One hostname is at most a 20 s lookup plus a reachability check
@@ -8929,7 +8938,8 @@ function setupFail(why) {
   // nothing to say which step it was.
   try {
     const logged = window.pywebview.api.logSetup(setup.provider, why || '');
-    if (logged && logged.catch) logged.catch(() => {});
+    // And Settings' card says so straight away, not on the next open.
+    if (logged && logged.then) logged.then(() => refreshPrefs(), () => {});
   } catch (e) { /* the log is not worth a second failure */ }
 }
 
@@ -8955,6 +8965,8 @@ function pinFinished() {
 
 async function prepareServers(provider) {
   const dlg = $('setupDlg');
+  // A sheet about to close from the run before must stay for this one.
+  if (setup.closing) { clearTimeout(setup.closing); setup.closing = null; }
   const name = provider === 'windscribe' ? 'Windscribe' : 'Surfshark';
   setup.provider = provider;
   $('setupTitle').textContent = 'Getting your servers ready';
@@ -9016,10 +9028,9 @@ async function prepareServers(provider) {
   }
   if (p.error) { setupFail(p.error); return false; }
   if (!p.written) { setupFail('No server answered. Try again in a moment.'); return false; }
-  try {
-    await window.pywebview.api.setupDone(provider);
-    await refreshPrefs();
-  } catch (e) { /* the stamp is not worth failing a setup that worked */ }
+  // Stamped on the Python side when the pin run finished; this repaints the
+  // Servers screen with it.
+  try { await refreshPrefs(); } catch (e) { /* only a repaint */ }
   setupAt('pinning', 'done');
   $('setupTitle').textContent = 'Ready';
   $('setupSay').textContent = 'Mirage connects through whichever server answers first.';
@@ -9032,7 +9043,12 @@ async function prepareServers(provider) {
     setHint(`${state.countries.length} countries ready.`);
   }
   render();
-  setTimeout(() => shut(dlg), 1200);
+  const next = (setup.queue || []).shift();
+  if (next) {
+    setup.closing = setTimeout(() => { setup.closing = null; prepareServers(next); }, 1200);
+  } else {
+    setup.closing = setTimeout(() => { setup.closing = null; shut(dlg); }, 1200);
+  }
   return true;
 }
 
