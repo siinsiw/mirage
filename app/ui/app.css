@@ -6726,6 +6726,15 @@ body::after {
 
 #sortBy .pair__opt[aria-selected='true'] { background: var(--surface-2); box-shadow: none; font-weight: 500; }
 
+/* Four sorts and the source button on one line in a 400px window: only the
+   chosen one says its name, the others are their icon, with the name in the
+   tooltip and the accessible label. */
+#sortBy .pair__opt[aria-selected='false'] { padding: 0 10px; }
+#sortBy .pair__opt[aria-selected='false'] > span {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+
 .listhead { height: 34px; padding: 0 10px 0 14px; border-radius: var(--r-pill); box-shadow: inset 0 0 0 1px var(--edge); }
 
 /* ------------------------------------------------------- the location list */

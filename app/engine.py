@@ -31,8 +31,8 @@ import split
 import tun
 import windscribe
 from sweep import CREATE_NO_WINDOW, _ps_array, _ps_string, discard, elevated
-from countries import (aliases, canon, city_name, continent, country_name,
-                       listing_order)
+from countries import (WINDSCRIBE_CITIES, aliases, canon, city_name, continent,
+                       country_name, listing_order)
 
 HERE = paths.APP_DIR
 ROOT = paths.DATA_DIR
@@ -665,17 +665,21 @@ class Engine:
         listed = windscribe.order()
         place = listing_order(list(by_country), listed['countries'] or None)
         city_at = {}
-        for cc, names in listed['cities'].items():
+        cities_listed = listed['cities'] or {
+            cc: list(names) for cc, names in WINDSCRIBE_CITIES.items()}
+        for cc, names in cities_listed.items():
             for i, name in enumerate(names):
                 city_at.setdefault((canon(cc), city_key(name)), i)
 
         def city_rank(x):
-            # A city every exit of which was refused still goes to the
-            # bottom; the rest keep Windscribe's order, and cities it does
-            # not list follow A-Z.
+            # A city every exit of which was asked and refused still goes to
+            # the bottom - one refusal among twenty untried is not that, and
+            # moves nothing. The rest keep Windscribe's order, and cities it
+            # does not list follow A-Z.
             at = city_at.get((x['country'], x['code']))
-            return (bool(x['tested'] and not x['ok']), at is None,
-                    at if at is not None else 0, x['name'])
+            dead = bool(x['tested'] and not x['ok']
+                        and x['tested'] >= x['count'])
+            return (dead, at is None, at if at is not None else 0, x['name'])
 
         out = []
         for code, c in by_country.items():
@@ -704,7 +708,11 @@ class Engine:
         # a list of places to connect through that is worth reordering for.
         # Nothing here is ranked by speed any more - a test runs only when
         # someone asks for one, so most rows have no time to rank by.
-        out.sort(key=lambda c: (bool(c['tested'] and not c['ok']),
+        # Every exit asked and none answered, the same rule the list's "Not
+        # answering" group uses: one failed hand test out of fifty must not
+        # throw the United States out of first place.
+        out.sort(key=lambda c: (bool(c['tested'] and not c['ok']
+                                     and c['tested'] >= c['count']),
                                 c['order'], c['name']))
         return out
 

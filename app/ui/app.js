@@ -394,7 +394,6 @@ function stateMoment() {
 
 function openPicker() {
   const began = performance.now();
-  state.freeze = null;
   $('list').dataset.key = '';
   // Nothing is tested on the way in: a test runs only on the row somebody
   // presses the bolt on.
@@ -468,16 +467,8 @@ function drawList(query) {
   total.append(tally, ' locations');
   list.append(total);
 
-  let found = sortCountries(
+  const found = sortCountries(
     q ? state.fuse.search(q).map((r) => r.item) : state.countries);
-  // The order a quick run found the list in, held while its results land:
-  // rows that move out from under the pointer are worse than numbers that
-  // are briefly out of order. Fastest first puts them in place.
-  if (!q && state.freeze) {
-    const at = new Map(state.freeze.order.map((code, i) => [code, i]));
-    const pos = (c) => (at.has(c.code) ? at.get(c.code) : 1e9);
-    found = found.slice().sort((a, b) => pos(a) - pos(b));
-  }
   if (!found.length) {
     tally.textContent = '0';
     const e = document.createElement('p');
@@ -516,7 +507,7 @@ function drawList(query) {
   // Fastest first is only honest about the countries that were timed; within
   // a group the rest go below their own heading, in alphabetical order.
   const byPing = !q && state.sortBy === 'ping';
-  const timed = (c) => (state.freeze ? state.freeze.tested.has(c.code) : !!c.tested);
+  const timed = (c) => !!c.tested;
 
   const jobs = [];
   for (const [name, items, note] of groups) {
@@ -7840,7 +7831,9 @@ async function toggleFavourite(code) {
    come above everything, which is the whole point of starring one. */
 function sortCountries(list) {
   const kind = state.sortBy || 'windscribe';
-  const dead = (c) => (c.tested && !c.ok ? 1 : 0);
+  // Every exit asked and refused, as "Not answering" counts it - not one
+  // failed test among fifty untried.
+  const dead = (c) => (c.tested && !c.ok && c.tested >= c.count ? 1 : 0);
   const fav = (c) => (starredIn(c) ? 0 : 1);
   const cmp = {
     // Windscribe's own client's order, which the catalogue sends as `order`.
@@ -8067,9 +8060,6 @@ $('sortBy').addEventListener('click', async (e) => {
   const opt = e.target.closest('.pair__opt');
   if (!opt) return;
   state.sortBy = opt.dataset.sort;
-  // The list is laid out afresh, so the line asking for it is done with.
-  if (state.freeze) said($('reachSaid'), '');
-  state.freeze = null;
   paintSort();
   $('list').dataset.key = '';
   drawList($('search').value.trim());

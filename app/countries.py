@@ -161,6 +161,31 @@ WINDSCRIBE_ORDER = (
     'hk', 'id', 'jp', 'my', 'ph', 'sg', 'kr', 'tw', 'th', 'ae', 'vn', 'ar',
     'br', 'cl', 'co', 'ec', 'sv', 'gt', 'mx', 'pa', 'py', 'pe', 'uy', 'aq')
 
+# And the cities inside the countries that have more than one, from the same
+# list on the same day - for a copy whose configs were fetched before the
+# order was kept, until its next "Set up again" writes the live one.
+WINDSCRIBE_CITIES = {
+    'us': ('Dallas', 'Atlanta', 'Denver', 'Kansas City', 'Houston', 'Chicago',
+           'New York', 'Miami', 'Cleveland', 'New Jersey', 'Buffalo', 'Boston',
+           'Charlotte', 'Washington DC', 'Philadelphia', 'Tampa', 'Detroit',
+           'South Bend', 'Ashburn', 'Raleigh', 'Los Angeles', 'Seattle',
+           'Las Vegas', 'Bend', 'Phoenix', 'San Francisco', 'Santa Clara',
+           'San Jose', 'Salt Lake City', 'Honolulu'),
+    'ca': ('Toronto', 'Montreal', 'Halifax', 'Vancouver', 'Calgary', 'Winnipeg'),
+    'cy': ('Nicosia', 'Limassol'),
+    'fr': ('Paris', 'Marseille', 'Bordeaux'),
+    'de': ('Frankfurt', 'Berlin'),
+    'il': ('Ashdod', 'Tel Aviv'),
+    'it': ('Milan', 'Palermo'),
+    'pl': ('Gdansk', 'Warsaw'),
+    'es': ('Madrid', 'Barcelona'),
+    'gb': ('Manchester', 'London', 'Edinburgh', 'Shamchester'),
+    'ba': ('Sarajevo', 'Novi Travnik'),
+    'in': ('Mumbai', 'New Delhi', 'Fake Mumbai'),
+    'au': ('Perth', 'Melbourne', 'Brisbane', 'Sydney', 'Adelaide'),
+    'id': ('Jakarta', 'Surabaya', 'Bali'),
+}
+
 
 def listing_order(codes, order=None):
     """Where each country goes in the list, as {code: position}.

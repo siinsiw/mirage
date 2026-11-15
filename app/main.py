@@ -5148,7 +5148,7 @@ def ui_check(window):
         said['pickerBackOpen'] = window.evaluate_js(
             "document.getElementById('picker').open")
         window.evaluate_js(
-            "document.querySelector('#sortBy [data-sort=ping]').click()")
+            "document.querySelector('#sortBy [data-sort=windscribe]').click()")
 
         # -- which answered, and how fast -----------------------------
         #
@@ -5349,14 +5349,14 @@ def ui_check(window):
         said['sortCounts'] = window.evaluate_js("""
             (function () {
               const out = {};
-              for (const k of ['ping', 'load', 'name']) {
+              for (const k of ['windscribe', 'ping', 'load', 'name']) {
                 document.querySelector(`#sortBy [data-sort=${k}]`).click();
                 const rows = Array.from(
                   document.querySelectorAll('.row[data-code]'))
                   .map(r => r.dataset.code).filter(c => c !== 'auto');
                 out[k] = [rows.length, rows.slice(0, 3).join(',')];
               }
-              document.querySelector('#sortBy [data-sort=ping]').click();
+              document.querySelector('#sortBy [data-sort=windscribe]').click();
               return out;
             })()""")
         said['pickedShot'] = shot('picker-picked')

@@ -762,6 +762,10 @@ def write_configs(dest=None, free_only=False, per_city=None):
     dest = dest or CONFIG_DIR
     os.makedirs(dest, exist_ok=True)
     fleet = servers()
+    # The order is the whole list's, taken before anything is filtered out:
+    # a free-only fetch is ten countries, and the rest of the list would
+    # otherwise fall to the end in A-Z until the next full one.
+    whole = fleet
     if free_only:
         fleet = [s for s in fleet if not s['premium']]
 
@@ -806,7 +810,7 @@ def write_configs(dest=None, free_only=False, per_city=None):
     # shows - countries, and the cities inside each. Kept apart from the
     # notes, which are filed by config and read row by row.
     countries, cities = [], {}
-    for s in fleet:
+    for s in whole:
         if s['country'] not in countries:
             countries.append(s['country'])
         names = cities.setdefault(s['country'], [])
@@ -879,7 +883,9 @@ def order():
         got = None
     if not isinstance(got, dict):
         return {'countries': [], 'cities': {}}
-    countries = [c for c in got.get('countries') or [] if isinstance(c, str)]
+    listed = got.get('countries')
+    countries = ([c for c in listed if isinstance(c, str)]
+                 if isinstance(listed, list) else [])
     cities = got.get('cities') if isinstance(got.get('cities'), dict) else {}
     return {'countries': countries,
             'cities': {k: [n for n in v if isinstance(n, str)]
