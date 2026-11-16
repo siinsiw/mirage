@@ -216,19 +216,17 @@ def clean(settings):
     return split, rejected
 
 
-def rules(split):
-    """Everything a carrier needs to decide, expanded: the preset folded in,
-    names and prefixes apart. None when there is nothing to decide - off, or
-    "only" with nothing listed, which would be a VPN that carries nothing.
-    """
+def iran_direct(split):
+    """Whether Iranian destinations go straight out under this split: the
+    Iran switch on, in Off or "except these". In "only these" the switch
+    keeps its old meaning - Iranian sites are on the list, and go through -
+    which is what somebody abroad reaching Iranian sites wants."""
     split, _ = clean(split)
-    if split['mode'] == 'off':
-        return None
+    return split['iran'] and split['mode'] in ('off', 'bypass')
+
+
+def _collapse(entries):
     names, nets = [], []
-    entries = list(split['domains'])
-    if split['iran']:
-        d, r = iran_lists()
-        entries = d + r + entries
     for entry in entries:
         try:
             norm = normalize(entry)
@@ -240,10 +238,40 @@ def rules(split):
             names.append(norm)
     nets = [str(n) for n in ipaddress.collapse_addresses(
         n for n in nets if n.version == 4)]
-    if not (names or nets or split['apps']):
+    return sorted(set(names)), nets
+
+
+def rules(split):
+    """Everything a carrier needs to decide, expanded: the preset folded in,
+    names and prefixes apart. None when there is nothing to decide - off
+    with the Iran switch off, or "only" with nothing listed, which would be
+    a VPN that carries nothing.
+
+    Off with the Iran switch on is not nothing: it is "except these" with
+    Iran alone on the list, the user's own list left waiting. Wherever Iran
+    goes straight, `smart` says so, and `iranNets` carries Iran's ranges on
+    their own: a name the list does not know is asked of this line's DNS
+    too, and sent straight when that answer is an Iranian address - how an
+    Iranian site on a foreign CDN, whose answer through the exit is
+    foreign, is still found (see the worker's SplitRules and tun.py).
+    """
+    split, _ = clean(split)
+    smart = iran_direct(split)
+    if split['mode'] == 'off' and not smart:
         return None
-    return {'mode': split['mode'], 'names': sorted(set(names)), 'nets': nets,
-            'apps': list(split['apps'])}
+    entries = [] if split['mode'] == 'off' else list(split['domains'])
+    apps = [] if split['mode'] == 'off' else list(split['apps'])
+    iran_nets = []
+    if split['iran']:
+        d, r = iran_lists()
+        entries = d + r + entries
+        iran_nets = _collapse(r)[1]
+    names, nets = _collapse(entries)
+    if not (names or nets or apps):
+        return None
+    return {'mode': 'bypass' if split['mode'] == 'off' else split['mode'],
+            'names': names, 'nets': nets, 'apps': apps,
+            'smart': smart, 'iranNets': iran_nets if smart else []}
 
 
 def write_worker_file(split, path=WORKER_FILE):

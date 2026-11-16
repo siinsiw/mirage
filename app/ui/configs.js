@@ -464,6 +464,15 @@
     const auto = $('cfgAuto');
     auto.setAttribute('aria-checked', (list.auto || byCountry) ? 'true' : 'false');
     auto.disabled = byCountry;
+    // Iran direct: this section's own split's Iran switch.
+    const iran = $('cfgIranDirect');
+    if (iran.dataset.busy !== '1') {
+      iran.setAttribute('aria-checked', String(!!list.iranDirect));
+      iran.disabled = !!list.splitOnly;
+      iran.closest('.cfgsw').title = list.splitOnly
+        ? 'Routing is on "Only these": only what is listed goes through the config.'
+        : "Iranian sites, servers and apps go straight out; the rest through the config. Names are also asked of your line's DNS, which sees them.";
+    }
     auto.closest('.cfgsw').title = byCountry
       ? 'A country always uses the fastest of its configs'
       : 'Moves to the next when one stops answering';
@@ -916,6 +925,30 @@
   });
 
   $('cfgTest').addEventListener('click', () => test({}));
+
+  /* Iran direct, flipped from the home: saved as this section's split, the
+     way Settings > Routing's Apply does - which connects again when the
+     rules in force change. */
+  $('cfgIranDirect').addEventListener('click', async () => {
+    const b = $('cfgIranDirect');
+    if (b.disabled || b.dataset.busy === '1') return;
+    b.dataset.busy = '1';
+    const on = b.getAttribute('aria-checked') !== 'true';
+    b.setAttribute('aria-checked', String(on));
+    try {
+      const now = await call('split');
+      if (!now.ok) { say(now.error, true); return; }
+      const r = await call('setSplit', { ...now.split, iran: on });
+      if (!r.ok) { say(r.error, true); return; }
+      say(r.applied === 'reconnect'
+        ? (on ? 'Iran direct is on - connecting again with it…' : 'Iran direct is off - connecting again…')
+        : (on ? 'Iran direct is on: Iranian sites and apps go straight out.'
+          : 'Iran direct is off: everything goes through the config.'));
+    } finally {
+      b.dataset.busy = '';
+      refresh();
+    }
+  });
 
   $('cfgAuto').addEventListener('click', async () => {
     const b = $('cfgAuto');

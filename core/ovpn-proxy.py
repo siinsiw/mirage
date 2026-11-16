@@ -1364,16 +1364,31 @@ class SplitRules:
         only    what is listed goes through the exit, the rest straight out
 
     Listed means: the program that opened the connection, a name or any
-    domain above it, or an address in a listed range. A name is matched as
-    a name and never looked up to compare its address - that would hand
-    every site anybody visits to this line's resolver.
+    domain above it, or an address in a listed range.
+
+    With the Iran switch on (`smart` in the file), a name the list does not
+    know is also looked up on this line - here, with no adapter up, that is
+    Windows' own resolver, the line's - and goes straight when the answer
+    is an Iranian address. That is how an Iranian site on a foreign CDN is
+    found: asked through the exit its answer is foreign, asked here it is
+    Iran's. It hands the names of sites visited to the line's resolver,
+    which the person chose knowingly; without the switch nothing is looked
+    up. Answers are kept for five minutes, a lookup that takes longer than
+    LOOKUP_WAIT goes through the exit, and Iran's filtering address
+    (10.10.34.x) is private, so it never counts.
     """
+
+    LOOKUP_WAIT = 1.5
+    KEEP = 300.0
+    KEEP_MAX = 4096
 
     def __init__(self, path=None):
         self.path = path
         self.stamp = None
         self.checked = 0.0
         self.lock = threading.Lock()
+        self.seen = collections.OrderedDict()   # name -> (iranian, until)
+        self.pool = None
         self._set({'mode': 'off'})
 
     def _set(self, data):
@@ -1387,6 +1402,17 @@ class SplitRules:
             spans.append((int(net.network_address), int(net.broadcast_address)))
         spans.sort()
         self.mode = mode if mode in ('bypass', 'only') else 'off'
+        self.smart = bool(data.get('smart')) and self.mode == 'bypass'
+        iran = []
+        for text in data.get('iranNets') or ():
+            try:
+                net = ipaddress.IPv4Network(text, strict=False)
+            except ValueError:
+                continue
+            iran.append((int(net.network_address), int(net.broadcast_address)))
+        iran.sort()
+        self.iran_lo = [a for a, _ in iran]
+        self.iran_hi = [b for _, b in iran]
         self.names = frozenset(n.lower() for n in data.get('names') or ())
         self.apps = frozenset(a.lower() for a in data.get('apps') or ())
         self.lo = [a for a, _ in spans]
@@ -1439,12 +1465,59 @@ class SplitRules:
             host = host.partition('.')[2]
         return False
 
+    def _iranian(self, value):
+        try:
+            ip = ipaddress.IPv4Address(value)
+        except ValueError:
+            return False
+        if not ip.is_global:
+            return False
+        v = int(ip)
+        i = bisect.bisect_right(self.iran_lo, v)
+        return i > 0 and self.iran_hi[i - 1] >= v
+
+    def _line_says_iran(self, host):
+        """Whether this line's resolver answers `host` with an Iranian
+        address. Kept for KEEP seconds; a slow or failed lookup is a no."""
+        name = host.strip('[]').rstrip('.').lower()
+        if not name or not self.iran_lo:
+            return False
+        try:
+            ipaddress.ip_address(name)
+            return False                     # an address, judged by the list
+        except ValueError:
+            pass
+        now = time.monotonic()
+        with self.lock:
+            hit = self.seen.get(name)
+            if hit and hit[1] > now:
+                return hit[0]
+            if self.pool is None:
+                self.pool = cf.ThreadPoolExecutor(
+                    max_workers=8, thread_name_prefix='line-dns')
+        verdict = False
+        try:
+            infos = self.pool.submit(
+                socket.getaddrinfo, name, None, socket.AF_INET,
+                socket.SOCK_STREAM).result(timeout=self.LOOKUP_WAIT)
+            verdict = any(self._iranian(info[4][0]) for info in infos)
+        except (cf.TimeoutError, OSError, UnicodeError, ValueError):
+            verdict = False
+        with self.lock:
+            self.seen[name] = (verdict, now + self.KEEP)
+            self.seen.move_to_end(name)
+            while len(self.seen) > self.KEEP_MAX:
+                self.seen.popitem(last=False)
+        return verdict
+
     def straight(self, host, app=None):
         self._fresh()
         if self.mode == 'off':
             return False
         listed = self.listed(host, app)
-        return listed if self.mode == 'bypass' else not listed
+        if self.mode == 'bypass':
+            return listed or (self.smart and self._line_says_iran(host or ''))
+        return not listed
 
 
 SPLIT = SplitRules()

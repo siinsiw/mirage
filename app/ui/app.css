@@ -2102,14 +2102,16 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   transition: opacity 220ms var(--ease);
 }
 
-#prefSplit[data-off='1'] .split { opacity: 0.45; }
+/* Under Off the user's own list waits, dimmed - but not the Iran switch,
+   which works in Off too (Iran direct). */
+#prefSplit[data-off='1'] .split > :not(.split__iran) { opacity: 0.45; }
 
-#prefSplit[data-off='1'] .split:focus-within { opacity: 0.8; }
+#prefSplit[data-off='1'] .split:focus-within > :not(.split__iran) { opacity: 0.8; }
 
 /* A popover is glass laid over the rows under it, and glass at 80% lets
    them read through. */
 
-#prefSplit[data-off='1'] .split:has(.runpop:not([hidden])) { opacity: 1; }
+#prefSplit[data-off='1'] .split:has(.runpop:not([hidden])) > * { opacity: 1; }
 
 /* The preset: a name, what it holds, and a switch. The whole label is the
    switch's, so the target is the line and not the 32px knob at its end. */
@@ -6902,3 +6904,16 @@ button.gh.is-cursor { background: color-mix(in srgb, var(--surface), var(--text)
 /* The header's speed button: like its neighbours while the speed shows on
    screen, faded while it is off. */
 .speedtoggle[aria-pressed='false'] { opacity: 0.4; }
+
+/* Iran direct, under the home's Connect: small, beside the button's weight. */
+.irandirect {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  margin-top: 10px; cursor: pointer;
+}
+.irandirect[hidden] { display: none; }
+.irandirect__text { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.irandirect__text b { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.irandirect__text i { font-size: 11.5px; font-style: normal; color: var(--text-3); }
+.irandirect:has(.toggle:disabled) { opacity: 0.45; cursor: default; }
+@media (max-width: 420px) { .irandirect__text i { display: none; } }
+

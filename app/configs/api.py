@@ -113,6 +113,11 @@ class Section:
                        'country': r.country if r.alive() else '',
                        'blocked': r.blocked() if r.port else False}
         out['testing'] = self._cancel is not None
+        # The home's Iran direct switch: on, off, or standing aside in
+        # "only these", where Iran is on the list and goes through.
+        values = store.settings()
+        out['iranDirect'] = split.iran_direct(prefs.split_of(values))
+        out['splitOnly'] = values.get('split_mode') == 'only'
         return out
 
     # -- the list ------------------------------------------------------------

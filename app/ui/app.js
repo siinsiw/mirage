@@ -4475,8 +4475,11 @@ const splitPane = (() => {
     get routeWith() { return side === 'main' ? state.routeWith : cfg.routeWith; },
   };
   const who = () => (side === 'main' ? 'Mirage' : 'the config');
+  // Iran direct works in Off too, so Off says what it leaves out.
   const SAID = {
-    off: () => `Everything goes through ${who()}. The list waits here until one of the other two is chosen.`,
+    off: (d) => (d && d.iran
+      ? `Everything goes through ${who()} except Iranian sites, servers and apps (Iran direct). Your own list waits here until one of the other two is chosen.`
+      : `Everything goes through ${who()}. The list waits here until one of the other two is chosen.`),
     bypass: () => `Everything goes through ${who()} except what is listed, which goes straight out.`,
     only: () => `Only what is listed goes through ${who()}; everything else goes straight out.`,
   };
@@ -4520,6 +4523,7 @@ const splitPane = (() => {
     const was = state.split;
     state.split = tidy(info.split);
     if (info.splitLists) state.splitLists = info.splitLists;
+    paintIranDirect();
     if (side !== 'main') return;
     if (!draft || same(draft, was)) draft = copy(state.split);
     paint();
@@ -4534,9 +4538,12 @@ const splitPane = (() => {
     for (const b of seg.querySelectorAll('.seg__opt')) {
       b.setAttribute('aria-pressed', String(b.dataset.split === d.mode));
     }
-    $('splitSaid').textContent = SAID[d.mode]();
+    $('splitSaid').textContent = SAID[d.mode](d);
     $('splitWho').textContent = who();
     $('splitIran').setAttribute('aria-checked', String(d.iran));
+    // In "only these" the switch keeps its old sense: Iran is on the list,
+    // and goes through - what somebody abroad wants.
+    $('splitIranName').textContent = d.mode === 'only' ? 'Iranian sites' : 'Iran direct';
     paintLists();
     chips(apps, d.apps, 'program');
     chips(sites, d.domains, 'site');
@@ -4554,9 +4561,11 @@ const splitPane = (() => {
   function paintPill() {
     const pill = $('splitPill');
     const mode = (T.split || {}).mode || 'off';
-    pill.dataset.state = mode === 'off' ? '' : 'on';
-    if (pill.textContent === PILL[mode]) return;
-    pill.textContent = PILL[mode];
+    const iran = mode === 'off' && !!(T.split || {}).iran;
+    pill.dataset.state = mode === 'off' && !iran ? '' : 'on';
+    const text = iran ? 'Iran direct' : PILL[mode];
+    if (pill.textContent === text) return;
+    pill.textContent = text;
   }
 
   /* The counts are the backend's, read off the lists it ships. Zero of both
@@ -4568,8 +4577,8 @@ const splitPane = (() => {
     $('splitIranSaid').textContent = !l
       ? 'Iranian domains and Iranian address ranges'
       : (l.domains || l.ranges)
-        ? `${n(l.domains)} domains and ${n(l.ranges)} address ranges, updated with each release`
-        : 'The lists are missing from this copy, so this has nothing to match';
+        ? `${n(l.domains)} domains and ${n(l.ranges)} address ranges, plus any site your line's own DNS places in Iran (so your provider sees the names of sites you open)`
+        : "The lists are missing from this copy, so only your line's DNS can tell";
   }
 
   /* Programs are only told apart by the tunnel. Through the proxy setting
@@ -5028,6 +5037,7 @@ const splitPane = (() => {
         text = 'Saved. The list is kept for when it is turned on.';
       }
       answer = { kind: 'good', text };
+      paintIranDirect();
     }
     paint();
     for (const v of fresh) arrive(rowFor(apps, v) || rowFor(sites, v));
@@ -5091,6 +5101,41 @@ const splitPane = (() => {
 
   return { take, paint, note, hide, mount };
 })();
+
+/* Iran direct on the home: the split pane's Iran switch, as Mirage's own
+   split has it, put where it is reached for. Saved and applied the way the
+   pane's Apply does (setSplit), and the pane's draft follows. In "only
+   these" it is not Iran direct at all - Iran is on the list and goes
+   through - so the home switch stands aside. */
+function paintIranDirect() {
+  const row = $('iranDirectRow');
+  const s = state.split;
+  if (!row || !s) { if (row) row.hidden = true; return; }
+  row.hidden = false;
+  const only = s.mode === 'only';
+  const b = $('iranDirect');
+  b.setAttribute('aria-checked', String(!!s.iran && !only));
+  b.disabled = only || row.dataset.busy === '1';
+  row.title = only
+    ? 'Split tunnelling is on "Only these": only what is listed goes through Mirage.'
+    : 'Iranian sites, servers and apps go straight out; everything else through Mirage. '
+      + "Names are also asked of your line's DNS, which sees them.";
+}
+
+$('iranDirect').addEventListener('click', async () => {
+  const s = state.split;
+  const row = $('iranDirectRow');
+  if (!s || s.mode === 'only' || row.dataset.busy === '1') return;
+  const want = { ...s, iran: !s.iran, apps: s.apps.slice(), domains: s.domains.slice() };
+  row.dataset.busy = '1';
+  $('iranDirect').setAttribute('aria-checked', String(want.iran));
+  let r = null;
+  try { r = await window.pywebview.api.setSplit(want); } catch (e) { r = null; }
+  row.dataset.busy = '';
+  if (r && r.split) splitPane.take({ split: r.split });
+  if (!r || r.ok === false) setHint((r && r.error) || 'Iran direct could not be changed.');
+  paintIranDirect();
+});
 
 /* Other devices: the server set up under Your own tunnel, handed to a phone.
 

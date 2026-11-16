@@ -164,6 +164,20 @@ def line_dns():
         return None
 
 
+def smart_dns(r, line_resolver):
+    """With the Iran switch on: every other name is asked of this line's
+    resolver first, and that answer is kept only when it is an Iranian
+    address - sing-box's address filter: an answer outside `ip_cidr` skips
+    the rule, and the name goes on to the exit's resolver. Kept, it brings
+    the connection to an Iranian address, which the route sends straight.
+    Iran's filtering address (10.10.34.x) is not in the ranges, so a
+    filtered name always falls through to the exit."""
+    if not (r and r.get('smart') and r.get('iranNets') and line_resolver):
+        return []
+    return [{'ip_cidr': list(r['iranNets']), 'action': 'route',
+             'server': 'dns-line'}]
+
+
 def _split_rules(r, line_resolver):
     """Route and DNS rules for split tunnelling, from split.rules().
 
@@ -190,6 +204,7 @@ def _split_rules(r, line_resolver):
         if r.get('names') and line_resolver:
             dns.append({'domain_suffix': list(r['names']), 'action': 'route',
                         'server': 'dns-line'})
+        dns.extend(smart_dns(r, line_resolver))
     else:
         conds = ([{'process_name': apps}] if apps else []) + ([dest] if dest else [])
         for cond in conds:

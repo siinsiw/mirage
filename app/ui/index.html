@@ -364,6 +364,17 @@
       <span class="go__word" data-for="on">Disconnect</span>
     </button>
 
+    <!-- Iran direct: Iranian sites, servers and apps go straight out, the
+         rest through Mirage. The split pane's Iran switch, here because it
+         is the one people reach for (app.js paintIranDirect). -->
+    <label class="irandirect" id="iranDirectRow" hidden>
+      <button class="toggle toggle--sm" id="iranDirect" type="button" role="switch"
+              aria-checked="true" aria-labelledby="iranDirectName"
+              aria-describedby="iranDirectWhy"><span></span></button>
+      <span class="irandirect__text"><b id="iranDirectName">Iran direct</b>
+        <i id="iranDirectWhy">Iranian sites and apps skip the tunnel</i></span>
+    </label>
+
     <div class="progress" id="progress" aria-hidden="true"></div>
   </section>
 
@@ -518,6 +529,11 @@
         <button class="toggle" id="cfgAuto" type="button" role="switch" aria-checked="false"
                 aria-label="Fastest, automatically"><span></span></button>
         <span class="cfgsw__text"><b>Fastest</b><i>automatically</i></span>
+      </label>
+      <label class="cfgsw" title="Iranian sites, servers and apps go straight out; the rest through the config">
+        <button class="toggle" id="cfgIranDirect" type="button" role="switch" aria-checked="true"
+                aria-label="Iran direct"><span></span></button>
+        <span class="cfgsw__text"><b>Iran direct</b></span>
       </label>
     </div>
     <p class="note cfghero__note" id="cfgNote"></p>
@@ -1016,7 +1032,7 @@
       <div class="split" id="splitList">
         <div class="split__iran">
           <label class="split__copy" for="splitIran">
-            <span class="split__name" id="splitIranName">Iranian sites</span>
+            <span class="split__name" id="splitIranName">Iran direct</span>
             <span class="split__help" id="splitIranSaid"></span>
           </label>
           <button class="toggle toggle--sm" id="splitIran" type="button"

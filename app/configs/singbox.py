@@ -19,6 +19,8 @@ loopback SOCKS port that Xray serves - see xray.py. Everything else about it
 is the same: it is in the selector, it is tested the same way.
 """
 
+from tun import smart_dns
+
 from . import links
 from . import prefs as _prefs
 
@@ -214,6 +216,7 @@ def _split(r, line_resolver):
     if r['mode'] == 'bypass' and r.get('names') and line_resolver:
         dns.append({'domain_suffix': list(r['names']), 'action': 'route',
                     'server': 'dns-line'})
+    dns.extend(smart_dns(r, line_resolver))
     return route, dns
 
 
@@ -306,6 +309,13 @@ def build(configs, *, port, clash_port, clash_secret, selected=None,
         if straight:
             rules.append({'process_path_regex': straight, 'action': 'route',
                           'outbound': DIRECT})
+    if not tun and any('ip_cidr' in d for d in split_dns):
+        # Through the proxy port a connection arrives as a name, which no
+        # address rule can judge. With the Iran switch on it is resolved
+        # first - by the DNS rules, so the line's own answer is the one kept
+        # when it is Iranian - and routed by the address it comes to. Over
+        # the adapter the program has already looked the name up itself.
+        rules.append({'action': 'resolve'})
     rules.append({'ip_is_private': True, 'action': 'route',
                   'outbound': DIRECT})
     rules.extend(split_route)

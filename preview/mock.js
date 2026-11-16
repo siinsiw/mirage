@@ -53,6 +53,7 @@
     live: { on: false, current: null, auto: false, using: null, blocked: false },
   };
   const cfList = () => ({ groups: CF.groups, configs: CF.configs, selected: CF.selected, country: CF.country || '', mode: CF.settings.mode,
+    iranDirect: !!CF.settings.split_iran && CF.settings.split_mode !== 'only', splitOnly: CF.settings.split_mode === 'only',
     auto: CF.auto, fragment: CF.settings.fragment, engines: { singbox: true, xray: true },
     live: CF.live, testing: false });
   function configsMock(action, p) {
@@ -212,7 +213,7 @@
     window: { onTop: false, lockWindow: false, startHidden: false, startWithWindows: false, speedOverlay: true, overlayOpacity: 92 },
     keepOnClose: true,
     onClose: '',
-    split: { mode: 'off', sites: '', apps: [], iran: false },
+    split: { mode: 'off', domains: [], apps: [], iran: true },
   };
 
   const ACCOUNTS = [
@@ -536,6 +537,7 @@
     setMode: (mode) => { S.mode = mode; return { ok: true, mode }; },
     setWindowOption: (key, on) => { S.window[key] = !!on; return { ok: true, window: S.window }; },
     setOverlayOpacity: (pct) => { S.window.overlayOpacity = pct; return { ok: true, window: S.window }; },
+    setSplit: (p) => { S.split = { ...p }; return { ok: true, split: S.split, rejected: [], applied: S.connected ? 'now' : 'next' }; },
     setKeepOnClose: (on) => { S.keepOnClose = !!on; return { ok: true }; },
     setOnClose: (kind) => { S.onClose = kind; return { ok: true }; },
     deadExits,

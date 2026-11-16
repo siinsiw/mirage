@@ -79,11 +79,35 @@ def test_clean_keeps_what_it_can_and_says_what_it_could_not():
 
 
 def test_nothing_to_decide_is_off():
-    assert split.rules({'mode': 'off', 'iran': True}) is None
+    assert split.rules({'mode': 'off', 'iran': False}) is None
     # "Only" an empty list would carry nothing at all; it carries everything.
     assert split.rules({'mode': 'only', 'iran': False}) is None
     r = split.rules({'mode': 'only', 'iran': False, 'apps': ['a.exe']})
-    assert r == {'mode': 'only', 'names': [], 'nets': [], 'apps': ['a.exe']}, r
+    assert r == {'mode': 'only', 'names': [], 'nets': [], 'apps': ['a.exe'],
+                 'smart': False, 'iranNets': []}, r
+
+
+def test_iran_direct_is_on_by_default():
+    # Off with the Iran switch - the default - is "except Iran": Iran alone
+    # on the list, the user's own list waiting, and the line's DNS asked.
+    r = split.rules({'mode': 'off', 'iran': True, 'apps': ['a.exe'],
+                     'domains': ['example.com']})
+    assert r['mode'] == 'bypass' and r['smart'], r
+    assert r['apps'] == [] and 'example.com' not in r['names'], r
+    assert 'ir' in r['names'] and r['iranNets'] and set(r['iranNets']) <= set(r['nets'])
+    assert split.rules(split.clean(None)[0])['smart']
+    m = split.Matcher(r)
+    assert m.straight('shaparak.ir') and m.straight('2.144.1.1')
+    assert not m.straight('google.com')
+    # "Except these" adds the user's list to Iran's; still smart.
+    r = split.rules({'mode': 'bypass', 'iran': True, 'domains': ['example.com']})
+    assert r['smart'] and 'example.com' in r['names'] and r['iranNets']
+    # "Only these" keeps the old meaning: Iran is listed, and goes through.
+    r = split.rules({'mode': 'only', 'iran': True})
+    assert r['mode'] == 'only' and not r['smart'] and r['iranNets'] == []
+    assert split.iran_direct({'mode': 'off'}) and not split.iran_direct(
+        {'mode': 'only', 'iran': True}) and not split.iran_direct(
+        {'mode': 'bypass', 'iran': False})
 
 
 def test_iran_preset():
@@ -165,6 +189,76 @@ def load_worker():
     px = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(px)
     return px
+
+
+def test_worker_asks_the_line_only_with_the_iran_switch():
+    px = load_worker()
+    answers = {'cdn-iran.example': '2.144.1.1', 'foreign.example': '8.8.8.8',
+               'sink.example': '10.10.34.35'}
+    asked = []
+
+    def fake(name, *a, **k):
+        asked.append(name)
+        if name == 'slow.example':
+            time.sleep(1.0)
+        if name not in answers:
+            raise OSError('no such name')
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (answers[name], 0))]
+
+    real = px.socket.getaddrinfo
+    px.socket.getaddrinfo = fake
+    try:
+        rules = px.SplitRules(None)
+        rules.LOOKUP_WAIT = 0.3
+        rules._set(split.rules({'mode': 'off', 'iran': True}))
+        assert rules.smart
+        # An Iranian answer from the line goes straight; once asked, kept.
+        assert rules.straight('cdn-iran.example')
+        assert rules.straight('CDN-IRAN.example.')
+        assert asked.count('cdn-iran.example') == 1, asked
+        # Foreign, Iran's filtering address, unknown, too slow: the exit.
+        for host in ('foreign.example', 'sink.example', 'nope.example',
+                     'slow.example'):
+            assert not rules.straight(host), host
+        # Listed things and addresses are decided without asking anybody.
+        n = len(asked)
+        assert rules.straight('shaparak.ir') and rules.straight('2.144.9.9')
+        assert not rules.straight('1.1.1.1')
+        assert len(asked) == n, asked
+        # The switch off: nothing is looked up at all.
+        rules._set(split.rules({'mode': 'bypass', 'iran': False,
+                                'domains': ['example.org']}))
+        assert not rules.smart and not rules.straight('cdn-iran.example2')
+        # "Only these" never asks either.
+        rules._set(split.rules({'mode': 'only', 'iran': True}))
+        assert not rules.smart
+        assert len(asked) == n, asked
+    finally:
+        px.socket.getaddrinfo = real
+
+
+def test_adapter_asks_the_line_first_with_the_iran_switch():
+    r = split.rules({'mode': 'off', 'iran': True})
+    c = tun.build_config(9090, split_rules=r, line_resolver='192.168.1.1')
+    smart = [x for x in c['dns']['rules'] if 'ip_cidr' in x]
+    assert len(smart) == 1 and smart[0]['server'] == 'dns-line', c['dns']['rules']
+    assert smart[0]['ip_cidr'] == r['iranNets']
+    # After the listed names, before the exit's resolver as the final word.
+    names = next(i for i, x in enumerate(c['dns']['rules']) if 'domain_suffix' in x)
+    assert c['dns']['rules'].index(smart[0]) > names
+    assert c['dns']['final'] == 'dns-remote'
+    assert any(s['tag'] == 'dns-line' for s in c['dns']['servers'])
+    # Iranian addresses go straight in the route, the rest through the exit.
+    direct = [x for x in c['route']['rules'] if x.get('outbound') == 'direct'
+              and 'ip_cidr' in x]
+    assert direct and '2.144.0.0/14' in direct[0]['ip_cidr']
+    # No line resolver known, the switch off, or "only these": nothing asked.
+    for rr, line in ((r, None),
+                     (split.rules({'mode': 'bypass', 'iran': False,
+                                   'domains': ['example.com']}), '192.168.1.1'),
+                     (split.rules({'mode': 'only', 'iran': True}), '192.168.1.1')):
+        c = tun.build_config(9090, split_rules=rr, line_resolver=line)
+        assert not any('ip_cidr' in x for x in c['dns']['rules']), c['dns']['rules']
 
 
 def test_worker_reads_the_file_and_rereads_it():

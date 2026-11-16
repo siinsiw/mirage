@@ -213,6 +213,30 @@ EVERYTHING = dict(prefs.defaults(), fragment=True, fragment_style='tls',
                   test_url='https://www.gstatic.com/generate_204')
 
 
+def test_iran_direct_in_configs():
+    import split
+    r = split.rules({'mode': 'off', 'iran': True})
+    for mode in ('proxy', 'tun'):
+        cfg = singbox.build(SB, port=18877, clash_port=19090, clash_secret='s',
+                            mode=mode, split_rules=r, line_resolver='192.168.1.1')
+        smart = [x for x in cfg['dns']['rules'] if 'ip_cidr' in x]
+        assert len(smart) == 1 and smart[0]['server'] == 'dns-line', mode
+        resolve = [x for x in cfg['route']['rules'] if x.get('action') == 'resolve']
+        # Through the port a connection is a name, so it is resolved first;
+        # over the adapter the program has resolved it already.
+        assert bool(resolve) == (mode == 'proxy'), (mode, resolve)
+        if resolve:
+            rules = cfg['route']['rules']
+            first_ip = next(i for i, x in enumerate(rules) if 'ip_cidr' in x
+                            or 'ip_is_private' in x)
+            assert rules.index(resolve[0]) < first_ip
+    off = singbox.build(SB, port=18877, clash_port=19090, clash_secret='s',
+                        split_rules=split.rules({'mode': 'off', 'iran': False}),
+                        line_resolver='192.168.1.1')
+    assert not any(x.get('action') == 'resolve' for x in off['route']['rules'])
+    assert not any('ip_cidr' in x for x in off['dns']['rules'])
+
+
 def test_settings_reach_the_connection():
     cfg = singbox.build(SB, port=18877, clash_port=19090, clash_secret='s',
                         auto=True, mode='tun', fragment=True, opts=EVERYTHING)
