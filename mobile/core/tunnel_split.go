@@ -164,14 +164,84 @@ func askStraight(resolver netip.AddrPort, query []byte) ([]byte, error) {
 // exit as well when the line's resolver does not answer, because an answer
 // from the far side still lets the connection go straight; no answer at all
 // lets nothing.
+//
+// Under Iran direct (Smart), an A query for a name on no list is asked both
+// ways at once, and the line's answer wins when it puts the name in Iran.
+// goesStraight checks the address before anything else, so the connection
+// that follows goes straight with nothing else remembered.
 func (h *handler) askDNSFor(query []byte) ([]byte, error) {
 	s := (*Tunnel)(h).Split()
-	if s != nil && s.DirectDNS(questionName(query)) {
-		if resolver, ok := s.Resolver(); ok {
-			if answer, err := askStraight(resolver, query); err == nil && len(answer) > 0 {
-				return answer, nil
-			}
+	if s == nil {
+		return h.askDNS(query)
+	}
+	resolver, ok := s.Resolver()
+	if !ok {
+		return h.askDNS(query)
+	}
+	if s.DirectDNS(questionName(query)) {
+		// A forged answer is not kept: a filtered .ir site comes back from
+		// the line as 10.10.34.x, and from the exit as where it really is.
+		if answer, err := askStraight(resolver, query); err == nil && len(answer) > 0 && !answerForged(answer) {
+			return answer, nil
 		}
+		return h.askDNS(query)
+	}
+	// A only: the tun carries no IPv6, and an AAAA from the line would be an
+	// address nothing here can reach straight.
+	if s.Smart() && questionType(query) == 1 {
+		return askEitherWay(query,
+			func(q []byte) ([]byte, error) { return askStraight(resolver, q) },
+			h.askDNS)
 	}
 	return h.askDNS(query)
+}
+
+// smartGrace is how long the exit's answer, once in, waits for the line's.
+// The line's resolver is a hop away and nearly always first; when it is not,
+// waiting for it the full four seconds would hold up every name abroad, and
+// an Iranian name answered from the exit side still mostly lands on an
+// Iranian address, which goes straight anyway.
+const smartGrace = 400 * time.Millisecond
+
+// askEitherWay asks the line and the exit at once and picks: the line's
+// answer when it puts the name on an Iranian public address, the exit's
+// otherwise. A forged answer (10.10.34.x) is private, so a filtered name
+// always comes back from the exit, never from the line.
+//
+// The asks are passed in so the picking can be tested without a network.
+func askEitherWay(query []byte, line, exit func([]byte) ([]byte, error)) ([]byte, error) {
+	type result struct {
+		answer []byte
+		err    error
+	}
+	fromLine := make(chan result, 1)
+	fromExit := make(chan result, 1)
+	go func() { a, err := line(query); fromLine <- result{a, err} }()
+	go func() { a, err := exit(query); fromExit <- result{a, err} }()
+
+	var (
+		exitDone *result
+		grace    <-chan time.Time
+	)
+	for {
+		select {
+		case r := <-fromLine:
+			if r.err == nil && answerInIran(r.answer) {
+				return r.answer, nil
+			}
+			if exitDone == nil {
+				e := <-fromExit
+				return e.answer, e.err
+			}
+			return exitDone.answer, exitDone.err
+		case e := <-fromExit:
+			exitDone = &e
+			fromExit = nil // received once; a nil channel is never ready again
+			t := time.NewTimer(smartGrace)
+			defer t.Stop()
+			grace = t.C
+		case <-grace:
+			return exitDone.answer, exitDone.err
+		}
+	}
 }

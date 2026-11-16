@@ -631,6 +631,11 @@ class MirageVpnService : VpnService() {
      *   Except these   the listed apps are left out of the interface, and
      *                  the core sends the listed destinations straight out.
      *
+     *   Off            with Iran direct on (the default), Except these with
+     *                  only the Iran preset: Iranian apps left out, Iranian
+     *                  destinations sent straight out by the core. With it
+     *                  off, everything through the exit.
+     *
      *   Only these     apps alone: only they are let in, and the core carries
      *                  all of what arrives. Destinations alone: every app is
      *                  let in, and the core carries only what goes to them.
@@ -658,21 +663,27 @@ class MirageVpnService : VpnService() {
         // the exit is protected but every other thing the process does - a
         // crash report, an update check - re-enters its own tunnel.
         fun leaveSelfOut() = b.addDisallowedApplication(packageName)
-        fun told(m: SplitMode, uids: String = "") = CoreSplit(m, iran, entries, uids)
 
-        if (mode == SplitMode.OFF) {
+        if (mode == SplitMode.OFF && !iran) {
             leaveSelfOut()
-            return told(SplitMode.OFF)
+            return CoreSplit(SplitMode.OFF, false, entries, "")
         }
-        val apps = splitApps(prefs.getString(Keys.SPLIT_APPS, "").orEmpty(), iran)
+        // Under Off the person's own picks are off with the mode; only the
+        // Iranian apps are left out, for Iran direct.
+        val picked = if (mode == SplitMode.OFF) "" else prefs.getString(Keys.SPLIT_APPS, "").orEmpty()
+        val apps = splitApps(picked, iran)
 
         // Which of the cases above this is: decided in VpnLogic.splitPlan,
         // where it is tested, and carried out here. Under Only these with
         // nothing listed it is SELF_OUT and Off: a tunnel that carries
         // nothing is a tunnel that does nothing; carrying everything is the
         // safer way to be wrong, and the window warns before it comes to this.
-        val plan = VpnLogic.splitPlan(mode, apps.isNotEmpty(), hasDest,
+        val plan = VpnLogic.splitPlan(mode, iran, apps.isNotEmpty(), hasDest,
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+        // The core ignores the person's entries under Off; not handing them
+        // over keeps the log line honest about what is in force.
+        fun told(m: SplitMode, uids: String = "") =
+            CoreSplit(m, plan.iran, if (m == SplitMode.OFF) "" else entries, uids)
         when (plan.apps) {
             VpnLogic.Apps.SELF_OUT -> {
                 leaveSelfOut()
@@ -772,7 +783,10 @@ class MirageVpnService : VpnService() {
      * routing other than it was told to would be worse than none.
      */
     private fun applySplit(a: Attempt, c: Client, s: CoreSplit): Boolean {
-        val dns = if (s.mode == SplitMode.OFF) "" else directDns()
+        // Off with the Iran preset is Iran direct, which asks the line's
+        // resolver too: for Iranian names, and for any name it might put on
+        // an Iranian address.
+        val dns = if (s.mode == SplitMode.OFF && !s.iran) "" else directDns()
         Log.i(TAG, "split: ${s.mode.key}, iran ${s.iran}, " +
             "${s.entries.lines().count { it.isNotBlank() }} entries, " +
             "${s.uids.split(',').count { it.isNotBlank() }} apps by uid, " +

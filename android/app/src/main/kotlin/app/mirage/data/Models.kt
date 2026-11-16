@@ -198,7 +198,7 @@ data class TunnelPlan(
  * "bypass" finds the setting, the interface and the Go that acts on it.
  */
 enum class SplitMode(val key: String, val label: String) {
-    /** Everything through Mirage, as before there was a choice. */
+    /** Everything through Mirage - but Iran, while Iran direct is on. */
     OFF("off", "Off"),
     /** Everything through Mirage but the list, which goes straight out. */
     BYPASS("bypass", "Except these"),
@@ -213,7 +213,14 @@ enum class SplitMode(val key: String, val label: String) {
 /** Settings → Split tunnel, as the prefs hold it. */
 data class SplitPlan(
     val mode: SplitMode = SplitMode.OFF,
-    /** The Iranian preset: the core's domains and ranges, and its list of Iranian apps. */
+    /**
+     * The Iranian preset: the core's domains and ranges, and its list of
+     * Iranian apps. Under Off and Except these it is "Iran direct" - Iran
+     * straight out, and the line's own DNS asked which names are Iranian;
+     * under Only these it is Iran listed, through Mirage. On by default, and
+     * the default here, in MirageCore.readSplit and in the service's
+     * splitInto must agree.
+     */
     val iran: Boolean = true,
     /** Package names the user picked. */
     val apps: Set<String> = emptySet(),
@@ -222,6 +229,9 @@ data class SplitPlan(
 ) {
     /** Something is listed by where it goes rather than by which app sends it. */
     val hasDestinations get() = iran || domains.isNotEmpty()
+
+    /** Iranian apps and sites go straight out: the preset is on, in a mode that reads it that way. */
+    val iranDirect get() = iran && mode != SplitMode.ONLY
 
     /** Nothing listed at all: Only these would then carry nothing, so it carries everything. */
     val empty get() = !iran && apps.isEmpty() && domains.isEmpty()

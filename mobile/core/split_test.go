@@ -67,7 +67,8 @@ func TestSplitMatching(t *testing.T) {
 func TestSplitDirection(t *testing.T) {
 	by, _ := NewSplit(SplitBypass, false, []string{"a.com"}, nil, "")
 	only, _ := NewSplit(SplitOnly, false, []string{"a.com"}, []int{10123}, "")
-	off, _ := NewSplit(SplitOff, true, []string{"a.com"}, nil, "")
+	off, _ := NewSplit(SplitOff, false, []string{"a.com"}, nil, "")
+	offIran, _ := NewSplit(SplitOff, true, []string{"a.com"}, []int{10123}, "")
 	empty, _ := NewSplit(SplitOnly, false, nil, nil, "")
 
 	if !by.Direct(true) || by.Direct(false) {
@@ -77,7 +78,18 @@ func TestSplitDirection(t *testing.T) {
 		t.Error("only: listed goes through, the rest around")
 	}
 	if off.Direct(true) || off.Direct(false) || off.Active() {
-		t.Error("off decides nothing")
+		t.Error("off without Iran direct decides nothing")
+	}
+	// Off with Iran direct is a bypass of Iran alone: the person's own list
+	// and apps are off with the mode.
+	if !offIran.Active() || !offIran.Direct(true) || offIran.Direct(false) {
+		t.Error("off with Iran direct: Iran goes around, the rest through")
+	}
+	if !offIran.NameListed("digikala.com") || offIran.NameListed("a.com") || offIran.UidListed(10123) {
+		t.Error("off with Iran direct lists Iran and nothing of the person's")
+	}
+	if !offIran.DirectDNS("www.digikala.com") || offIran.DirectDNS("a.com") {
+		t.Error("off with Iran direct asks the line about Iranian names only")
 	}
 	if empty.Active() || empty.Direct(false) {
 		t.Error("only with an empty list must carry everything, not nothing")
@@ -92,6 +104,45 @@ func TestSplitDirection(t *testing.T) {
 	// an unlisted name may belong to a listed app, and must not be forged.
 	if !by.DirectDNS("x.a.com") || by.DirectDNS("b.com") || only.DirectDNS("b.com") {
 		t.Error("DirectDNS")
+	}
+}
+
+// Smart DNS runs only where Iran direct is in force and there is a line
+// resolver to ask.
+func TestSplitSmart(t *testing.T) {
+	cases := []struct {
+		mode  string
+		iran  bool
+		dns   string
+		smart bool
+	}{
+		{SplitOff, true, "192.168.1.1", true},
+		{SplitBypass, true, "192.168.1.1", true},
+		{SplitOff, true, "", false},
+		{SplitOff, false, "192.168.1.1", false},
+		{SplitBypass, false, "192.168.1.1", false},
+		{SplitOnly, true, "192.168.1.1", false},
+	}
+	for _, c := range cases {
+		s, err := NewSplit(c.mode, c.iran, []string{"a.com"}, nil, c.dns)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Smart(); got != c.smart {
+			t.Errorf("mode %s iran %v dns %q: Smart() = %v, want %v", c.mode, c.iran, c.dns, got, c.smart)
+		}
+		if got := s.IranDirect(); got != (c.iran && c.mode != SplitOnly) {
+			t.Errorf("mode %s iran %v: IranDirect() = %v", c.mode, c.iran, got)
+		}
+	}
+	// In only, Iran keeps meaning "listed", which in only is through the exit.
+	only, _ := NewSplit(SplitOnly, true, nil, nil, "")
+	if !only.Active() || only.Direct(only.NameListed("digikala.com")) {
+		t.Error("only with Iran: Iranian names go through the exit")
+	}
+	var none *Split
+	if none.Smart() || none.IranDirect() {
+		t.Error("a nil split is not smart")
 	}
 }
 
@@ -182,5 +233,16 @@ func TestQuestionName(t *testing.T) {
 	}
 	if got := questionName(q[:8]); got != "" {
 		t.Errorf("a short message should have no name, got %q", got)
+	}
+	if got := questionType(q); got != 1 {
+		t.Errorf("questionType = %d, want 1 (A)", got)
+	}
+	aaaa := append([]byte(nil), q...)
+	aaaa[len(aaaa)-3] = 28
+	if got := questionType(aaaa); got != 28 {
+		t.Errorf("questionType = %d, want 28 (AAAA)", got)
+	}
+	if got := questionType(q[:len(q)-4]); got != 0 {
+		t.Errorf("a query cut before its type should have none, got %d", got)
 	}
 }

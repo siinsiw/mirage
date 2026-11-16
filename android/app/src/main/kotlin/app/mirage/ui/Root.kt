@@ -70,6 +70,8 @@ fun Root(core: MirageCore) {
     val pinRun by core.pinRun.collectAsStateWithLifecycle()
     val feel by core.feel.collectAsStateWithLifecycle()
     val configsState by core.configs.state.collectAsStateWithLifecycle()
+    val split by core.split.collectAsStateWithLifecycle()
+    val splitPending by core.splitPending.collectAsStateWithLifecycle()
     androidx.compose.runtime.SideEffect {
         app.mirage.ui.theme.Tone.palette = app.mirage.ui.theme.Palette.of(feel.theme)
         // The one accent the app has is the connection state.
@@ -275,12 +277,14 @@ fun Root(core: MirageCore) {
                 countries = countries.size,
                 serverCount = serverCount, loaded = loaded, hasCredentials = hasCredentials,
                 deadCount = dead.dead, hint = hint, hintBad = hintBad, feel = feel,
+                split = split, splitPending = splitPending,
             ),
             orbPaused = over != Over.NONE || over2 != Over2.NONE || !foreground || showWelcome,
             onLog = { over = Over.LOG },
             onDrop = { over = Over.DROP },
             onSettings = { prefsStart = "menu"; over = Over.PREFS },
             onConfigs = { over = Over.CONFIGS },
+            onIranDirect = { core.setSplitIran(it) },
             onWay = { core.setWay(it) },
             onPick = { over = Over.PICKER },
             onAct = {
@@ -379,6 +383,8 @@ fun Root(core: MirageCore) {
         ConfigsSheet(
             open = over == Over.CONFIGS, model = core.configs, state = configsState,
             connected = conn.mode == Mode.ON,
+            split = split, splitPending = splitPending,
+            onIranDirect = { core.setSplitIran(it) },
             onConnect = { id ->
                 over = Over.NONE
                 core.configs.select(id)

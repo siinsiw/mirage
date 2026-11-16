@@ -15,13 +15,46 @@ import org.junit.Test
  */
 class VpnLogicTest {
 
-    private fun plan(mode: SplitMode, apps: Boolean, dest: Boolean, owner: Boolean = true) =
-        VpnLogic.splitPlan(mode, hasApps = apps, hasDest = dest, canAskOwner = owner)
+    private fun plan(mode: SplitMode, apps: Boolean, dest: Boolean, owner: Boolean = true, iran: Boolean = false) =
+        VpnLogic.splitPlan(mode, iran = iran, hasApps = apps, hasDest = dest || iran, canAskOwner = owner)
 
     @Test
-    fun offCarriesEverythingButThisApp() {
+    fun offWithoutIranDirectCarriesEverythingButThisApp() {
         for (apps in listOf(false, true)) for (dest in listOf(false, true)) for (owner in listOf(false, true)) {
             assertEquals(SplitPlan(Apps.SELF_OUT, SplitMode.OFF), plan(SplitMode.OFF, apps, dest, owner))
+        }
+    }
+
+    @Test
+    fun offWithIranDirectLeavesIranianAppsOutAndTellsTheCoreIran() {
+        // The default: Off with Iran direct on. Iranian apps on the phone are
+        // left out, and the core is told Off with the preset - Iran straight.
+        for (apps in listOf(false, true)) for (dest in listOf(false, true)) for (owner in listOf(false, true)) {
+            assertEquals(SplitPlan(Apps.LISTED_OUT, SplitMode.OFF, iran = true),
+                plan(SplitMode.OFF, apps, dest, owner, iran = true))
+        }
+    }
+
+    @Test
+    fun theCoreHearsOfIranOnlyWhereItsModeReadsItRightWayRound() {
+        // Except these with the preset: Iran straight, along with the person's list.
+        assertEquals(SplitPlan(Apps.LISTED_OUT, SplitMode.BYPASS, iran = true),
+            plan(SplitMode.BYPASS, apps = false, dest = false, iran = true))
+        // Only these with the preset, told Only: Iran is listed, through the exit.
+        assertEquals(SplitPlan(Apps.SELF_OUT, SplitMode.ONLY, iran = true),
+            plan(SplitMode.ONLY, apps = false, dest = false, iran = true))
+        assertEquals(SplitPlan(Apps.SELF_OUT, SplitMode.ONLY, withUids = true, iran = true),
+            plan(SplitMode.ONLY, apps = true, dest = false, iran = true))
+        // Only these told Off (apps let in on a phone below 10): the preset is
+        // withheld, because Off with it would send Iran straight - the
+        // opposite of what Only these means by it.
+        assertEquals(SplitPlan(Apps.LISTED_IN, SplitMode.OFF),
+            plan(SplitMode.ONLY, apps = true, dest = false, owner = false, iran = true))
+        // Without the preset, nobody is told of it.
+        for (mode in SplitMode.entries) for (apps in listOf(false, true)) for (dest in listOf(false, true)) {
+            for (owner in listOf(false, true)) {
+                assertFalse("$mode apps=$apps dest=$dest owner=$owner", plan(mode, apps, dest, owner).iran)
+            }
         }
     }
 

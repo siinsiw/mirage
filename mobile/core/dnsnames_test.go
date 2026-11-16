@@ -36,6 +36,61 @@ func exampleAnswer() []byte {
 	}
 }
 
+// answerWith is exampleAnswer with its two addresses replaced.
+func answerWith(first, second [4]byte) []byte {
+	b := exampleAnswer()
+	copy(b[len(b)-20:len(b)-16], first[:])
+	copy(b[len(b)-4:], second[:])
+	return b
+}
+
+// The line's answer is kept only when it puts the name on an Iranian public
+// address - one is enough. Iran's filtering sinkhole is private and never
+// counts, and neither does an answer that cannot be read.
+func TestAnswerInIran(t *testing.T) {
+	iranian := [4]byte{2, 144, 1, 1} // one of Iran's oldest mobile blocks
+	abroad := [4]byte{93, 184, 216, 34}
+	sinkhole := [4]byte{10, 10, 34, 36}
+
+	if name, addrs := answerAddrs(answerWith(iranian, abroad)); name != "example.com" || len(addrs) != 2 {
+		t.Fatalf("answerAddrs = %q, %v", name, addrs)
+	}
+	for _, c := range []struct {
+		what   string
+		answer []byte
+		want   bool
+	}{
+		{"an answer abroad", exampleAnswer(), false},
+		{"an Iranian address", answerWith(iranian, iranian), true},
+		{"one Iranian address of two", answerWith(abroad, iranian), true},
+		{"the filtering sinkhole", answerWith(sinkhole, sinkhole), false},
+		{"the sinkhole beside an address abroad", answerWith(sinkhole, abroad), false},
+		{"nothing", nil, false},
+		{"a cut answer", answerWith(iranian, iranian)[:20], false},
+	} {
+		if got := answerInIran(c.answer); got != c.want {
+			t.Errorf("%s: answerInIran = %v, want %v", c.what, got, c.want)
+		}
+	}
+
+	// A listed name asked of the line is thrown back to the exit only when
+	// every IPv4 address in the answer is a reserved one.
+	for _, c := range []struct {
+		what   string
+		answer []byte
+		want   bool
+	}{
+		{"the filtering sinkhole", answerWith(sinkhole, sinkhole), true},
+		{"the sinkhole beside a real address", answerWith(sinkhole, iranian), false},
+		{"a real answer", exampleAnswer(), false},
+		{"no addresses", nil, false},
+	} {
+		if got := answerForged(c.answer); got != c.want {
+			t.Errorf("%s: answerForged = %v, want %v", c.what, got, c.want)
+		}
+	}
+}
+
 func TestLearnsNamesFromAnswers(t *testing.T) {
 	d := newDNSNames()
 	d.learn(exampleAnswer())

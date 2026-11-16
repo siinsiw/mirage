@@ -44,7 +44,9 @@ func SetOwner(o Owner) {
 // there is one.
 //
 //	mode       "off", "bypass" or "only"
-//	iran       the Iran preset's domains and address ranges
+//	iran       the Iran preset's domains and address ranges - "Iran direct":
+//	           in off and bypass, Iran goes straight (and the line's
+//	           resolver is asked about names); in only, Iran is listed
 //	entries    the person's own domains, addresses and prefixes, one a line
 //	uids       the listed apps' uids, comma-separated - only where apps have
 //	           to be told apart inside the tun ("only", with sites listed too)

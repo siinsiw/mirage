@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import app.mirage.data.Conn
 import app.mirage.data.Mode
 import app.mirage.data.Place
+import app.mirage.data.SplitPlan
 import app.mirage.data.Traffic
 import app.mirage.data.Way
 import app.mirage.ui.theme.Shape
@@ -99,6 +100,10 @@ data class HomeState(
     val hint: String,
     val hintBad: Boolean,
     val feel: app.mirage.data.Feel = app.mirage.data.Feel(),
+    /** Settings → Split tunnel, for the Iran direct switch under Connect. */
+    val split: SplitPlan = SplitPlan(),
+    /** A split change is waiting for the next connect. */
+    val splitPending: Boolean = false,
 ) {
     /** Whether the chosen way out has what it needs to start. */
     val canStart get() = if (way == Way.PROVIDER) hasCredentials && serverCount > 0 else tunnelReady
@@ -134,6 +139,8 @@ fun Home(
     onReconnect: () -> Unit = {},
     /** The Configs section: servers bought or given from anywhere. */
     onConfigs: () -> Unit = {},
+    /** The Iran direct switch: the split tunnel's Iran preset. */
+    onIranDirect: (Boolean) -> Unit = {},
 ) {
     // Where the scene's own box and the band are on screen: the map puts its
     // country in the middle of the band, not in the middle of the screen.
@@ -179,7 +186,7 @@ fun Home(
                     TopBar(s, onLog, onDrop, onSettings, onWay, onConfigs)
                     Readout(s, onAct, onCopy)
                     Band(s, Modifier.onGloballyPositioned { band = it.boundsInRoot() })
-                    Foot(s, onPick, onAct, onWay)
+                    Foot(s, onPick, onAct, onWay, onIranDirect)
                 }
             }
         }
@@ -459,7 +466,9 @@ private const val WAY_NEEDS_TUNNEL = "Set the domain and passwords under Setting
 
 /** Anything the screen has to say, then the server card. */
 @Composable
-private fun Foot(s: HomeState, onPick: () -> Unit, onAct: () -> Unit, onWay: (Way) -> Unit) {
+private fun Foot(
+    s: HomeState, onPick: () -> Unit, onAct: () -> Unit, onWay: (Way) -> Unit, onIranDirect: (Boolean) -> Unit,
+) {
     Column(Modifier.fillMaxWidth().padding(top = Space.x2, bottom = Space.x3)) {
         AnimatedVisibility(s.hint.isNotEmpty()) {
             Text(s.hint, style = Type.caption.copy(color = if (s.hintBad) Tone.fail else Tone.text2,
@@ -486,6 +495,12 @@ private fun Foot(s: HomeState, onPick: () -> Unit, onAct: () -> Unit, onWay: (Wa
             strong = mode != Mode.ON,
             icon = Glyph.power,
         )
+        Spacer(Modifier.height(Space.x3))
+        // Iran direct, one switch: on by default, and the one split setting
+        // worth reaching without going into Settings.
+        val shape = RoundedCornerShape(16.dp)
+        IranDirectRow(s.split, s.splitPending, onIranDirect,
+            Modifier.clip(shape).glass(shape, solid = false).border(1.dp, Tone.stroke, shape), short = true)
         Spacer(Modifier.height(Space.x3))
         WayCards(s, onWay)
     }

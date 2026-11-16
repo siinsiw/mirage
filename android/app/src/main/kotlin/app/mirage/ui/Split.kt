@@ -86,6 +86,11 @@ import kotlinx.coroutines.withContext
  * address ranges, and its list of Iranian apps), apps picked one at a time,
  * and domains and ranges typed in.
  *
+ * The preset is also "Iran direct", on by default: under Off and Except these
+ * it sends Iran straight out - and asks the line's own DNS which names are
+ * Iranian - so its switch sits above the list, where Off still shows it, and
+ * again on the home screen and in Configs (IranDirectRow).
+ *
  * Nothing here touches a tunnel that is up. Which apps an interface admits is
  * fixed when Android establishes it, so a change waits for the next connect,
  * and says so while it waits - as the LAN switch does.
@@ -97,19 +102,62 @@ private val MODE_NOTE = mapOf(
     SplitMode.ONLY to "Only the list goes through Mirage",
 )
 
-private val MODE_SAID = mapOf(
-    SplitMode.OFF to "Everything on the phone goes through Mirage.",
-    SplitMode.BYPASS to "Everything goes through Mirage except what is on the list below, which goes " +
-        "straight out over your own connection.",
-    SplitMode.ONLY to "Only what is on the list below goes through Mirage. Everything else goes " +
-        "straight out over your own connection.",
-)
+private fun modeSaid(s: SplitPlan) = when (s.mode) {
+    SplitMode.OFF ->
+        if (s.iran) "Everything goes through Mirage except Iranian sites, servers and apps, which go " +
+            "straight out over your own connection."
+        else "Everything on the phone goes through Mirage."
+    SplitMode.BYPASS -> "Everything goes through Mirage except what is on the list below" +
+        (if (s.iran) " and anything Iranian" else "") + ", which goes straight out over your own connection."
+    SplitMode.ONLY -> "Only what is on the list below goes through Mirage. Everything else goes " +
+        "straight out over your own connection."
+}
 
 private const val SPLIT_HELP = "Split tunnelling decides what the tunnel carries. Except these " +
     "sends the list straight out over your own line - Iranian banks, shops and government sites " +
     "that turn foreign addresses away, or are simply quicker from home. Only these is the other " +
     "way round: only the list goes through Mirage. Apps are matched by app; sites by name or " +
-    "address, whichever app opens them. A change applies the next time the tunnel comes up."
+    "address, whichever app opens them. Iran direct, on unless you turn it off, sends anything " +
+    "Iranian straight out under Off and Except these alike. A change applies the next time the " +
+    "tunnel comes up."
+
+/** The switch's name: what the Iran preset does in the mode that is set. */
+const val IRAN_DIRECT = "Iran direct"
+
+/**
+ * What Iran direct does, under its switch. [short] for the home screen, where
+ * there is room for a line; the long one says that the network's DNS is asked,
+ * since that is the price.
+ */
+fun iranDirectSaid(s: SplitPlan, pending: Boolean, short: Boolean): String {
+    val what = when {
+        s.mode == SplitMode.ONLY -> "Not used while Split tunnel is on Only these."
+        short && s.iran -> "Iranian sites and apps skip the tunnel. Your network's DNS sees the names."
+        short -> "Iranian sites go through Mirage too."
+        s.iran -> "Iranian sites, servers and apps go straight out over your own connection. " +
+            "Your network's DNS is asked which names are Iranian, so your provider sees them."
+        else -> "Iranian sites and apps go through Mirage like everything else."
+    }
+    return if (pending) "$what Applies when you reconnect." else what
+}
+
+/**
+ * Iran direct, as one row: the home screen's and Configs' way to the Iran
+ * preset, named for what it does outside Only these. Under Only these the
+ * preset means the opposite (Iran through Mirage), so the row shows off and
+ * cannot be turned - that one is set in Settings → Split tunnel.
+ */
+@Composable
+fun IranDirectRow(
+    split: SplitPlan,
+    pending: Boolean,
+    onChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    short: Boolean = false,
+) {
+    SwitchRow(IRAN_DIRECT, iranDirectSaid(split, pending, short), split.iranDirect, onChange, modifier,
+        enabled = split.mode != SplitMode.ONLY)
+}
 
 private const val LIST_HELP_OUT = "These skip the tunnel. An app on the list never enters it, and " +
     "a site or range on the list is sent straight out whichever app opens it - so an Iranian site " +
@@ -151,7 +199,7 @@ fun SplitScreen(core: MirageCore, onApps: () -> Unit) {
         // with a large font, which is what Dropdown is for.
         Dropdown(SplitMode.entries, split.mode, { it.label }, { core.setSplitMode(it) },
             caption = "Split tunnel", note = { MODE_NOTE.getValue(it) })
-        Text(MODE_SAID.getValue(split.mode), style = Type.body,
+        Text(modeSaid(split), style = Type.body,
             modifier = Modifier.padding(top = Space.x3, start = Space.x1, end = Space.x1))
         when {
             split.mode == SplitMode.ONLY && split.empty -> SaidLine(
@@ -161,6 +209,23 @@ fun SplitScreen(core: MirageCore, onApps: () -> Unit) {
             split.mode == SplitMode.BYPASS && split.empty ->
                 SaidLine("Nothing is on the list yet, so nothing goes around Mirage.")
         }
+        // The Iran preset, above the list rather than in it: under Off there
+        // is no list, and it still decides something there - Iran direct.
+        val iranCount = iranApps.size
+        val apps = if (iranCount > 0) "$iranCount known Iranian apps" else "the known Iranian apps"
+        Group(Modifier.padding(top = Space.x3)) {
+            if (split.mode == SplitMode.ONLY) {
+                SwitchRow("Iranian sites and apps",
+                    "Iranian domains and address ranges, plus $apps, go through Mirage with the list.",
+                    split.iran, { core.setSplitIran(it) })
+            } else {
+                SwitchRow(IRAN_DIRECT,
+                    "Iranian domains and address ranges, $apps, and any name your network's DNS puts " +
+                        "on an Iranian address go straight out over your own connection. Your " +
+                        "provider sees the names that are asked.",
+                    split.iran, { core.setSplitIran(it) })
+            }
+        }
         if (pending) SaidLine("Applies when you reconnect.")
     }
 
@@ -168,13 +233,13 @@ fun SplitScreen(core: MirageCore, onApps: () -> Unit) {
     // called in a column's scope, and the plain default grows sideways too.
     AnimatedVisibility(split.mode != SplitMode.OFF,
         enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-        Column { SplitList(core, split, listMode, iranApps.size, onApps) }
+        Column { SplitList(core, split, listMode, onApps) }
     }
 }
 
-/** The list: the Iranian preset, the apps, and the sites and ranges typed in. */
+/** The list: the apps, and the sites and ranges typed in. The Iranian preset sits above it. */
 @Composable
-private fun SplitList(core: MirageCore, split: SplitPlan, mode: SplitMode, iranCount: Int, onApps: () -> Unit) {
+private fun SplitList(core: MirageCore, split: SplitPlan, mode: SplitMode, onApps: () -> Unit) {
     val scope = rememberCoroutineScope()
     var typed by remember { mutableStateOf("") }
     var said by remember { mutableStateOf<Said?>(null) }
@@ -184,11 +249,6 @@ private fun SplitList(core: MirageCore, split: SplitPlan, mode: SplitMode, iranC
     Section(if (out) "Goes straight out" else "Goes through Mirage",
         help = if (out) LIST_HELP_OUT else LIST_HELP_IN) {
         Group {
-            SwitchRow("Iranian sites and apps",
-                "Iranian domains and address ranges, plus " +
-                    (if (iranCount > 0) "$iranCount known Iranian apps" else "the known Iranian apps"),
-                split.iran, { core.setSplitIran(it) })
-            Sep()
             NavRow("Apps", if (split.apps.isEmpty()) "None chosen yet" else "${split.apps.size} chosen", onApps)
         }
     }
@@ -329,7 +389,8 @@ fun SplitAppsSheet(open: Boolean, core: MirageCore, onClose: () -> Unit) {
 private fun appsSaid(s: SplitPlan): String {
     val tick = if (s.mode == SplitMode.ONLY) "Ticked apps go through Mirage."
         else "Ticked apps go straight out, not through Mirage."
-    return if (s.iran) "$tick Iranian apps are ticked while Iranian sites and apps is on." else tick
+    val preset = if (s.mode == SplitMode.ONLY) "Iranian sites and apps" else IRAN_DIRECT
+    return if (s.iran) "$tick Iranian apps are ticked while $preset is on." else tick
 }
 
 /**
