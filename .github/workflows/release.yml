@@ -146,6 +146,11 @@ jobs:
             Configs and the sign-in go in from inside the app; no cable is
             needed.
 
+            New in 0.3.3: Iran direct, on by default - Iranian sites, servers
+            and apps go straight out on the phone's own network, everything
+            else through the tunnel. One switch on the home screen turns it
+            off.
+
             From 0.3.2 the app is Mirage, with a new package name (app.mirage):
             it installs beside an older Relay rather than over it. Add your
             accounts and configs in Mirage, then uninstall Relay.

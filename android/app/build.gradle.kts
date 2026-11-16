@@ -33,8 +33,8 @@ android {
         minSdk = 24
         targetSdk = 36
         // Above the Flutter build's 1, or Android refuses the upgrade.
-        versionCode = 5
-        versionName = "0.3.2"
+        versionCode = 6
+        versionName = "0.3.3"
     }
 
     // Android identifies an app by the key that signed it, so a release has
