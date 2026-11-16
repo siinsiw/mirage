@@ -466,6 +466,27 @@ $allow  = {allow}
 $config = {config}
 
 Remove-Item -LiteralPath $done -Force -ErrorAction SilentlyContinue
+
+# A sing-box left from an earlier run still holding the adapter: the window
+# that ran it was ended by force (an update, Task Manager), its script went
+# with it, and nothing recorded is left to stop. sing-box would then refuse
+# with "Cannot create a file when that file already exists". Ours are told
+# apart by the configuration file this script names (mirage-sing-box-*), so
+# any other sing-box - the Configs section's own in proxy mode, somebody
+# else's - is left alone. Then a moment for Windows to take the adapter
+# away, which it does after the process is gone, not with it.
+try {{
+    Get-CimInstance Win32_Process -Filter "Name='sing-box.exe'" -ErrorAction Stop |
+        Where-Object {{ $_.CommandLine -like '*mirage-sing-box-*' }} |
+        ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+}} catch {{ }}
+if (Get-Command Get-NetAdapter -ErrorAction SilentlyContinue) {{
+    $until = (Get-Date).AddSeconds(8)
+    while ((Get-NetAdapter -Name $nic -IncludeHidden -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $until)) {{
+        Start-Sleep -Milliseconds 250
+    }}
+}}
+
 $cfg = $null
 try {{
     # The configuration goes to a file only SYSTEM and Administrators can

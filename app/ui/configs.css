@@ -15,6 +15,7 @@
 /* One row under the home: how the list is shown on the left, the test and
    the one way to add on the right. Only Add is lit. */
 .cfgbar {
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -26,6 +27,8 @@
   gap: 6px;
   padding: 0 12px;
   font-size: 12.5px;
+  white-space: nowrap;
+  flex: none;
 }
 
 .cfgbar .ico { width: 15px; height: 15px; }
@@ -41,12 +44,12 @@
 .cfgbar__lead:hover { filter: brightness(1.08); background: var(--accent); }
 
 .cfgview {
-  display: inline-flex; gap: 2px; padding: 3px;
+  display: inline-flex; gap: 2px; padding: 3px; flex: none;
   border-radius: 999px; background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
 }
 .cfgview__opt {
-  height: 26px; padding: 0 11px; border-radius: 999px;
+  height: 26px; padding: 0 10px; border-radius: 999px; white-space: nowrap;
   font-size: 12.5px; color: var(--text-2);
 }
 .cfgview__opt:hover { color: var(--text); }
@@ -398,11 +401,12 @@
    under it, the speed, the place as a card with a round flag, the white
    button, and the two switches people change. */
 .cfghero {
-  display: grid; gap: 12px;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px;
   margin: 0 16px 14px; padding: 18px 16px 16px;
   border-radius: 18px; background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--stroke);
 }
+.cfghero > * { min-width: 0; }
 .cfghero__top { display: grid; justify-items: center; gap: 2px; }
 .cfghero__clock {
   margin: 0; font-size: 34px; line-height: 1; letter-spacing: -0.02em;
@@ -418,14 +422,14 @@
    over the top of the screen. Fixed widths, so numbers changing every
    second do not shove each other about. */
 .cfgflux {
-  display: flex; align-items: center; justify-content: center; gap: 12px;
-  min-height: 22px; font-size: 12px; color: var(--text-3);
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  min-height: 22px; font-size: 11.5px; color: var(--text-3); overflow: hidden;
   font-variant-numeric: tabular-nums; white-space: nowrap;
   transition: opacity 0.25s;
 }
 .cfgflux[data-live='0'] { opacity: 0.4; }
 .cfgflux__cell { display: inline-flex; align-items: center; gap: 4px; }
-.cfgflux__cell b { min-width: 3.6ch; text-align: right; font-weight: 500; color: var(--text); }
+.cfgflux__cell b { min-width: 3ch; text-align: right; font-weight: 500; color: var(--text); }
 .cfgflux__cell i { font-style: normal; color: var(--text-3); }
 .cfgflux__ar { width: 10px; height: 10px; fill: none; stroke: var(--text); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .cfgflux__cell--up .cfgflux__ar { stroke: #e0303f; }
@@ -454,7 +458,7 @@
 .cfgloc__chev { flex: none; width: 16px; height: 16px; color: var(--text-3); }
 
 .cfghero__go { height: 48px; }
-.cfghero__opts { display: flex; justify-content: center; gap: 22px; }
+.cfghero__opts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 20px; }
 .cfgsw { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .cfgsw__text { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }
 .cfgsw__text b { font-size: 12.5px; font-weight: 550; color: var(--text); }
@@ -578,4 +582,13 @@
   grid-column: 1 / -1;
   display: grid; gap: 1px; padding: 2px 6px 8px;
   border-top: 1px solid var(--stroke);
+}
+
+/* A narrow window (a small screen at 125%, say): the test keeps its gauge
+   and says its label only while it runs, and the switches drop their small
+   print, so the bar and the switches each stay on one line. */
+@media (max-width: 420px) {
+  #cfgTest:not([data-on='1']) #cfgTestLabel { display: none; }
+  #cfgTest:not([data-on='1']) { padding: 0 9px; }
+  .cfgsw__text i { display: none; }
 }

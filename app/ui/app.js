@@ -1097,6 +1097,46 @@ function paintWindowOptions(opts) {
     sw.setAttribute('aria-checked', String(!!opts[sw.dataset.option]));
   }
   paintDrag(!!opts.lockWindow);
+  // The speed over the top of the screen: the header buttons and the
+  // opacity, beside the switch above.
+  state.speedOverlay = opts.speedOverlay !== false;
+  for (const b of document.querySelectorAll('.speedtoggle')) {
+    b.setAttribute('aria-pressed', String(state.speedOverlay));
+    b.title = state.speedOverlay ? 'Speed on screen: on' : 'Speed on screen: off';
+  }
+  const pct = Number(opts.overlayOpacity);
+  if (pct >= 40 && pct <= 100 && document.activeElement !== $('speedAlpha')) {
+    $('speedAlpha').value = String(pct);
+    $('speedAlphaVal').textContent = `${pct}%`;
+  }
+}
+
+/* One press in either header turns the speed on the screen on or off. */
+for (const b of document.querySelectorAll('.speedtoggle')) {
+  b.addEventListener('click', async () => {
+    const on = !state.speedOverlay;
+    state.speedOverlay = on;
+    for (const x of document.querySelectorAll('.speedtoggle')) x.setAttribute('aria-pressed', String(on));
+    const r = await window.pywebview.api.setWindowOption('speedOverlay', on);
+    if (r && r.window) paintWindowOptions(r.window);
+  });
+}
+
+/* Its opacity: shown as it is dragged, sent at most every 120 ms so the
+   window follows the thumb without a call per pixel. */
+{
+  const slider = $('speedAlpha');
+  let timer = 0;
+  const send = async () => {
+    timer = 0;
+    const r = await window.pywebview.api.setOverlayOpacity(Number(slider.value));
+    if (r && r.window) paintWindowOptions(r.window);
+  };
+  slider.addEventListener('input', () => {
+    $('speedAlphaVal').textContent = `${slider.value}%`;
+    if (!timer) timer = setTimeout(send, 120);
+  });
+  slider.addEventListener('change', () => { clearTimeout(timer); send(); });
 }
 
 /* There is no Windows frame: the header, and each sheet's heading, are what

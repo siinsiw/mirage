@@ -180,6 +180,11 @@
       <!-- Configs: servers bought or given from anywhere (vless://, vmess://,
            trojan://, ss://, hysteria2://, tuic://, subscriptions). A section
            of its own, with nothing to do with the provider accounts. -->
+      <!-- The speed over the top of the screen, on and off in one press. -->
+      <button class="icon speedtoggle" id="speedToggle" type="button" aria-pressed="true"
+              aria-label="Speed on screen" title="Speed on screen">
+        <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg>
+      </button>
       <button class="icon" id="configsOpen" type="button" aria-label="Configs"
               aria-haspopup="dialog" title="Configs">
         <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg>
@@ -449,6 +454,10 @@
       <button class="cfgswitch__opt" type="button" role="tab" aria-selected="true"
               tabindex="-1">Configs</button>
     </div>
+    <button class="icon speedtoggle" id="cfgSpeedToggle" type="button" aria-pressed="true"
+            aria-label="Speed on screen" title="Speed on screen">
+      <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg>
+    </button>
     <button class="icon" id="cfgPrefsOpen" type="button" aria-label="Configs settings"
             aria-haspopup="dialog" title="Configs settings">
       <svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>
@@ -522,8 +531,9 @@
       <button class="cfgview__opt" type="button" role="tab" data-view="group"
               aria-selected="false">Subscriptions</button>
     </div>
-    <button class="btn btn--quiet btn--auto cfgbar__test" id="cfgTest" type="button">
-      <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg><span id="cfgTestLabel">Test all</span>
+    <button class="btn btn--quiet btn--auto cfgbar__test" id="cfgTest" type="button"
+            title="Test all">
+      <svg class="ico" aria-hidden="true"><use href="#i-bolt"/></svg><span id="cfgTestLabel">Test all</span>
     </button>
     <div class="cfgadd">
       <button class="btn btn--auto cfgbar__lead" id="cfgAddOpen" type="button"
@@ -1872,7 +1882,7 @@
               role="switch" aria-checked="false"><span></span></button>
     </section>
 
-    <section class="setrow pane--line">
+    <section class="setrow setrow--speed pane--line">
       <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
       <span class="pane__copy">
         <h3 class="pane__title">Speed on screen</h3>
@@ -1882,6 +1892,13 @@
       </span>
       <button class="toggle" id="winSpeed" type="button" data-option="speedOverlay"
               role="switch" aria-checked="true"><span></span></button>
+      <!-- How solid it is: faint enough to read through, or fully solid. -->
+      <label class="speedalpha">
+        <span class="speedalpha__cap">Opacity</span>
+        <input class="speedalpha__in" id="speedAlpha" type="range" min="40" max="100"
+               step="5" value="92" aria-label="Speed on screen opacity">
+        <span class="speedalpha__val mono" id="speedAlphaVal">92%</span>
+      </label>
     </section>
     </div>
 

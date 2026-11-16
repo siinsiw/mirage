@@ -506,6 +506,14 @@ def overlay(hwnd, width, height, alpha=236, gap=8):
     return True
 
 
+def set_alpha(hwnd, alpha):
+    """The overlay's opacity, 0-255, changed while it shows."""
+    if not alive(hwnd):
+        return False
+    return bool(_SetLayeredWindowAttributes(
+        hwnd, 0, max(64, min(255, int(alpha))), LWA_ALPHA))
+
+
 def show_quietly(hwnd, show=True):
     """Shown without taking the focus from whatever has it, or hidden."""
     if not alive(hwnd):

@@ -226,6 +226,8 @@ WINDOW_DEFAULTS = {'lockWindow': False, 'onTop': False, 'speedOverlay': True}
 # second window, in 100% pixels. Its own title, so winwindow.find tells it
 # from the main window.
 OVERLAY_SIZE = (360, 30)
+# How solid the speed window is, in percent: Settings > Window > Opacity.
+OVERLAY_OPACITY = (40, 92, 100)     # least, default, most
 
 
 def app_version():
@@ -1061,7 +1063,8 @@ class Api:
             if want and not self._overlay_up:
                 # Not found until the window is built, which can be after
                 # the first reading: tried again on the next one.
-                if not (winwindow.overlay(hwnd, *OVERLAY_SIZE)
+                if not (winwindow.overlay(hwnd, *OVERLAY_SIZE,
+                                          alpha=round(self._overlay_opacity() * 2.55))
                         and winwindow.show_quietly(hwnd, True)):
                     return
                 self._overlay_up = True
@@ -3961,7 +3964,34 @@ class Api:
         return bool(self._settings.get(key, WINDOW_DEFAULTS[key]))
 
     def _window_options(self):
-        return {key: self._window_option(key) for key in WINDOW_DEFAULTS}
+        out = {key: self._window_option(key) for key in WINDOW_DEFAULTS}
+        out['overlayOpacity'] = self._overlay_opacity()
+        return out
+
+    def _overlay_opacity(self):
+        least, default, most = OVERLAY_OPACITY
+        try:
+            pct = int(self._settings.get('overlayOpacity', default))
+        except (TypeError, ValueError):
+            pct = default
+        return max(least, min(most, pct))
+
+    def setOverlayOpacity(self, pct=None):
+        """How solid the speed window is, from Settings > Window; applied to
+        it at once if it is showing."""
+        least, _, most = OVERLAY_OPACITY
+        try:
+            pct = max(least, min(most, int(pct)))
+        except (TypeError, ValueError):
+            return {'ok': False, 'error': 'not a percentage'}
+        self._settings['overlayOpacity'] = pct
+        save_settings(self._settings)
+        if self._overlay_up:
+            try:
+                winwindow.set_alpha(self._overlay_hwnd, round(pct * 2.55))
+            except Exception:
+                pass
+        return {'ok': True, 'window': self._window_options()}
 
     def _set_window_option(self, key, on):
         self._settings[key] = bool(on)

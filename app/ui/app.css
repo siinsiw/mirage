@@ -6887,3 +6887,18 @@ button.gh.is-cursor { background: color-mix(in srgb, var(--surface), var(--text)
 .intro__dots i.is-here { background: var(--text); }
 
 .steps__bar i { background: var(--good); }
+
+/* Speed on screen: its switch, and the opacity under it on a line of its own. */
+.setrow--speed { flex-wrap: wrap; }
+.speedalpha {
+  display: flex; align-items: center; gap: 12px;
+  flex: 1 0 100%; padding-left: 40px;
+}
+.speedalpha__cap { font-size: 12.5px; color: var(--text-2); }
+.speedalpha__in { flex: 1; min-width: 0; accent-color: #e0303f; height: 18px; }
+.speedalpha__val { width: 4ch; text-align: right; font-size: 12px; color: var(--text-2); }
+.setrow--speed:has(.toggle[aria-checked='false']) .speedalpha { opacity: 0.4; }
+
+/* The header's speed button: like its neighbours while the speed shows on
+   screen, faded while it is off. */
+.speedtoggle[aria-pressed='false'] { opacity: 0.4; }
