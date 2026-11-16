@@ -5,9 +5,19 @@ package core
 //
 // One mode decides the direction and one list decides what it applies to:
 //
-//	off     everything through the exit - what there was before this
+//	off     everything through the exit - except Iran, when "Iran direct"
+//	        is on (below)
 //	bypass  everything through the exit except what is listed
 //	only    only what is listed goes through the exit
+//
+// "Iran direct" is the Iran preset (the `iran` switch). In off and bypass it
+// sends everything Iranian straight out on the phone's own line - in off as
+// the only thing listed, the person's own list being off with the mode. In
+// only it keeps its older meaning: Iranian entries count as listed, so they
+// are what goes through the exit. Where it sends Iran straight, it also asks
+// the line's own resolver about names (Smart, below): a name that resolver
+// puts on an Iranian public address is Iranian whatever list it is missing
+// from.
 //
 // The list is names (a domain means itself and everything under it),
 // addresses and prefixes, and - in "only" - the uids of apps. Apps in
@@ -61,6 +71,7 @@ const (
 // connection's goroutine without a lock.
 type Split struct {
 	mode  string
+	iran  bool
 	names map[string]struct{}
 	nets  []span
 	uids  map[int]struct{}
@@ -81,6 +92,9 @@ type span struct{ lo, hi uint32 }
 // normalised or not - each is normalised again here and a bad one is an
 // error rather than a rule that silently never matches. `directDNS` is the
 // underlying network's resolver, "" when the platform did not say.
+//
+// In off, `entries` and `uids` are ignored: the person's list is off with
+// the mode, and only Iran direct (when `iran` is on) is left to decide.
 func NewSplit(mode string, iran bool, entries []string, uids []int, directDNS string) (*Split, error) {
 	switch mode {
 	case SplitOff, SplitBypass, SplitOnly:
@@ -89,7 +103,10 @@ func NewSplit(mode string, iran bool, entries []string, uids []int, directDNS st
 	default:
 		return nil, errors.New("split mode must be off, bypass or only, not " + strconv.Quote(mode))
 	}
-	s := &Split{mode: mode, names: map[string]struct{}{}, uids: map[int]struct{}{}}
+	s := &Split{mode: mode, iran: iran, names: map[string]struct{}{}, uids: map[int]struct{}{}}
+	if mode == SplitOff {
+		entries, uids = nil, nil
+	}
 
 	var prefixes []netip.Prefix
 	add := func(entry string) error {
@@ -146,12 +163,27 @@ func NewSplit(mode string, iran bool, entries []string, uids []int, directDNS st
 // Active is whether there is anything to decide. A split whose list came
 // out empty decides nothing either way, so it is treated as off: "only
 // nothing" through the exit would be a VPN that carries nothing, and the
-// window says so before it gets here.
+// window says so before it gets here. Off decides something only when Iran
+// direct is on - then it is a bypass of Iran alone.
 func (s *Split) Active() bool {
-	if s == nil || s.mode == SplitOff {
+	if s == nil || (s.mode == SplitOff && !s.iran) {
 		return false
 	}
 	return len(s.names) > 0 || len(s.nets) > 0 || len(s.uids) > 0
+}
+
+// IranDirect is whether Iranian destinations go straight out: the Iran
+// preset is on, and the mode is one where listed means around the exit.
+func (s *Split) IranDirect() bool {
+	return s.Active() && s.iran && s.mode != SplitOnly
+}
+
+// Smart is whether to ask the line's own resolver about names that are on
+// no list, so that one it puts on an Iranian public address goes straight
+// as well (askDNSFor). Only under Iran direct, and only with a resolver to
+// ask. The person accepted that the line sees the names looked up.
+func (s *Split) Smart() bool {
+	return s.IranDirect() && s.dns.IsValid()
 }
 
 // Mode is what was asked for, for a status line.
@@ -266,20 +298,22 @@ func (s *Split) Direct(listed bool) bool {
 	if !s.Active() {
 		return false
 	}
-	if s.mode == SplitBypass {
-		return listed
+	if s.mode == SplitOnly {
+		return !listed
 	}
-	return !listed
+	// bypass, and off with Iran direct - a bypass of Iran alone.
+	return listed
 }
 
 // DirectDNS is whether a lookup should be asked of the line's own resolver
 // rather than through the exit. Only names that are going straight out, and
-// only in "bypass": in "only", a name not on the list may still be looked
-// up by an app that is, and an answer from this line's resolver is the
-// forged one for anything filtered here. Through the exit, every answer is
-// the true one, and the direct connections that follow work just as well.
+// only in "bypass" (or off with Iran direct, which is a bypass of Iran): in
+// "only", a name not on the list may still be looked up by an app that is,
+// and an answer from this line's resolver is the forged one for anything
+// filtered here. Through the exit, every answer is the true one, and the
+// direct connections that follow work just as well.
 func (s *Split) DirectDNS(name string) bool {
-	return s.Active() && s.mode == SplitBypass && s.NameListed(name)
+	return s.Active() && s.mode != SplitOnly && s.NameListed(name)
 }
 
 // Resolver is the line's own resolver, when the platform said what it was.
@@ -542,4 +576,17 @@ func questionName(msg []byte) string {
 		return ""
 	}
 	return name
+}
+
+// questionType is the type a one-question query asks for (1 is A, 28 AAAA),
+// or 0 when it is not a query this can read.
+func questionType(msg []byte) uint16 {
+	if len(msg) < 12 || binary.BigEndian.Uint16(msg[4:6]) != 1 {
+		return 0
+	}
+	_, pos, ok := readName(msg, 12)
+	if !ok || pos+2 > len(msg) {
+		return 0
+	}
+	return binary.BigEndian.Uint16(msg[pos : pos+2])
 }

@@ -73,60 +73,88 @@ func (d *dnsNames) remember(ip netip.Addr, name string) {
 
 // learn reads the addresses out of a DNS answer and files them under the name
 // that was asked for.
+func (d *dnsNames) learn(msg []byte) {
+	if d == nil {
+		return
+	}
+	name, addrs := answerAddrs(msg)
+	for _, ip := range addrs {
+		d.remember(ip, name)
+	}
+}
+
+// answerAddrs is the name a DNS answer was asked about and every A and AAAA
+// address in its answer section, IPv4 ones unmapped.
 //
 // A deliberately small parser: the question's name, then every A and AAAA in
-// the answer section. Anything it does not understand it stops at, because
-// the cost of being wrong is a missing label and the cost of being clever is
-// a parser nobody checks.
-func (d *dnsNames) learn(msg []byte) {
-	if d == nil || len(msg) < 12 {
-		return
+// the answer section. Anything it does not understand it stops at, keeping
+// what it had read so far, because the cost of being wrong is a missing
+// label and the cost of being clever is a parser nobody checks.
+func answerAddrs(msg []byte) (string, []netip.Addr) {
+	if len(msg) < 12 {
+		return "", nil
 	}
 
 	qdcount := int(binary.BigEndian.Uint16(msg[4:6]))
 	ancount := int(binary.BigEndian.Uint16(msg[6:8]))
 	if qdcount < 1 || ancount < 1 {
-		return
+		return "", nil
 	}
 
 	pos := 12
 	name, pos, ok := readName(msg, pos)
 	if !ok || name == "" {
-		return
+		return "", nil
 	}
 	pos += 4 // qtype, qclass
 	for i := 1; i < qdcount; i++ {
 		_, pos, ok = readName(msg, pos)
 		if !ok {
-			return
+			return "", nil
 		}
 		pos += 4
 	}
 
+	var addrs []netip.Addr
 	for i := 0; i < ancount; i++ {
 		_, pos, ok = readName(msg, pos)
 		if !ok || pos+10 > len(msg) {
-			return
+			break
 		}
 		rrType := binary.BigEndian.Uint16(msg[pos : pos+2])
 		rdLen := int(binary.BigEndian.Uint16(msg[pos+8 : pos+10]))
 		pos += 10
 		if pos+rdLen > len(msg) {
-			return
+			break
 		}
 
 		switch {
 		case rrType == 1 && rdLen == 4:
 			if ip, ok := netip.AddrFromSlice(msg[pos : pos+4]); ok {
-				d.remember(ip.Unmap(), name)
+				addrs = append(addrs, ip.Unmap())
 			}
 		case rrType == 28 && rdLen == 16:
 			if ip, ok := netip.AddrFromSlice(msg[pos : pos+16]); ok {
-				d.remember(ip, name)
+				addrs = append(addrs, ip)
 			}
 		}
 		pos += rdLen
 	}
+	return name, addrs
+}
+
+// answerInIran is whether a DNS answer puts its name on an Iranian public
+// IPv4 address - the test the line's own answer has to pass to be kept
+// (askDNSFor). Iran's filtering answers with 10.10.34.x, which is private
+// and so never counts, whatever list it might one day turn up in.
+func answerInIran(msg []byte) bool {
+	_, addrs := answerAddrs(msg)
+	for _, ip := range addrs {
+		if ip.Is4() && IsPublic(ip) && InIranIPv4(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // readName walks a DNS name, following compression pointers.

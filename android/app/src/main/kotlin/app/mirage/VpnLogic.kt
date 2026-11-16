@@ -25,25 +25,45 @@ internal object VpnLogic {
 
     /**
      * One split-tunnel decision: what the interface does with apps, the mode
-     * the core is told - not always the one the setting names - and whether
-     * the core is handed the listed apps' uids to ask whose a connection is.
+     * the core is told - not always the one the setting names - whether the
+     * core is handed the listed apps' uids to ask whose a connection is, and
+     * whether the core is told the Iran preset.
+     *
+     * The core reads the Iran preset by its mode: under Off and Except these
+     * it is "Iran direct", Iran straight out; under Only these it is Iran
+     * listed, through the exit. So where Only these ends up telling the core
+     * Off, it is not told the preset at all - Off with the preset would turn
+     * it the other way round.
      */
-    data class SplitPlan(val apps: Apps, val core: SplitMode, val withUids: Boolean = false)
+    data class SplitPlan(
+        val apps: Apps,
+        val core: SplitMode,
+        val withUids: Boolean = false,
+        val iran: Boolean = false,
+    )
 
     /**
      * @param mode the setting
-     * @param hasApps whether any listed app is on this phone
+     * @param iran whether the Iran preset is on ("Iran direct" outside Only these)
+     * @param hasApps whether any listed app is on this phone - under Off, only the Iranian ones count
      * @param hasDest whether there are destinations: the Iran preset, or the user's own entries
      * @param canAskOwner whether Android will say whose a connection is (10 and later)
      */
-    fun splitPlan(mode: SplitMode, hasApps: Boolean, hasDest: Boolean, canAskOwner: Boolean): SplitPlan = when {
-        mode == SplitMode.OFF -> SplitPlan(Apps.SELF_OUT, SplitMode.OFF)
+    fun splitPlan(
+        mode: SplitMode, iran: Boolean, hasApps: Boolean, hasDest: Boolean, canAskOwner: Boolean,
+    ): SplitPlan = when {
+        // Off with Iran direct is Except these with Iran alone: the Iranian
+        // apps on the phone are left out, and the core sends Iran straight.
+        mode == SplitMode.OFF ->
+            if (iran) SplitPlan(Apps.LISTED_OUT, SplitMode.OFF, iran = true)
+            else SplitPlan(Apps.SELF_OUT, SplitMode.OFF)
         mode == SplitMode.BYPASS ->
-            SplitPlan(Apps.LISTED_OUT, if (hasDest) SplitMode.BYPASS else SplitMode.OFF)
+            if (hasDest) SplitPlan(Apps.LISTED_OUT, SplitMode.BYPASS, iran = iran)
+            else SplitPlan(Apps.LISTED_OUT, SplitMode.OFF)
         // Only these.
         !hasApps && !hasDest -> SplitPlan(Apps.SELF_OUT, SplitMode.OFF)
-        !hasApps -> SplitPlan(Apps.SELF_OUT, SplitMode.ONLY)
-        hasDest && canAskOwner -> SplitPlan(Apps.SELF_OUT, SplitMode.ONLY, withUids = true)
+        !hasApps -> SplitPlan(Apps.SELF_OUT, SplitMode.ONLY, iran = iran)
+        hasDest && canAskOwner -> SplitPlan(Apps.SELF_OUT, SplitMode.ONLY, withUids = true, iran = iran)
         else -> SplitPlan(Apps.LISTED_IN, SplitMode.OFF)
     }
 

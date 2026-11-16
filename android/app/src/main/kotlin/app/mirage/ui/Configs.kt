@@ -42,6 +42,7 @@ import app.mirage.data.CfgItem
 import app.mirage.data.CfgState
 import app.mirage.data.ConfigsModel
 import app.mirage.data.ConfigsStore
+import app.mirage.data.SplitPlan
 import app.mirage.ui.theme.Accent
 import app.mirage.ui.theme.Shape
 import app.mirage.ui.theme.Space
@@ -89,6 +90,10 @@ fun ConfigsSheet(
     onConnect: (String) -> Unit,
     onCopy: (String) -> Unit,
     onClose: () -> Unit,
+    /** Settings → Split tunnel, for the Iran direct switch among the options. */
+    split: SplitPlan = SplitPlan(),
+    splitPending: Boolean = false,
+    onIranDirect: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -221,6 +226,10 @@ fun ConfigsSheet(
                     SwitchRow("Split the TLS hello",
                         "Sends the first message in pieces, which helps where the filter reads it. Off unless needed.",
                         state.fragment, { model.setFragment(it) })
+                    Sep()
+                    // The same tun and split as every other way out, so the
+                    // same switch as on the home screen.
+                    IranDirectRow(split, splitPending, onIranDirect)
                 }
             }
         }
