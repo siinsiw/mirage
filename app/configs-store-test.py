@@ -206,6 +206,56 @@ def test_meter():
     assert rows['1.1.1.1']['hits'] == 1
 
 
+def test_country_from_the_name():
+    from configs import where
+    cases = {
+        '\U0001F1E9\U0001F1EA Hetzner': 'de', '\U0001F1EC\U0001F1E7 London': 'uk',
+        'US New York 05': 'us', 'NL Amsterdam 01': 'nl', 'Helsinki 02': 'fi',
+        'سرور آلمان ۱': 'de', 'هنگ‌کنگ': 'hk', 'Friend in Istanbul': 'tr',
+        '[DE] fast': 'de', 'Germany-1': 'de', 'New Jersey 3': 'us',
+        'Turkey | VIP': 'tr', 'UAE Dubai': 'ae', 'TLS 443 IR': 'ir',
+        # Nothing to go on, or capitals that are not a country.
+        'My Hetzner box': '', 'vless-ws-CF-443': '', 'WS TLS 2': '',
+        'IP 1': '', '': '',
+        # Volumes, relays, ordinary capitals and loose words are not places.
+        '100GB': '', '30Day-50GB': '', 'IR-DE': 'de', 'Free Net IR to NL': 'nl',
+        'TCP NO TLS': '', 'ID: 12345': '', 'MY config': '', 'AT&T': '',
+        'United': '', 'Republic': '', 'بدون چک': '',
+        # Digits and _ against a name, and the first place named wins.
+        'Germany2': 'de', '@v2_Germany_x': 'de', 'Frankfurt01': 'de',
+        'آلمانی': 'de', 'هلند_1': 'nl', 'Reality | Turkey via Germany': 'tr',
+    }
+    for name, want in cases.items():
+        assert where.guess(name) == want, (name, where.guess(name), want)
+    # The test's answer wins over the name's.
+    assert where.of({'name': 'Germany 1', 'last': {'country': 'NL'}}) == ('nl', 'test')
+    assert where.of({'name': 'Germany 1'}) == ('de', 'name')
+    assert where.of({'name': 'x'}) == ('', '')
+    assert where.name('ir') == 'Iran' and where.name('de') == 'Germany'
+
+
+def test_country_listing_and_members():
+    p = _path()
+    store.add(CONFIGS[:6], path=p)
+    state = store.load(p)
+    a, b, c = state['configs'][:3]
+    a['name'], b['name'], c['name'] = 'Germany 1', 'Germany 2', 'Paris'
+    b['last'] = {'ms': 120, 'country': 'de'}
+    a['last'] = {'ms': 300, 'country': 'de'}
+    shown = {x['id']: x for x in store.listing(state)['configs']}
+    assert shown[a['id']]['country'] == 'de' and shown[a['id']]['countryFrom'] == 'test'
+    assert shown[c['id']]['country'] == 'fr' and shown[c['id']]['countryFrom'] == 'name'
+    assert shown[c['id']]['countryName'] == 'France'
+    # A country's members, fastest first.
+    assert [x['id'] for x in store.in_country('de', state)] == [b['id'], a['id']]
+    assert store.in_country('DE', state)[0]['id'] == b['id']
+    assert store.in_country('jp', state) == []
+    # The picked country is kept, and cleared by picking one config.
+    store.set_option('country', 'de', path=p)
+    assert store.load(p)['country'] == 'de'
+    assert store.listing(store.load(p))['country'] == 'de'
+
+
 if __name__ == '__main__':
     for name, fn in list(globals().items()):
         if name.startswith('test_') and callable(fn):

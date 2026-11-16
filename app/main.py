@@ -75,6 +75,7 @@ if paths.FROZEN and '--ui-drive' not in sys.argv:
 
 APP_ID = 'ovpnpin.mirage'
 APP_NAME = 'Mirage'
+OVERLAY_TITLE = APP_NAME + ' speed'
 
 
 def run_as_worker():
@@ -219,7 +220,14 @@ WINDOW_MIN = (380, 640)      # unless the screen itself is smaller
 # The window's own switches, in the tray menu and in Settings alike. What
 # the close button does is not among them: it has three answers rather than
 # two and lives in the settings file on its own (onClose).
-WINDOW_DEFAULTS = {'lockWindow': False, 'onTop': False}
+WINDOW_DEFAULTS = {'lockWindow': False, 'onTop': False, 'speedOverlay': True}
+
+# The speed over the top of the screen while connected (ui/overlay.html): a
+# second window, in 100% pixels. Its own title, so winwindow.find tells it
+# from the main window.
+OVERLAY_SIZE = (360, 30)
+# How solid the speed window is, in percent: Settings > Window > Opacity.
+OVERLAY_OPACITY = (40, 92, 100)     # least, default, most
 
 
 def app_version():
@@ -543,6 +551,10 @@ class Api:
         # carried an upload (see _through_tunnel). Cleared by every connect.
         self._exit_warning = None
         self._window = None
+        self._overlay = None         # the speed window, see _overlay_feed
+        self._overlay_up = False
+        self._overlay_hwnd = None
+        self._overlay_sending = threading.Lock()
         self._hwnd_cache = None
         self._tray = None
         self._busy = False
@@ -1027,9 +1039,54 @@ class Api:
             if reading:
                 quiet = False
                 self._emit('Traffic', reading)
+                self._overlay_feed(reading)
             elif not quiet:
                 quiet = True
                 self._emit('Traffic', {'live': False})
+                self._overlay_feed(None)
+
+    def _overlay_feed(self, reading):
+        """The speed window: shown while something is up and Settings >
+        Window > Speed on screen is on, given the same reading as the home,
+        and hidden otherwise. Shown and hidden through the platform, not
+        pywebview, so it never takes the focus from what is being typed in."""
+        win = self._overlay
+        if not win:
+            return
+        want = bool(reading and reading.get('live')
+                    and self._window_option('speedOverlay'))
+        try:
+            hwnd = self._overlay_hwnd
+            if not winwindow.alive(hwnd):
+                # Looked up once and kept, as _hwnd() keeps the main one's.
+                hwnd = self._overlay_hwnd = winwindow.find(OVERLAY_TITLE)
+            if want and not self._overlay_up:
+                # Not found until the window is built, which can be after
+                # the first reading: tried again on the next one.
+                if not (winwindow.overlay(hwnd, *OVERLAY_SIZE,
+                                          alpha=round(self._overlay_opacity() * 2.55))
+                        and winwindow.show_quietly(hwnd, True)):
+                    return
+                self._overlay_up = True
+            elif not want and self._overlay_up:
+                winwindow.show_quietly(hwnd, False)
+                self._overlay_up = False
+            if want and not self._overlay_sending.locked():
+                # On a thread of its own, and skipped while the last one is
+                # still on its way: the home's meter is fed from this thread
+                # and must never wait on the speed window's page.
+                script = ('window.onTraffic && window.onTraffic('
+                          + json.dumps(reading, ensure_ascii=False) + ')')
+
+                def send():
+                    with self._overlay_sending:
+                        try:
+                            win.run_js(script)
+                        except Exception:
+                            pass
+                threading.Thread(target=send, daemon=True).start()
+        except Exception:
+            pass
 
     def _watch_drop(self):
         """Notice the worker going away without being asked.
@@ -3421,8 +3478,9 @@ class Api:
         # bring that connection back, as it does for the provider side.
         again = self._configs.take_reconnect()
         if again:
-            return self._configs.call('connect', {'id': again[0],
-                                                  'auto': again[1]})
+            return self._configs.call('connect', {
+                'id': again[0], 'auto': again[1],
+                'country': again[2] if len(again) > 2 else ''})
         # One connection at a time: a config's goes before a provider's -
         # held, with the kill switch on, so the machine stays pointed at it
         # (or its adapter stays up) until the provider's takes over.
@@ -3906,11 +3964,40 @@ class Api:
         return bool(self._settings.get(key, WINDOW_DEFAULTS[key]))
 
     def _window_options(self):
-        return {key: self._window_option(key) for key in WINDOW_DEFAULTS}
+        out = {key: self._window_option(key) for key in WINDOW_DEFAULTS}
+        out['overlayOpacity'] = self._overlay_opacity()
+        return out
+
+    def _overlay_opacity(self):
+        least, default, most = OVERLAY_OPACITY
+        try:
+            pct = int(self._settings.get('overlayOpacity', default))
+        except (TypeError, ValueError):
+            pct = default
+        return max(least, min(most, pct))
+
+    def setOverlayOpacity(self, pct=None):
+        """How solid the speed window is, from Settings > Window; applied to
+        it at once if it is showing."""
+        least, _, most = OVERLAY_OPACITY
+        try:
+            pct = max(least, min(most, int(pct)))
+        except (TypeError, ValueError):
+            return {'ok': False, 'error': 'not a percentage'}
+        self._settings['overlayOpacity'] = pct
+        save_settings(self._settings)
+        if self._overlay_up:
+            try:
+                winwindow.set_alpha(self._overlay_hwnd, round(pct * 2.55))
+            except Exception:
+                pass
+        return {'ok': True, 'window': self._window_options()}
 
     def _set_window_option(self, key, on):
         self._settings[key] = bool(on)
         save_settings(self._settings)
+        if key == 'speedOverlay' and not on:
+            self._overlay_feed(None)
         self._apply_window()
         self._retray()
         # The same switches are in Settings - tell the page, so a flip from
@@ -4163,6 +4250,7 @@ class Tray:
             Menu.SEPARATOR,
             switch('lockWindow', 'Lock position'),
             switch('onTop', 'Always on top'),
+            switch('speedOverlay', 'Speed on screen'),
             Menu.SEPARATOR,
             Item('Quit', self._quit))
         self.icon = pystray.Icon(APP_NAME, self._image('off'),
@@ -5535,7 +5623,32 @@ def main():
     )
     api._window = window
 
-    tray = Tray(api, on_quit=lambda: window.destroy())
+    # The speed over the top of the screen. Made now, hidden, so showing it
+    # later is a platform call and not a window being built mid-connection.
+    overlay = None
+    if not elsewhere:
+        try:
+            overlay = webview.create_window(
+                OVERLAY_TITLE, os.path.join(paths.UI_DIR, 'overlay.html'),
+                width=OVERLAY_SIZE[0], height=OVERLAY_SIZE[1],
+                # pywebview's own floor is 200 x 100, which would leave the
+                # one line of numbers floating in a tall dark box.
+                min_size=OVERLAY_SIZE, frameless=True, easy_drag=False, on_top=True, focus=False,
+                hidden=True, resizable=False, shadow=False, text_select=False,
+                zoomable=False, background_color='#0b0b0d')
+        except Exception:
+            traceback.print_exc()
+    api._overlay = overlay
+
+    def quit_all():
+        if overlay is not None:
+            try:
+                overlay.destroy()
+            except Exception:
+                pass
+        window.destroy()
+
+    tray = Tray(api, on_quit=quit_all)
     api._tray = tray
     api._quit = tray._quit
 
@@ -5688,6 +5801,10 @@ def main():
             return False
 
         undo()
+        if overlay is not None:
+            # The last window open keeps the app running: the speed one
+            # goes with the main one.
+            threading.Thread(target=overlay.destroy, daemon=True).start()
         return True
 
     window.events.closing += closing

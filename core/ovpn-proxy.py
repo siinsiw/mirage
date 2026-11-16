@@ -1364,16 +1364,37 @@ class SplitRules:
         only    what is listed goes through the exit, the rest straight out
 
     Listed means: the program that opened the connection, a name or any
-    domain above it, or an address in a listed range. A name is matched as
-    a name and never looked up to compare its address - that would hand
-    every site anybody visits to this line's resolver.
+    domain above it, or an address in a listed range.
+
+    With the Iran switch on (`smart` in the file), a name the list does not
+    know is also looked up on this line - here, with no adapter up, that is
+    Windows' own resolver, the line's - and goes straight when the answer
+    is an Iranian address. That is how an Iranian site on a foreign CDN is
+    found: asked through the exit its answer is foreign, asked here it is
+    Iran's. It hands the names of sites visited to the line's resolver,
+    which the person chose knowingly; without the switch nothing is looked
+    up. Answers are kept for five minutes, a lookup that takes longer than
+    LOOKUP_WAIT goes through the exit, and Iran's filtering address
+    (10.10.34.x) is private, so it never counts.
     """
+
+    LOOKUP_WAIT = 1.5
+    KEEP = 300.0          # an answer, either way
+    KEEP_FAILED = 30.0    # no answer in time: asked again soon
+    KEEP_MAX = 4096
+    TRIP = 4              # timeouts in a row before the line is left alone
+    TRIP_FOR = 60.0
 
     def __init__(self, path=None):
         self.path = path
         self.stamp = None
         self.checked = 0.0
         self.lock = threading.Lock()
+        self.seen = collections.OrderedDict()   # name -> (iranian, until)
+        self.asking = {}                        # name -> its lookup in flight
+        self.pool = None
+        self.misses = 0                          # timeouts in a row
+        self.quiet_until = 0.0                   # the breaker, while tripped
         self._set({'mode': 'off'})
 
     def _set(self, data):
@@ -1387,6 +1408,22 @@ class SplitRules:
             spans.append((int(net.network_address), int(net.broadcast_address)))
         spans.sort()
         self.mode = mode if mode in ('bypass', 'only') else 'off'
+        self.smart = bool(data.get('smart')) and self.mode == 'bypass'
+        # New rules (and so, often, a new network): nothing the line said
+        # before is taken on trust.
+        self.seen.clear()
+        self.misses = 0
+        self.quiet_until = 0.0
+        iran = []
+        for text in data.get('iranNets') or ():
+            try:
+                net = ipaddress.IPv4Network(text, strict=False)
+            except ValueError:
+                continue
+            iran.append((int(net.network_address), int(net.broadcast_address)))
+        iran.sort()
+        self.iran_lo = [a for a, _ in iran]
+        self.iran_hi = [b for _, b in iran]
         self.names = frozenset(n.lower() for n in data.get('names') or ())
         self.apps = frozenset(a.lower() for a in data.get('apps') or ())
         self.lo = [a for a, _ in spans]
@@ -1439,12 +1476,92 @@ class SplitRules:
             host = host.partition('.')[2]
         return False
 
+    def _iranian(self, value):
+        try:
+            ip = ipaddress.IPv4Address(value)
+        except ValueError:
+            return False
+        if not ip.is_global:
+            return False
+        v = int(ip)
+        i = bisect.bisect_right(self.iran_lo, v)
+        return i > 0 and self.iran_hi[i - 1] >= v
+
+    def _remember(self, name, verdict, keep):
+        with self.lock:
+            self.seen[name] = (verdict, time.monotonic() + keep)
+            self.seen.move_to_end(name)
+            while len(self.seen) > self.KEEP_MAX:
+                self.seen.popitem(last=False)
+
+    def _line_says_iran(self, host):
+        """Whether this line's resolver answers `host` with an Iranian
+        address. One lookup per name however many connections ask at once;
+        an answer that comes after LOOKUP_WAIT is still kept for the next.
+        After TRIP timeouts in a row the line is not asked for TRIP_FOR
+        seconds, so a resolver that has gone quiet costs nothing."""
+        name = host.strip('[]').rstrip('.').lower()
+        if not name or not self.iran_lo:
+            return False
+        try:
+            ipaddress.ip_address(name)
+            return False                     # an address, judged by the list
+        except ValueError:
+            pass
+        now = time.monotonic()
+        with self.lock:
+            hit = self.seen.get(name)
+            if hit and hit[1] > now:
+                return hit[0]
+            if now < self.quiet_until:
+                return False
+            if self.pool is None:
+                self.pool = cf.ThreadPoolExecutor(
+                    max_workers=8, thread_name_prefix='line-dns')
+            future = self.asking.get(name)
+            fresh = future is None
+            if fresh:
+                future = self.pool.submit(
+                    socket.getaddrinfo, name, None, socket.AF_INET,
+                    socket.SOCK_STREAM)
+                self.asking[name] = future
+        if fresh:
+            # Outside the lock: a lookup already done runs its callback
+            # here, on this thread, and the callback takes the lock itself.
+            def landed(f, name=name):
+                with self.lock:
+                    self.asking.pop(name, None)
+                try:
+                    infos = f.result()
+                except Exception:
+                    self._remember(name, False, self.KEEP_FAILED)
+                    return
+                self._remember(name, any(self._iranian(i[4][0])
+                                         for i in infos), self.KEEP)
+            future.add_done_callback(landed)
+        try:
+            infos = future.result(timeout=self.LOOKUP_WAIT)
+        except cf.TimeoutError:
+            with self.lock:
+                self.misses += 1
+                if self.misses >= self.TRIP:
+                    self.quiet_until = time.monotonic() + self.TRIP_FOR
+                    self.misses = 0
+            return False
+        except (OSError, UnicodeError, ValueError):
+            return False
+        with self.lock:
+            self.misses = 0
+        return any(self._iranian(info[4][0]) for info in infos)
+
     def straight(self, host, app=None):
         self._fresh()
         if self.mode == 'off':
             return False
         listed = self.listed(host, app)
-        return listed if self.mode == 'bypass' else not listed
+        if self.mode == 'bypass':
+            return listed or (self.smart and self._line_says_iran(host or ''))
+        return not listed
 
 
 SPLIT = SplitRules()
@@ -1484,10 +1601,19 @@ def straight_to(host, port):
     # Link-local and this PC's own LAN addresses count as well (see "who may
     # use it"): a service listening on the Wi-Fi address is this machine's
     # just as much as one on 127.0.0.1.
-    if getattr(_CALLER, 'lan', False) and (
-            _reaches_this_machine(host)
-            or target_is_this_machine(host, resolve=True)):
-        raise OSError('that is this machine, and you are not on it')
+    if getattr(_CALLER, 'lan', False):
+        if _reaches_this_machine(host) or target_is_this_machine(host, resolve=True):
+            raise OSError('that is this machine, and you are not on it')
+        # One resolution, checked, and that address dialled: a name must not
+        # answer "public" to the check above and 127.0.0.1 to the dial.
+        try:
+            ip = socket.getaddrinfo(host, int(port), socket.AF_INET,
+                                    socket.SOCK_STREAM)[0][4][0]
+        except (OSError, IndexError) as e:
+            raise OSError(f'no address for {host}: {e}')
+        if _reaches_this_machine(ip) or target_is_this_machine(ip):
+            raise OSError('that is this machine, and you are not on it')
+        host = ip
     sock = socket.create_connection((host, int(port)), timeout=15)
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     return sock

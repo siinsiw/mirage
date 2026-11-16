@@ -134,7 +134,7 @@ def test_split_tunnelling():
     cfg = singbox.build(SB[:2], port=1, clash_port=2, clash_secret='s',
                         split_rules=rules, line_resolver='192.168.1.1')
     r = cfg['route']['rules']
-    assert {'action': 'sniff'} in r
+    assert {'port': [80, 443], 'action': 'sniff'} in r
     assert {'process_name': ['steam.exe'], 'action': 'route',
             'outbound': 'direct'} in r
     assert any(x.get('domain_suffix') == ['ir', 'digikala.com']
@@ -211,6 +211,30 @@ EVERYTHING = dict(prefs.defaults(), fragment=True, fragment_style='tls',
                   tun_stack='gvisor', tun_mtu=1500, strict_route=False,
                   auto_interval=3, auto_tolerance=150,
                   test_url='https://www.gstatic.com/generate_204')
+
+
+def test_iran_direct_in_configs():
+    import split
+    r = split.rules({'mode': 'off', 'iran': True})
+    for mode in ('proxy', 'tun'):
+        cfg = singbox.build(SB, port=18877, clash_port=19090, clash_secret='s',
+                            mode=mode, split_rules=r, line_resolver='192.168.1.1')
+        smart = [x for x in cfg['dns']['rules'] if 'ip_cidr' in x]
+        assert len(smart) == 1 and smart[0]['server'] == 'dns-line', mode
+        # Nothing is resolved ahead of the route: through the port the
+        # config gets names as before, and only the lists judge them.
+        assert not any(x.get('action') == 'resolve' for x in cfg['route']['rules'])
+    # A resolver that answers with its own proxies (Shecan and the like)
+    # does not get to decide; the lists still do.
+    cfg = singbox.build(SB, port=18877, clash_port=19090, clash_secret='s',
+                        mode='tun', split_rules=r, line_resolver='178.22.122.100')
+    assert not any('ip_cidr' in x for x in cfg['dns']['rules'])
+    assert split.smart_ok('192.168.1.1') and not split.smart_ok('178.22.122.100')
+    off = singbox.build(SB, port=18877, clash_port=19090, clash_secret='s',
+                        split_rules=split.rules({'mode': 'off', 'iran': False}),
+                        line_resolver='192.168.1.1')
+    assert not any(x.get('action') == 'resolve' for x in off['route']['rules'])
+    assert not any('ip_cidr' in x for x in off['dns']['rules'])
 
 
 def test_settings_reach_the_connection():

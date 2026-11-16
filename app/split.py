@@ -216,19 +216,37 @@ def clean(settings):
     return split, rejected
 
 
-def rules(split):
-    """Everything a carrier needs to decide, expanded: the preset folded in,
-    names and prefixes apart. None when there is nothing to decide - off, or
-    "only" with nothing listed, which would be a VPN that carries nothing.
-    """
+# Iranian DNS services that answer blocked or sanctioned names with the
+# address of their own proxy, inside Iran: Shecan, 403.online, Begzar,
+# Electro, Radar. With one of these as the line's resolver its "Iranian"
+# answer for docker.com is a third party's proxy, not Iran - so the line's
+# DNS is not asked to decide (the lists still are).
+DNS_PROXIES = frozenset((
+    '178.22.122.100', '185.51.200.2', '185.51.200.1',
+    '10.202.10.202', '10.202.10.102', '10.202.10.10', '10.202.10.11',
+    '185.55.226.26', '185.55.225.25', '185.55.225.26',
+    '78.157.42.100', '78.157.42.101',
+))
+
+
+def smart_ok(resolver):
+    """Whether this line's resolver may decide what goes straight."""
+    return bool(resolver) and str(resolver).strip() not in DNS_PROXIES
+
+
+def iran_direct(split):
+    """Whether Iranian destinations go straight out under this split: the
+    Iran switch on, in Off or "except these", and the lists there to say
+    what is Iranian. In "only these" the switch keeps its old meaning -
+    Iranian sites are on the list, and go through - which is what somebody
+    abroad reaching Iranian sites wants."""
     split, _ = clean(split)
-    if split['mode'] == 'off':
-        return None
+    return (split['iran'] and split['mode'] in ('off', 'bypass')
+            and bool(iran_lists()[1]))
+
+
+def _collapse(entries):
     names, nets = [], []
-    entries = list(split['domains'])
-    if split['iran']:
-        d, r = iran_lists()
-        entries = d + r + entries
     for entry in entries:
         try:
             norm = normalize(entry)
@@ -240,17 +258,52 @@ def rules(split):
             names.append(norm)
     nets = [str(n) for n in ipaddress.collapse_addresses(
         n for n in nets if n.version == 4)]
-    if not (names or nets or split['apps']):
+    return sorted(set(names)), nets
+
+
+def rules(split):
+    """Everything a carrier needs to decide, expanded: the preset folded in,
+    names and prefixes apart. None when there is nothing to decide - off
+    with the Iran switch off, or "only" with nothing listed, which would be
+    a VPN that carries nothing.
+
+    Off with the Iran switch on is not nothing: it is "except these" with
+    Iran alone on the list, the user's own list left waiting. Wherever Iran
+    goes straight, `smart` says so, and `iranNets` carries Iran's ranges on
+    their own: a name the list does not know is asked of this line's DNS
+    too, and sent straight when that answer is an Iranian address - how an
+    Iranian site on a foreign CDN, whose answer through the exit is
+    foreign, is still found (see the worker's SplitRules and tun.py).
+    """
+    split, _ = clean(split)
+    smart = iran_direct(split)
+    if split['mode'] == 'off' and not smart:
         return None
-    return {'mode': split['mode'], 'names': sorted(set(names)), 'nets': nets,
-            'apps': list(split['apps'])}
+    entries = [] if split['mode'] == 'off' else list(split['domains'])
+    apps = [] if split['mode'] == 'off' else list(split['apps'])
+    iran_nets = []
+    if split['iran']:
+        d, r = iran_lists()
+        entries = d + r + entries
+        iran_nets = _collapse(r)[1]
+    names, nets = _collapse(entries)
+    if not (names or nets or apps):
+        return None
+    return {'mode': 'bypass' if split['mode'] == 'off' else split['mode'],
+            'names': names, 'nets': nets, 'apps': apps,
+            'smart': smart, 'iranNets': iran_nets if smart else []}
 
 
-def write_worker_file(split, path=WORKER_FILE):
+def write_worker_file(split, path=WORKER_FILE, resolver=None):
     """The worker's copy of the rules, which it reads again whenever the file
     changes - so a change applies to the next connection without a restart.
+    `resolver` is the line's DNS server the worker's own lookups reach: when
+    it is not one to trust with the decision (smart_ok), the worker goes by
+    the lists alone.
     """
     r = rules(split) if split else None
+    if r and r.get('smart') and not smart_ok(resolver):
+        r = dict(r, smart=False)
     data = r or {'mode': 'off'}
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + '.tmp'

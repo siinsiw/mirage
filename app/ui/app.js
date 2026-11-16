@@ -464,12 +464,13 @@ function drawList(query) {
   const wasAt = list.scrollTop;
   list.replaceChildren();
 
-  const total = document.createElement('p');
-  total.className = 'listtotal';
-  const tally = document.createElement('b');
+  const tally = document.createElement('b');     // kept for whoever reads it
   tally.id = 'listCount';
-  total.append(tally, ' locations');
-  list.append(total);
+  const all = state.countries || [];
+  const servers = all.reduce((n, c) => n + (c.count || 0), 0);
+  $('pickTotals').textContent = all.length
+    ? `${all.length} countr${all.length === 1 ? 'y' : 'ies'} · ${servers} server${servers === 1 ? '' : 's'}`
+    : '';
 
   const found = sortCountries(
     q ? state.fuse.search(q).map((r) => r.item) : state.countries);
@@ -494,27 +495,21 @@ function drawList(query) {
      on the row somebody presses, so there is no "fastest now" to show.
      A search is one list of results. Every section is open; an empty one is
      not drawn. */
+  /* One list, under a caption that says the order in force: starred places
+     first, the ones whose every exit turned the last test away last (sorted
+     there by sortCountries), and before them all, Fastest available. A
+     search is one list of matches. */
   const groups = [];
   const deadHere = (c) => !!(c.tested && !c.ok && c.tested >= c.count);
   if (q) {
     groups.push(['Results', found, found.length === 1 ? '1 match' : `${found.length} matches`]);
   } else {
-    const starred = found.filter(starredIn);
-    if (starred.length) groups.push(['Starred', starred, 'Your short list']);
-    const others = found.filter((c) => !starredIn(c));
-    const rest = others.filter((c) => !deadHere(c));
-    const said = ({
-      windscribe: 'In Windscribe’s order', ping: 'Quickest first',
-      load: 'Least busy first', name: 'A to Z',
-    })[state.sortBy || 'windscribe'] || '';
-    if (rest.length) groups.push([starred.length ? 'All locations' : 'Locations', rest, said]);
-    const dead = others.filter(deadHere).sort((a, b) => a.name.localeCompare(b.name));
-    if (dead.length) groups.push(['Not answering', dead, 'Their exits turned the last test away']);
-    // Nothing left that answers: the list itself offers the way out.
-    if (!starred.length && !rest.length && dead.length) {
+    groups.push(['Locations', found, SORT_SAID[state.sortBy || 'windscribe'] || '']);
+    if (found.every(deadHere)) {
       list.append(setupAgainNote('None of these answered the last test. '
         + 'Setting the servers up again fetches fresh ones.'));
     }
+    list.append(fastestCard());
   }
 
   // Fastest first is only honest about the countries that were timed; within
@@ -528,23 +523,11 @@ function drawList(query) {
     sec.className = 'grp';
     sec.dataset.group = name;
     // A heading, not a control: the title, how many, and why these are together.
+    // A caption, not a heading: the order the list is in, or how many
+    // matched.
     const head = document.createElement('p');
-    head.className = 'gh';
-    head.setAttribute('role', 'heading');
-    head.setAttribute('aria-level', '3');
-    const hn = document.createElement('span');
-    hn.className = 'gh__name';
-    hn.textContent = name;
-    const hc = document.createElement('span');
-    hc.className = 'gh__n';
-    hc.textContent = String(items.length);
-    head.append(hn, hc);
-    if (note) {
-      const hw = document.createElement('span');
-      hw.className = 'gh__note';
-      hw.textContent = note;
-      head.append(hw);
-    }
+    head.className = 'loc__cap';
+    head.textContent = note || name;
     const body = document.createElement('div');
     body.className = 'grp__in';
     sec.append(head, body);
@@ -610,6 +593,33 @@ function drawList(query) {
     if (at < rest.length) later(more);
   };
   later(more);
+}
+
+/* Fastest available, first: no place chosen, the fastest that answers
+   (what "Any country" was). A row like the others, so the arrow keys and
+   Enter reach it and a click picks it. */
+function fastestCard() {
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'row row--fast' + (!state.picked || state.picked === 'auto' ? ' is-picked' : '');
+  row.dataset.code = 'auto';
+  const mark = document.createElement('span');
+  mark.className = 'fast__mark';
+  mark.append(icon('#i-bolt', 'ico'));
+  const copy = document.createElement('span');
+  copy.className = 'row__copy';
+  const name = document.createElement('span');
+  name.className = 'row__name';
+  name.textContent = 'Fastest available';
+  const meta = document.createElement('span');
+  meta.className = 'row__meta';
+  meta.textContent = 'races every location, takes the first to answer';
+  copy.append(name, meta);
+  row.append(mark, copy);
+  const box = document.createElement('div');
+  box.className = 'group group--fast';
+  box.append(row);
+  return box;
 }
 
 /* A country: its row, and when it is open its cities underneath, in place.
@@ -679,19 +689,17 @@ function buildCountry(c) {
     badges.append(providerTag(k, by[k], (c.byTested || {})[k] || 0,
                               (c.byOk || {})[k] || 0, (c.byPing || {})[k]));
   }
-  for (const [has, word, why, kind] of [
-    [cities.some((x) => x.gbps === 10), '10G', '10 Gbps link', 'fast'],
-    [cities.some((x) => x.p2p), 'P2P', 'P2P allowed', 'p2p'],
-  ]) {
-    if (!has) continue;
-    const m = document.createElement('span');
-    m.className = 'mark';
-    m.dataset.kind = kind;
-    m.textContent = word;
-    m.title = why;
-    badges.append(m);
+  // The provider marks lead the line, then what is there - or, where every
+  // exit asked turned away, that it is blocked here.
+  const blockedHere = c.tested && !c.ok && c.tested >= c.count;
+  if (blockedHere) {
+    count.textContent = 'Blocked here';
+    count.dataset.blocked = '1';
+  } else if (state.testing === c.code) {
+    count.textContent = 'testing…';
+    count.dataset.testing = '1';
   }
-  if (badges.childNodes.length) meta.append(badges);
+  meta.replaceChildren(...badges.childNodes, count);
   copy.append(name, meta);
 
   // The time, in mono at the trailing edge - and "Blocked" only where every
@@ -701,22 +709,10 @@ function buildCountry(c) {
   marks.className = 'row__marks';
   const ping = document.createElement('span');
   ping.className = 'row__ping';
-  if (c.tested && !c.ok && c.tested >= c.count) {
-    ping.textContent = 'Blocked';
-    ping.dataset.blocked = '1';
-  } else if (c.tested && c.ok && c.ping !== null && c.ping !== undefined) {
+  if (c.tested && c.ok && c.ping !== null && c.ping !== undefined) {
     ping.textContent = msSaid(c.ping);
   }
   marks.append(ping);
-  // The reference's small pill at the row's end: the same choice the row
-  // makes, said out loud. The picked row carries the accent instead.
-  const go = document.createElement('span');
-  go.className = 'row__go';
-  go.setAttribute('aria-hidden', 'true');
-  const picked = state.picked === c.code;
-  go.textContent = picked ? (state.mode === 'on' ? 'Connected' : 'Selected') : 'Connect';
-  if (picked) go.dataset.on = '1';
-  marks.append(go);
   row.append(copy, marks);
 
   // A country with cities opens into them; one without opens straight into
@@ -724,9 +720,11 @@ function buildCountry(c) {
   // chevron in the same place.
   const many = cities.length > 1;
   const opens = many || c.count > 1;
+  // Stars live on cities and servers; the country's own rail is the test
+  // and the + that opens it.
   row.append(railFor(c.code, opens ? (many ? 'expand' : 'exits') : null,
                      many ? state.openCities.has(c.code)
-                          : state.openExits === c.code));
+                          : state.openExits === c.code, { star: false }));
   return row;
 }
 
@@ -1097,6 +1095,46 @@ function paintWindowOptions(opts) {
     sw.setAttribute('aria-checked', String(!!opts[sw.dataset.option]));
   }
   paintDrag(!!opts.lockWindow);
+  // The speed over the top of the screen: the header buttons and the
+  // opacity, beside the switch above.
+  state.speedOverlay = opts.speedOverlay !== false;
+  for (const b of document.querySelectorAll('.speedtoggle')) {
+    b.setAttribute('aria-pressed', String(state.speedOverlay));
+    b.title = state.speedOverlay ? 'Speed on screen: on' : 'Speed on screen: off';
+  }
+  const pct = Number(opts.overlayOpacity);
+  if (pct >= 40 && pct <= 100 && document.activeElement !== $('speedAlpha')) {
+    $('speedAlpha').value = String(pct);
+    $('speedAlphaVal').textContent = `${pct}%`;
+  }
+}
+
+/* One press in either header turns the speed on the screen on or off. */
+for (const b of document.querySelectorAll('.speedtoggle')) {
+  b.addEventListener('click', async () => {
+    const on = !state.speedOverlay;
+    state.speedOverlay = on;
+    for (const x of document.querySelectorAll('.speedtoggle')) x.setAttribute('aria-pressed', String(on));
+    const r = await window.pywebview.api.setWindowOption('speedOverlay', on);
+    if (r && r.window) paintWindowOptions(r.window);
+  });
+}
+
+/* Its opacity: shown as it is dragged, sent at most every 120 ms so the
+   window follows the thumb without a call per pixel. */
+{
+  const slider = $('speedAlpha');
+  let timer = 0;
+  const send = async () => {
+    timer = 0;
+    const r = await window.pywebview.api.setOverlayOpacity(Number(slider.value));
+    if (r && r.window) paintWindowOptions(r.window);
+  };
+  slider.addEventListener('input', () => {
+    $('speedAlphaVal').textContent = `${slider.value}%`;
+    if (!timer) timer = setTimeout(send, 120);
+  });
+  slider.addEventListener('change', () => { clearTimeout(timer); send(); });
 }
 
 /* There is no Windows frame: the header, and each sheet's heading, are what
@@ -4421,10 +4459,27 @@ const splitPane = (() => {
   });
 
   const MODES = ['off', 'bypass', 'only'];
+
+  /* Which split the pane is editing. Mirage's own, here in its Settings; or
+     the Configs section's, when Configs' Settings > Routing borrows the pane
+     (mount) - the same pane, so both sides get the same Iranian lists, the
+     program picker and the running list, with their own rules behind them. */
+  let side = 'main';
+  const cfg = { split: null, lists: null, routeWith: 'proxy', live: false };
+  const T = {
+    get split() { return side === 'main' ? state.split : cfg.split; },
+    set split(v) { if (side === 'main') state.split = v; else cfg.split = v; },
+    get lists() { return side === 'main' ? state.splitLists : cfg.lists; },
+    get routeWith() { return side === 'main' ? state.routeWith : cfg.routeWith; },
+  };
+  const who = () => (side === 'main' ? 'Mirage' : 'the config');
+  // Iran direct works in Off too, so Off says what it leaves out.
   const SAID = {
-    off: 'Everything goes through Mirage. The list waits here until one of the other two is chosen.',
-    bypass: 'Everything goes through Mirage except what is listed, which goes straight out.',
-    only: 'Only what is listed goes through Mirage; everything else goes straight out.',
+    off: (d) => (d && d.iran
+      ? `Everything goes through ${who()} except Iranian sites, servers and apps (Iran direct). Your own list waits here until one of the other two is chosen.`
+      : `Everything goes through ${who()}. The list waits here until one of the other two is chosen.`),
+    bypass: () => `Everything goes through ${who()} except what is listed, which goes straight out.`,
+    only: () => `Only what is listed goes through ${who()}; everything else goes straight out.`,
   };
   // The pill is what is in force, not what is on screen - the two differ
   // between an edit and its Apply, and that difference is worth seeing.
@@ -4460,12 +4515,14 @@ const splitPane = (() => {
     if (!info || !info.split) {
       // A backend from before split tunnelling has nothing to stand this
       // pane on, so the pane is not there at all.
-      if (!state.split) pane.hidden = true;
+      if (!state.split && side === 'main') pane.hidden = true;
       return;
     }
     const was = state.split;
     state.split = tidy(info.split);
     if (info.splitLists) state.splitLists = info.splitLists;
+    paintIranDirect();
+    if (side !== 'main') return;
     if (!draft || same(draft, was)) draft = copy(state.split);
     paint();
   }
@@ -4479,8 +4536,12 @@ const splitPane = (() => {
     for (const b of seg.querySelectorAll('.seg__opt')) {
       b.setAttribute('aria-pressed', String(b.dataset.split === d.mode));
     }
-    $('splitSaid').textContent = SAID[d.mode];
+    $('splitSaid').textContent = SAID[d.mode](d);
+    $('splitWho').textContent = who();
     $('splitIran').setAttribute('aria-checked', String(d.iran));
+    // In "only these" the switch keeps its old sense: Iran is on the list,
+    // and goes through - what somebody abroad wants.
+    $('splitIranName').textContent = d.mode === 'only' ? 'Iranian sites' : 'Iran direct';
     paintLists();
     chips(apps, d.apps, 'program');
     chips(sites, d.domains, 'site');
@@ -4489,7 +4550,7 @@ const splitPane = (() => {
                                && !d.apps.length && !d.domains.length);
     paintPill();
     if (applying) return;
-    const dirty = !same(d, state.split);
+    const dirty = !same(d, T.split);
     apply.disabled = !dirty;
     if (answer) said(told, answer.text, answer.kind);
     else said(told, dirty ? 'Not applied yet.' : '');
@@ -4497,23 +4558,25 @@ const splitPane = (() => {
 
   function paintPill() {
     const pill = $('splitPill');
-    const mode = (state.split || {}).mode || 'off';
-    pill.dataset.state = mode === 'off' ? '' : 'on';
-    if (pill.textContent === PILL[mode]) return;
-    pill.textContent = PILL[mode];
+    const mode = (T.split || {}).mode || 'off';
+    const iran = mode === 'off' && !!(T.split || {}).iran;
+    pill.dataset.state = mode === 'off' && !iran ? '' : 'on';
+    const text = iran ? 'Iran direct' : PILL[mode];
+    if (pill.textContent === text) return;
+    pill.textContent = text;
   }
 
   /* The counts are the backend's, read off the lists it ships. Zero of both
      is a copy without them, and saying so beats a switch that matches
      nothing while looking as though it matches all of Iran. */
   function paintLists() {
-    const l = state.splitLists;
+    const l = T.lists;
     const n = (x) => Number(x || 0).toLocaleString('en-US');
     $('splitIranSaid').textContent = !l
       ? 'Iranian domains and Iranian address ranges'
       : (l.domains || l.ranges)
-        ? `${n(l.domains)} domains and ${n(l.ranges)} address ranges, updated with each release`
-        : 'The lists are missing from this copy, so this has nothing to match';
+        ? `${n(l.domains)} domains and ${n(l.ranges)} address ranges, plus any site your line's own DNS places in Iran (so your provider sees the names of sites you open)`
+        : 'The lists are missing from this copy, so Iran direct has nothing to go by';
   }
 
   /* Programs are only told apart by the tunnel. Through the proxy setting
@@ -4521,10 +4584,12 @@ const splitPane = (() => {
      it, so a program that ignores the setting is not "except" anything - it
      was never coming through in the first place. */
   function note() {
-    $('splitAppsNote').textContent = state.routeWith === 'tun'
+    $('splitAppsNote').textContent = T.routeWith === 'tun'
       ? 'Every program is affected.'
       : 'In proxy mode only programs that use the Windows proxy setting are '
-        + 'affected — switch to Tunnel above to cover every program.';
+        + (side === 'main'
+          ? 'affected — switch to Tunnel above to cover every program.'
+          : 'affected — turn on Whole system on the Configs home to cover every program.');
   }
 
   /* -------------------------------------------------------------- chips */
@@ -4902,24 +4967,30 @@ const splitPane = (() => {
      the adapter coming back - possibly behind a UAC prompt, so possibly
      behind a person. */
   async function commit() {
-    if (applying || !draft || same(draft, state.split)) return;
+    if (applying || !draft || same(draft, T.split)) return;
     hide(false);
     const want = copy(draft);
-    const before = state.split;
+    const before = T.split;
     // Only a tunnel that is up has an adapter to restart, and a list saved
     // under Off that stays Off gives it no reason to.
-    const tunUp = state.mode === 'on' && state.systemProxy && state.routeWith === 'tun'
+    const tunUp = side === 'main' && state.mode === 'on' && state.systemProxy
+      && T.routeWith === 'tun'
       && !(want.mode === 'off' && (!before || before.mode === 'off'));
+    // The Configs side's connection takes its rules when it starts, so a
+    // change to a live one is a reconnect.
+    const again = side === 'configs' && cfg.live;
     applying = true;
     answer = null;
     busy(apply, true);
     said(told, tunUp
       ? `Restarting the network adapter with the new list…${
         state.elevated ? '' : ' Windows may ask for approval.'}`
-      : 'Applying…', 'work');
+      : (again ? 'Connecting again with the new list…' : 'Applying…'), 'work');
     let r = null;
     try {
-      r = await window.pywebview.api.setSplit(want);
+      r = side === 'main'
+        ? await window.pywebview.api.setSplit(want)
+        : await window.pywebview.api.configs('setSplit', want);
     } catch (err) {
       r = null;
     }
@@ -4930,16 +5001,16 @@ const splitPane = (() => {
     const moved = !same(draft, want);
     let fresh = [];
     if (!r || r.ok === false) {
-      if (r && r.split) state.split = tidy(r.split);
+      if (r && r.split) T.split = tidy(r.split);
       answer = { text: (r && r.error) || 'That could not be applied.', kind: 'bad' };
     } else {
-      state.split = tidy(r.split || want);
+      T.split = tidy(r.split || want);
       if (!moved) {
         // What the backend made of what was typed replaces it - so the
         // chips that changed spelling are the ones that arrive again.
         const sent = new Set([...want.apps, ...want.domains]);
-        fresh = [...state.split.apps, ...state.split.domains].filter((v) => !sent.has(v));
-        draft = copy(state.split);
+        fresh = [...T.split.apps, ...T.split.domains].filter((v) => !sent.has(v));
+        draft = copy(T.split);
       }
       const rejected = Array.isArray(r.rejected) ? r.rejected.map(String) : [];
       siteErr = rejected.length ? 'rejected' : '';
@@ -4949,19 +5020,22 @@ const splitPane = (() => {
       // Three different things a press of Apply can have done, and each
       // says only what it did. A list saved under Off changes nothing that
       // is running, so "in force" would be a claim about nothing.
-      const now = r.applied === 'now';
+      const now = r.applied === 'now' || r.applied === 'reconnect';
+      const name = side === 'main' ? 'Mirage' : 'a config';
       let text;
-      if (state.split.mode !== 'off') {
-        text = !now ? 'Saved. It takes effect the next time Mirage connects.'
-          : tunUp ? 'In force — the adapter is back up with the new list.'
-            : 'In force on the connection that is up now.';
+      if (T.split.mode !== 'off') {
+        text = !now ? `Saved. It takes effect the next time ${name} connects.`
+          : r.applied === 'reconnect' ? 'In force — connecting again with the new list.'
+            : tunUp ? 'In force — the adapter is back up with the new list.'
+              : 'In force on the connection that is up now.';
       } else if (before && before.mode !== 'off') {
-        text = now ? 'Off. Everything goes through Mirage again.'
-          : 'Saved. It is off from the next time Mirage connects.';
+        text = now ? `Off. Everything goes through ${who()} again.`
+          : `Saved. It is off from the next time ${name} connects.`;
       } else {
         text = 'Saved. The list is kept for when it is turned on.';
       }
       answer = { kind: 'good', text };
+      paintIranDirect();
     }
     paint();
     for (const v of fresh) arrive(rowFor(apps, v) || rowFor(sites, v));
@@ -4971,8 +5045,111 @@ const splitPane = (() => {
 
   apply.addEventListener('click', commit);
 
-  return { take, paint, note, hide };
+  /* The pane into Configs' Settings > Routing (`host`), editing the
+     section's own split - or, with 'main', back where it lives. */
+  let home = null;
+  let kept = null;      // Mirage's own draft, unapplied, while the pane is lent
+  async function mount(which, host) {
+    if (which === 'configs') {
+      if (!home) home = { parent: pane.parentNode, next: pane.nextSibling };
+      if (host && pane.parentNode !== host) host.appendChild(pane);
+      if (open) hide(false);
+      if (side === 'main') kept = draft;
+      side = 'configs';
+      draft = null;
+      answer = null;
+      siteErr = '';
+      pane.hidden = true;
+      let r = null;
+      try { r = await window.pywebview.api.configs('split'); } catch (e) { r = null; }
+      if (side !== 'configs') return;
+      if (!r || r.ok === false) {
+        // Nothing of Mirage's is left showing under Configs' heading: the
+        // pane stays away, and the screen says why.
+        pane.hidden = true;
+        if (host) {
+          const why = document.createElement('p');
+          why.className = 'note';
+          why.textContent = (r && r.error) || 'The Configs split could not be read.';
+          host.appendChild(why);
+        }
+        return;
+      }
+      cfg.split = tidy(r.split);
+      cfg.lists = r.splitLists || state.splitLists;
+      cfg.routeWith = r.routeWith === 'tun' ? 'tun' : 'proxy';
+      cfg.live = !!r.live;
+      draft = copy(cfg.split);
+      siteErr = '';
+      said(siteSaid, '');
+      paint();
+      return;
+    }
+    if (side === 'main') return;
+    if (open) hide(false);
+    side = 'main';
+    if (home) home.parent.insertBefore(pane, home.next);
+    draft = kept || (state.split ? copy(state.split) : null);
+    kept = null;
+    answer = null;
+    siteErr = '';
+    said(siteSaid, '');
+    paint();
+  }
+
+  /* The home's Iran switch moved what is in force: an unapplied draft
+     here follows it, so a later Apply does not quietly put it back. */
+  function syncIran(on) {
+    if (side !== 'main' || !draft) return;
+    draft.iran = !!on;
+    paint();
+  }
+
+  return { take, paint, note, hide, mount, syncIran };
 })();
+
+/* Iran direct on the home: the split pane's Iran switch, as Mirage's own
+   split has it, put where it is reached for. Saved and applied the way the
+   pane's Apply does (setSplit), and the pane's draft follows. In "only
+   these" it is not Iran direct at all - Iran is on the list and goes
+   through - so the home switch stands aside. */
+function paintIranDirect() {
+  const row = $('iranDirectRow');
+  const s = state.split;
+  if (!row || !s) { if (row) row.hidden = true; return; }
+  row.hidden = false;
+  // No lists in this copy: nothing to tell Iran by, so the switch is off.
+  const lists = state.splitLists;
+  const none = !!lists && !lists.ranges;
+  const only = s.mode === 'only' || none;
+  const b = $('iranDirect');
+  b.setAttribute('aria-checked', String(!!s.iran && !only));
+  b.disabled = only || row.dataset.busy === '1';
+  row.title = none
+    ? 'The Iran lists are missing from this copy.'
+    : only
+    ? 'Split tunnelling is on "Only these": only what is listed goes through Mirage.'
+    : 'Iranian sites, servers and apps go straight out; everything else through Mirage. '
+      + "Names are also asked of your line's DNS, which sees them.";
+}
+
+$('iranDirect').addEventListener('click', async () => {
+  const s = state.split;
+  const row = $('iranDirectRow');
+  if (!s || s.mode === 'only' || row.dataset.busy === '1') return;
+  const want = { ...s, iran: !s.iran, apps: s.apps.slice(), domains: s.domains.slice() };
+  row.dataset.busy = '1';
+  $('iranDirect').setAttribute('aria-checked', String(want.iran));
+  let r = null;
+  try { r = await window.pywebview.api.setSplit(want); } catch (e) { r = null; }
+  row.dataset.busy = '';
+  if (r && r.split) {
+    splitPane.take({ split: r.split });
+    if (r.ok !== false) splitPane.syncIran(r.split.iran);
+  }
+  if (!r || r.ok === false) setHint((r && r.error) || 'Iran direct could not be changed.');
+  paintIranDirect();
+});
 
 /* Other devices: the server set up under Your own tunnel, handed to a phone.
 
@@ -7729,7 +7906,8 @@ async function toggleExits(code, after) {
 
     // Its own bolt: one server is the smallest thing worth asking about,
     // and with no test-all left, the only way to time just this one.
-    row.append(sign, name, meta, said_, testMark(`file:${x.file}`));
+    row.append(sign, name, meta, said_, testMark(`file:${x.file}`),
+               starFor(`file:${x.file}`));
     box.append(row);
   }
   after.insertAdjacentElement('afterend', box);
@@ -7921,11 +8099,14 @@ function expander(kind, code, on) {
   svg.setAttribute('class', 'ico expand__ico');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('aria-hidden', 'true');
-  // A chevron that turns over when the row is open, as on the phone.
-  const path = document.createElementNS(NS, 'path');
-  path.setAttribute('class', 'expand__chev');
-  path.setAttribute('d', 'M6 9l6 6 6-6');
-  svg.append(path);
+  // A plus whose upright folds away when the row is open: + opens, - closes.
+  const across = document.createElementNS(NS, 'path');
+  across.setAttribute('class', 'expand__h');
+  across.setAttribute('d', 'M6 12h12');
+  const upright = document.createElementNS(NS, 'path');
+  upright.setAttribute('class', 'expand__v');
+  upright.setAttribute('d', 'M12 6v12');
+  svg.append(across, upright);
   el.append(svg);
   return el;
 }
@@ -7939,11 +8120,12 @@ function expander(kind, code, on) {
    mouse. The track groups them, the provider mark stays outside it because
    it says who rather than offering to do anything, and each control gets a
    real target with its own colour under it. */
-function railFor(code, kind, on) {
+function railFor(code, kind, on, opts = {}) {
   const rail = document.createElement('span');
   rail.className = 'rail';
-  rail.append(testMark(code), starFor(code),
-              kind ? expander(kind, code, on) : slot());
+  rail.append(testMark(code));
+  if (opts.star !== false) rail.append(starFor(code));
+  rail.append(kind ? expander(kind, code, on) : slot());
   return rail;
 }
 
@@ -8036,11 +8218,17 @@ function buildCity(c, city, via) {
 
 /* -- the controls above the list --------------------------------------- */
 
+const SORTS = ['windscribe', 'name', 'load'];
+const SORT_WORD = { windscribe: 'Order', name: 'A–Z', load: 'Load', ping: 'Ping' };
+const SORT_SAID = {
+  windscribe: 'Windscribe’s order', name: 'A–Z', load: 'Least busy first',
+  ping: 'Quickest first',
+};
+
 function paintSort() {
-  for (const b of $('sortBy').querySelectorAll('.pair__opt')) {
-    b.setAttribute('aria-selected', String(b.dataset.sort === (state.sortBy || 'windscribe')));
-  }
-  slideSort();
+  const kind = state.sortBy || 'windscribe';
+  $('sortWord').textContent = SORT_WORD[kind] || 'Order';
+  $('sortBy').title = `In ${SORT_SAID[kind] || ''} - press for the next order`;
 }
 
 /* The lit backing, under whichever icon is chosen. Without this the pill
@@ -8051,13 +8239,7 @@ function paintSort() {
    Measured rather than told, because a dialog that has never been opened has
    no layout: offsetWidth is 0 until showModal(), so this is called again on
    the way in rather than only when the choice changes. */
-function slideSort() {
-  const chosen = $('sortBy').querySelector('[aria-selected="true"]');
-  const bar = $('sortBy').querySelector('.pair__slide');
-  if (!chosen || !bar || !chosen.offsetWidth) return;
-  bar.style.width = `${chosen.offsetWidth}px`;
-  bar.style.transform = `translateX(${chosen.offsetLeft - 2}px)`;
-}
+function slideSort() { paintSort(); }
 
 /* What the chosen sort has to work with, when the answer is nothing.
 
@@ -8083,10 +8265,9 @@ function sortHasNothing(kind) {
   return '';
 }
 
-$('sortBy').addEventListener('click', async (e) => {
-  const opt = e.target.closest('.pair__opt');
-  if (!opt) return;
-  state.sortBy = opt.dataset.sort;
+$('sortBy').addEventListener('click', async () => {
+  const at = SORTS.indexOf(state.sortBy || 'windscribe');
+  state.sortBy = SORTS[(at + 1) % SORTS.length];
   paintSort();
   $('list').dataset.key = '';
   drawList($('search').value.trim());
@@ -8446,15 +8627,47 @@ $('dropFolders').addEventListener('click', (e) => {
    lines doing one each.
    ======================================================================== */
 
+/* The pools as tabs: All, Pinned, Starred, each with how many places it
+   holds. Any other set (Verified, a site's own, a folder of your own) is
+   behind More, which stays lit while one of those is in use. */
+const TABS = [['all', 'All'], ['pinned', 'Pinned'], ['starred', 'Starred']];
+
 function paintSourceHead() {
   const s = state.sources || {};
-  const row = (s.rows || []).find((r) => r.key === s.source);
-  $('sourceName').textContent = row ? row.name : 'All locations';
-  // Lit when it is anything but everything. A filter that is on and does not
-  // look on is how somebody comes to wonder where three hundred locations
-  // went.
-  $('sourcePick').dataset.narrow = (s.source && s.source !== 'all') ? '1' : '0';
+  const rows = s.rows || [];
+  const here = s.source || 'all';
+  const box = $('pickTabs');
+  box.replaceChildren();
+  for (const [key, word] of TABS) {
+    const r = rows.find((x) => x.key === key);
+    if (!r && key !== 'all') continue;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'loc__tab';
+    b.dataset.source = key;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', String(here === key));
+    const n = document.createElement('span');
+    n.className = 'loc__n';
+    n.textContent = r ? String(r.count) : String((state.countries || []).length);
+    b.append(word, n);
+    if (r && r.note) b.title = r.note;
+    box.append(b);
+  }
+  const others = rows.filter((x) => !TABS.some(([k]) => k === x.key));
+  const more = $('sourcePick');
+  more.hidden = !others.length;
+  const other = others.find((x) => x.key === here);
+  $('sourceName').textContent = other ? other.name : '⋯';
+  more.setAttribute('aria-label', other ? `Showing ${other.name} - other sets of exits` : 'Other sets of exits');
+  more.dataset.narrow = other ? '1' : '0';
 }
+
+$('pickTabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.loc__tab');
+  if (!tab || tab.getAttribute('aria-selected') === 'true') return;
+  useSource(tab.dataset.source);
+});
 
 async function openSource() {
   const r = await window.pywebview.api.sources();

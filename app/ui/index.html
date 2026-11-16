@@ -10,6 +10,7 @@
 <title>Mirage</title>
 <link rel="stylesheet" href="app.css">
 <link rel="stylesheet" href="midnight.css">
+<link rel="stylesheet" href="locations.css">
 <link rel="stylesheet" href="intro.css">
 <link rel="stylesheet" href="configs.css">
 <script>
@@ -180,6 +181,11 @@
       <!-- Configs: servers bought or given from anywhere (vless://, vmess://,
            trojan://, ss://, hysteria2://, tuic://, subscriptions). A section
            of its own, with nothing to do with the provider accounts. -->
+      <!-- The speed over the top of the screen, on and off in one press. -->
+      <button class="icon speedtoggle" id="speedToggle" type="button" aria-pressed="true"
+              aria-label="Speed on screen" title="Speed on screen">
+        <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg>
+      </button>
       <button class="icon" id="configsOpen" type="button" aria-label="Configs"
               aria-haspopup="dialog" title="Configs">
         <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg>
@@ -237,6 +243,17 @@
       <p class="status__host mono" id="statusHost">&nbsp;</p>
       <p class="status__where" id="statusWhere">&nbsp;</p>
       <p class="clock mono" id="statusClock"></p>
+      <!-- Iran direct: Iranian sites, servers and apps go straight out, the
+           rest through Mirage. The split pane's Iran switch, here under the
+           state because it is the one people reach for, and because the
+           foot below is laid out to the pixel (app.js paintIranDirect). -->
+      <label class="irandirect" id="iranDirectRow" hidden>
+        <button class="toggle toggle--sm" id="iranDirect" type="button" role="switch"
+                aria-checked="true" aria-labelledby="iranDirectName"
+                aria-describedby="iranDirectWhy"><span></span></button>
+        <span class="irandirect__text"><b id="iranDirectName">Iran direct</b>
+          <i id="iranDirectWhy">Iranian sites and apps skip the tunnel</i></span>
+      </label>
       <button class="icon head__more" id="more" type="button" hidden
               aria-label="Connection details" aria-expanded="false">
         <svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg>
@@ -359,6 +376,7 @@
       <span class="go__word" data-for="on">Disconnect</span>
     </button>
 
+
     <div class="progress" id="progress" aria-hidden="true"></div>
   </section>
 
@@ -371,10 +389,11 @@
   </div>
 </main>
 
-<dialog class="sheet" id="picker">
-  <header class="sheet__top">
-    <span class="sheet__heading">
-      <span class="sheet__title">Server</span>
+<dialog class="sheet" id="picker" aria-labelledby="pickTitle">
+  <header class="sheet__top loc__top">
+    <span class="loc__head">
+      <span class="loc__title" id="pickTitle">Locations</span>
+      <span class="loc__totals" id="pickTotals"></span>
     </span>
     <!-- The way back to "no preference", now that the list has no row for it.
          Only there while something is picked. -->
@@ -389,30 +408,17 @@
            autocomplete="off" spellcheck="false" aria-label="Search a country or city">
     <kbd class="find__key" aria-hidden="true">/</kbd>
   </div>
-  <div class="reach" id="reach">
-    <div class="pair pair--sort" id="sortBy" role="tablist">
-      <button class="pair__opt" type="button" data-sort="windscribe" role="tab"
-              aria-selected="true" aria-label="Windscribe’s order" title="Windscribe’s order">
-        <svg class="ico" aria-hidden="true"><use href="#i-globe"/></svg><span>Order</span>
-      </button>
-      <button class="pair__opt" type="button" data-sort="ping" role="tab"
-              aria-selected="false" aria-label="Fastest first" title="Fastest first">
-        <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg><span>Ping</span>
-      </button>
-      <button class="pair__opt" type="button" data-sort="load" role="tab"
-              aria-selected="false" aria-label="Emptiest first" title="Emptiest first">
-        <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg><span>Load</span>
-      </button>
-      <button class="pair__opt" type="button" data-sort="name" role="tab"
-              aria-selected="false" aria-label="By name" title="By name">
-        <svg class="ico" aria-hidden="true"><use href="#i-az"/></svg><span>A–Z</span>
-      </button>
-      <i class="pair__slide" aria-hidden="true"></i>
-    </div>
-    <button class="listhead listhead--pick" id="sourcePick" type="button"
-            aria-haspopup="dialog">
-      <span id="sourceName">All locations</span>
-      <svg class="listhead__chev ico ico--sm" aria-hidden="true"><use href="#i-chev-down"/></svg>
+  <!-- What to show (the pools: all, pinned, starred - the rest behind
+       More), and one button for the order, which steps Windscribe's ->
+       A-Z -> least busy. -->
+  <div class="reach loc__bar" id="reach">
+    <div class="loc__tabs" id="pickTabs" role="tablist" aria-label="What to show"></div>
+    <button class="loc__more" id="sourcePick" type="button" aria-haspopup="dialog"
+            title="Other sets of exits" hidden>
+      <span id="sourceName">&#x22EF;</span>
+    </button>
+    <button class="loc__sort" id="sortBy" type="button" title="Change the order">
+      <svg class="ico" aria-hidden="true"><use href="#i-az"/></svg><span id="sortWord">Order</span>
     </button>
 
     <i class="reach__bar" id="reachBar" aria-hidden="true"></i>
@@ -449,53 +455,113 @@
       <button class="cfgswitch__opt" type="button" role="tab" aria-selected="true"
               tabindex="-1">Configs</button>
     </div>
+    <button class="icon speedtoggle" id="cfgSpeedToggle" type="button" aria-pressed="true"
+            aria-label="Speed on screen" title="Speed on screen">
+      <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg>
+    </button>
     <button class="icon" id="cfgPrefsOpen" type="button" aria-label="Configs settings"
             aria-haspopup="dialog" title="Configs settings">
       <svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>
     </button>
   </header>
 
-  <!-- Its own home: the state, the one picked, and its own Connect. -->
+  <!-- Its own home, laid out as Mirage's: the clock and the state, the
+       speed while connected, the place it goes out at (a country as a whole,
+       or one config), and the one button. -->
   <section class="cfghero" id="cfgHero" data-state="off" aria-label="Configs connection">
     <div class="cfghero__top">
+      <p class="cfghero__clock mono" id="cfgClock">00:00:00</p>
       <p class="cfghero__state" id="cfgState" role="status">Disconnected</p>
-      <p class="cfghero__clock mono" id="cfgClock"></p>
     </div>
-    <div class="cfghero__pick">
-      <span class="cfg__flag cfghero__flag" id="cfgNowFlag" aria-hidden="true"></span>
-      <span class="cfghero__text">
-        <span class="cfghero__name" id="cfgNowName" dir="auto">No config picked</span>
-        <span class="cfghero__sub mono" id="cfgNowSub">Pick one below</span>
+    <!-- Speed and what has moved since connecting: the reading Mirage's own
+         meter and the one over the top of the screen get. -->
+    <div class="cfgflux mono" id="cfgFlux" data-live="0" aria-label="Traffic">
+      <span class="cfgflux__cell" title="Download">
+        <svg class="cfgflux__ar" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1v7M2 5l3 3 3-3"/></svg>
+        <b id="cfgDownRate">0</b><i id="cfgDownRateU">B/s</i>
+      </span>
+      <span class="cfgflux__cell cfgflux__cell--up" title="Upload">
+        <svg class="cfgflux__ar" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 9V2M2 5l3-3 3 3"/></svg>
+        <b id="cfgUpRate">0</b><i id="cfgUpRateU">B/s</i>
+      </span>
+      <span class="cfgflux__rule" aria-hidden="true"></span>
+      <span class="cfgflux__cell cfgflux__cell--sum" title="Downloaded since connecting">
+        <svg class="cfgflux__ar" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1v7M2 5l3 3 3-3"/></svg>
+        <b id="cfgDownSum">0</b><i id="cfgDownSumU">B</i>
+      </span>
+      <span class="cfgflux__cell cfgflux__cell--sum" title="Uploaded since connecting">
+        <svg class="cfgflux__ar" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 9V2M2 5l3-3 3 3"/></svg>
+        <b id="cfgUpSum">0</b><i id="cfgUpSumU">B</i>
       </span>
     </div>
-    <!-- The whole system through the config (the adapter), or only what
-         follows Windows' proxy setting. The same as Settings > Connection,
-         here because it is the one people change. -->
-    <label class="cfghero__tun">
-      <span class="cfghero__tuntext"><b>Whole system (TUN)</b>
-        <i id="cfgTunWhy">Every program, not only the ones that follow the proxy setting</i></span>
-      <button class="toggle" id="cfgTun" type="button" role="switch" aria-checked="false"
-              aria-label="Whole system (TUN)"><span></span></button>
-    </label>
+    <button class="cfgloc" id="cfgLoc" type="button" aria-controls="cfgList">
+      <span class="cfgloc__flag" id="cfgNowFlag" aria-hidden="true"><svg class="ico" aria-hidden="true"><use href="#i-globe"/></svg></span>
+      <span class="cfgloc__text">
+        <span class="cfgloc__name" id="cfgNowName" dir="auto">No config picked</span>
+        <span class="cfgloc__sub mono" id="cfgNowSub">Pick a country below</span>
+      </span>
+      <svg class="ico cfgloc__chev" aria-hidden="true"><use href="#i-chev-down"/></svg>
+    </button>
     <button class="go cfghero__go" id="cfgGo" type="button" data-mode="off" disabled>
       <span class="go__word" data-for="off">Connect</span>
       <span class="go__word" data-for="busy">Cancel</span>
       <span class="go__word" data-for="on">Disconnect</span>
     </button>
+    <!-- The two switches people change: the whole system or only what
+         follows the proxy setting, and staying on the fastest. -->
+    <div class="cfghero__opts">
+      <label class="cfgsw" title="Every program, not only the ones that follow Windows' proxy setting">
+        <button class="toggle" id="cfgTun" type="button" role="switch" aria-checked="false"
+                aria-label="Whole system (TUN)"><span></span></button>
+        <span class="cfgsw__text"><b>Whole system</b><i>TUN</i></span>
+      </label>
+      <label class="cfgsw" title="Moves to the next when one stops answering">
+        <button class="toggle" id="cfgAuto" type="button" role="switch" aria-checked="false"
+                aria-label="Fastest, automatically"><span></span></button>
+        <span class="cfgsw__text"><b>Fastest</b><i>automatically</i></span>
+      </label>
+      <label class="cfgsw" title="Iranian sites, servers and apps go straight out; the rest through the config">
+        <button class="toggle" id="cfgIranDirect" type="button" role="switch" aria-checked="true"
+                aria-label="Iran direct"><span></span></button>
+        <span class="cfgsw__text"><b>Iran direct</b></span>
+      </label>
+    </div>
     <p class="note cfghero__note" id="cfgNote"></p>
   </section>
 
+  <!-- How the list is shown, the test, and the one way to add. -->
   <div class="cfgbar">
-    <button class="btn btn--quiet btn--auto cfgbar__lead" id="cfgPaste" type="button"
-            title="Add the vless:// vmess:// trojan:// ss:// hysteria2:// tuic:// links on the clipboard">
-      <svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg><span>Paste links</span>
+    <div class="cfgview" id="cfgView" role="tablist" aria-label="Show by">
+      <button class="cfgview__opt" type="button" role="tab" data-view="country"
+              aria-selected="true">Countries</button>
+      <button class="cfgview__opt" type="button" role="tab" data-view="group"
+              aria-selected="false">Subscriptions</button>
+    </div>
+    <button class="btn btn--quiet btn--auto cfgbar__test" id="cfgTest" type="button"
+            title="Test all">
+      <svg class="ico" aria-hidden="true"><use href="#i-bolt"/></svg><span id="cfgTestLabel">Test all</span>
     </button>
-    <button class="btn btn--quiet btn--auto" id="cfgSubShow" type="button" aria-expanded="false">
-      <svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg><span>Subscription</span>
-    </button>
-    <button class="btn btn--quiet btn--auto" id="cfgTest" type="button">
-      <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg><span id="cfgTestLabel">Test all</span>
-    </button>
+    <div class="cfgadd">
+      <button class="btn btn--auto cfgbar__lead" id="cfgAddOpen" type="button"
+              aria-haspopup="menu" aria-expanded="false" aria-controls="cfgAddMenu">
+        <svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg><span>Add</span>
+      </button>
+      <div class="cfgadd__menu" id="cfgAddMenu" role="menu" hidden>
+        <button class="cfgadd__item" id="cfgPaste" type="button" role="menuitem"
+                title="Add the vless:// vmess:// trojan:// ss:// hysteria2:// tuic:// links on the clipboard">
+          <svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>
+          <span><b>Paste from clipboard</b><i>Links you copied, one or many</i></span>
+        </button>
+        <button class="cfgadd__item" id="cfgPasteHand" type="button" role="menuitem">
+          <svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg>
+          <span><b>Type or paste links</b><i>Into a box, to check them first</i></span>
+        </button>
+        <button class="cfgadd__item" id="cfgSubShow" type="button" role="menuitem" aria-expanded="false">
+          <svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>
+          <span><b>Subscription link</b><i>The address your seller gave you</i></span>
+        </button>
+      </div>
+    </div>
   </div>
 
   <form class="cfgform" id="cfgSubForm" hidden autocomplete="off">
@@ -534,13 +600,6 @@
 
   <div class="sheet__list cfglist" id="cfgList"></div>
 
-  <footer class="cfgfoot">
-    <label class="cfgfoot__opt">
-      <button class="toggle" id="cfgAuto" type="button" role="switch" aria-checked="false"
-              aria-label="Fastest, automatically"><span></span></button>
-      <span><b>Fastest, automatically</b><i>moves to the next when one stops answering</i></span>
-    </label>
-  </footer>
 </dialog>
 
 <!-- Configs' own settings: screens drawn by configs-prefs.js from the
@@ -939,7 +998,7 @@
         <h3 class="pane__title" id="splitTitle">Split tunnel</h3>
         <span class="pill" id="splitPill" title="What is in force now">off</span>
       </div>
-      <p class="pane__why">Some traffic is better off not going through Mirage
+      <p class="pane__why">Some traffic is better off not going through <span id="splitWho">Mirage</span>
         at all: <b>Iranian sites</b> that refuse a foreign address or are slow
         the long way round, a bank, a program that only needs the line you
         already have. <b>Except these</b> sends everything through Mirage but
@@ -963,7 +1022,7 @@
       <div class="split" id="splitList">
         <div class="split__iran">
           <label class="split__copy" for="splitIran">
-            <span class="split__name" id="splitIranName">Iranian sites</span>
+            <span class="split__name" id="splitIranName">Iran direct</span>
             <span class="split__help" id="splitIranSaid"></span>
           </label>
           <button class="toggle toggle--sm" id="splitIran" type="button"
@@ -1827,6 +1886,25 @@
       </span>
       <button class="toggle" id="winTop" type="button" data-option="onTop"
               role="switch" aria-checked="false"><span></span></button>
+    </section>
+
+    <section class="setrow setrow--speed pane--line">
+      <span class="pane__glyph"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
+      <span class="pane__copy">
+        <h3 class="pane__title">Speed on screen</h3>
+        <p class="pane__why">While connected, the download and upload speed
+          and the totals since connecting sit at the top of the screen.
+          Clicks go through to whatever is under it.</p>
+      </span>
+      <button class="toggle" id="winSpeed" type="button" data-option="speedOverlay"
+              role="switch" aria-checked="true"><span></span></button>
+      <!-- How solid it is: faint enough to read through, or fully solid. -->
+      <label class="speedalpha">
+        <span class="speedalpha__cap">Opacity</span>
+        <input class="speedalpha__in" id="speedAlpha" type="range" min="40" max="100"
+               step="5" value="92" aria-label="Speed on screen opacity">
+        <span class="speedalpha__val mono" id="speedAlphaVal">92%</span>
+      </label>
     </section>
     </div>
 

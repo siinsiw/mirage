@@ -164,6 +164,60 @@ def line_dns():
         return None
 
 
+# Kept in step with split.DNS_PROXIES; tun does not import split.
+DNS_PROXIES = frozenset((
+    '178.22.122.100', '185.51.200.2', '185.51.200.1',
+    '10.202.10.202', '10.202.10.102', '10.202.10.10', '10.202.10.11',
+    '185.55.226.26', '185.55.225.25', '185.55.225.26',
+    '78.157.42.100', '78.157.42.101',
+))
+
+
+def line_answers(resolver, timeout=1.5):
+    """Whether this resolver answers at all, by one plain query. sing-box
+    gives a server that never answers ten seconds per name before it moves
+    on, so a silent line resolver is better not asked."""
+    import random
+    import socket
+    import struct
+    if not resolver:
+        return False
+    qid = random.randrange(1 << 16)
+    name = b''.join(bytes([len(p)]) + p for p in (b'www', b'aparat', b'com'))
+    query = struct.pack('>HHHHHH', qid, 0x0100, 1, 0, 0, 0) + name + b'\0' \
+        + struct.pack('>HH', 1, 1)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
+            s.sendto(query, (str(resolver), 53))
+            data = s.recv(512)
+        return len(data) >= 12 and struct.unpack('>H', data[:2])[0] == qid
+    except OSError:
+        return False
+
+
+def line_dns_checked():
+    """line_dns(), when it answers; None otherwise."""
+    resolver = line_dns()
+    return resolver if resolver and line_answers(resolver) else None
+
+
+def smart_dns(r, line_resolver):
+    """With the Iran switch on: every other name is asked of this line's
+    resolver first, and that answer is kept only when it is an Iranian
+    address - sing-box's address filter: an answer outside `ip_cidr` skips
+    the rule, and the name goes on to the exit's resolver. Kept, it brings
+    the connection to an Iranian address, which the route sends straight.
+    Iran's filtering address (10.10.34.x) is not in the ranges, so a
+    filtered name always falls through to the exit."""
+    if not (r and r.get('smart') and r.get('iranNets') and line_resolver):
+        return []
+    if line_resolver in DNS_PROXIES:
+        return []
+    return [{'ip_cidr': list(r['iranNets']), 'action': 'route',
+             'server': 'dns-line'}]
+
+
 def _split_rules(r, line_resolver):
     """Route and DNS rules for split tunnelling, from split.rules().
 
@@ -190,6 +244,7 @@ def _split_rules(r, line_resolver):
         if r.get('names') and line_resolver:
             dns.append({'domain_suffix': list(r['names']), 'action': 'route',
                         'server': 'dns-line'})
+        dns.extend(smart_dns(r, line_resolver))
     else:
         conds = ([{'process_name': apps}] if apps else []) + ([dest] if dest else [])
         for cond in conds:
@@ -238,7 +293,9 @@ def build_config(port, keep=(), own=(), carriers=(), log_path=None,
         # A name is only known if it is read off the connection: the TLS
         # ClientHello, the HTTP Host, QUIC's Initial. Only when names are
         # listed, because sniffing holds every new connection for a moment.
-        rules.append({'action': 'sniff'})
+        # Only where a name can be read (TLS, HTTP, QUIC on 80/443): a
+        # server that speaks first would otherwise wait out the timeout.
+        rules.append({'port': [80, 443], 'action': 'sniff'})
     rules.append({'port': 53, 'action': 'hijack-dns'})
     if straight:
         rules.append({'process_path_regex': straight,
@@ -466,6 +523,37 @@ $allow  = {allow}
 $config = {config}
 
 Remove-Item -LiteralPath $done -Force -ErrorAction SilentlyContinue
+
+# A sing-box left from an earlier run still holding the adapter: the window
+# that ran it was ended by force (an update, Task Manager), its script went
+# with it, and nothing recorded is left to stop. sing-box would then refuse
+# with "Cannot create a file when that file already exists". Ours are told
+# apart by the configuration file this script names (mirage-sing-box-*), so
+# any other sing-box - the Configs section's own in proxy mode, somebody
+# else's - is left alone. Then a moment for Windows to take the adapter
+# away, which it does after the process is gone, not with it.
+$killedOld = 0
+try {{
+    Get-CimInstance Win32_Process -Filter "Name='sing-box.exe'" -ErrorAction Stop |
+        Where-Object {{ $_.CommandLine -like '*mirage-sing-box-*' }} |
+        ForEach-Object {{
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            $killedOld++
+        }}
+}} catch {{ }}
+if ($killedOld -gt 0) {{
+    # Its log is the one this run writes too, and what it said last is not
+    # why this one fails, if it does.
+    Start-Sleep -Milliseconds 300
+    Remove-Item -LiteralPath (Join-Path (Split-Path -Parent $pidf) 'sing-box.log') -Force -ErrorAction SilentlyContinue
+}}
+if (Get-Command Get-NetAdapter -ErrorAction SilentlyContinue) {{
+    $until = (Get-Date).AddSeconds(8)
+    while ((Get-NetAdapter -Name $nic -IncludeHidden -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $until)) {{
+        Start-Sleep -Milliseconds 250
+    }}
+}}
+
 $cfg = $null
 try {{
     # The configuration goes to a file only SYSTEM and Administrators can
@@ -499,6 +587,23 @@ try {{
     # log.output), which is what the window reads live.
     $outTask = $box.StandardOutput.ReadToEndAsync()
     $errTask = $box.StandardError.ReadToEndAsync()
+    if ($killedOld -gt 0) {{
+        # Just after a leftover was ended, Windows can still be taking its
+        # adapter away and this one stops at once ("already exists"). It is
+        # given one more go here, inside this script, so nobody is asked
+        # for approval twice. Only then: a config that is simply wrong
+        # fails the same way twice and is said once.
+        $t0 = Get-Date
+        while (-not $box.HasExited -and ((Get-Date) - $t0).TotalSeconds -lt 3) {{
+            Start-Sleep -Milliseconds 200
+        }}
+        if ($box.HasExited) {{
+            Start-Sleep -Seconds 3
+            $box = [System.Diagnostics.Process]::Start($psi)
+            $outTask = $box.StandardOutput.ReadToEndAsync()
+            $errTask = $box.StandardError.ReadToEndAsync()
+        }}
+    }}
 }} catch {{
     if ($cfg) {{ Remove-Item -LiteralPath $cfg -Force -ErrorAction SilentlyContinue }}
     Set-Content -LiteralPath $failed -Value "sing-box would not start: $_" -Encoding utf8
@@ -801,7 +906,7 @@ class Tun:
             built = build_config(port, keep, own, carriers,
                                  self._path('sing-box.log'),
                                  split_rules=split_rules,
-                                 line_resolver=line_dns()
+                                 line_resolver=line_dns_checked()
                                  if split_rules else None)
             fingerprint = self.fingerprint(port, own=own, carriers=carriers,
                                            split_rules=split_rules)

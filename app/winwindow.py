@@ -42,6 +42,16 @@ import os
 import sys
 
 GWL_STYLE = -16
+GWL_EXSTYLE = -20
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_LAYERED = 0x00080000
+WS_EX_NOACTIVATE = 0x08000000
+WS_EX_APPWINDOW = 0x00040000
+LWA_ALPHA = 0x2
+SW_HIDE = 0
+SW_SHOWNOACTIVATE = 4
+SWP_SHOWWINDOW = 0x0040
 WS_CAPTION = 0x00C00000
 WS_THICKFRAME = 0x00040000
 WS_SYSMENU = 0x00080000
@@ -154,6 +164,11 @@ if os.name == 'nt':
                                     wintypes.BOOL, wintypes.UINT,
                                     wintypes.UINT, ctypes.c_void_p,
                                     wintypes.UINT)
+    _SetLayeredWindowAttributes = _proto(
+        _user32, 'SetLayeredWindowAttributes', wintypes.BOOL, wintypes.HWND,
+        wintypes.DWORD, ctypes.c_ubyte, wintypes.DWORD)
+    _ShowWindow = _proto(_user32, 'ShowWindow', wintypes.BOOL, wintypes.HWND,
+                         ctypes.c_int)
 
     try:
         if sys.getwindowsversion().build >= MENU_DARK_BUILD:
@@ -446,4 +461,62 @@ def menus(dark):
         _FlushMenuThemes()
     except OSError:
         return False
+    return True
+
+
+def overlay(hwnd, width, height, alpha=236, gap=8):
+    """A window that only shows: the speed readout over the top of the screen.
+
+    Clicks go through it to whatever is under it (WS_EX_TRANSPARENT on a
+    layered window), it never takes the focus or a taskbar button, and it
+    sits centred at the top of the main screen's work area, `gap` pixels
+    down. `width` and `height` are in the 100% pixels pywebview is given.
+    Safe to repeat - it is called on every show, since the screen may have
+    changed resolution or scale since the last.
+    """
+    if not alive(hwnd):
+        return False
+    ex = _GetStyle(hwnd, GWL_EXSTYLE)
+    want = ((ex | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
+             | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW)
+    if want != ex:
+        _SetStyle(hwnd, GWL_EXSTYLE, want)
+    _SetLayeredWindowAttributes(hwnd, 0, max(64, min(255, int(alpha))),
+                                LWA_ALPHA)
+    # No caption, no frame, and - unlike the main window - no system menu or
+    # minimise either: nothing here is meant to be reached.
+    style = _GetStyle(hwnd, GWL_STYLE)
+    bare = style & ~(WS_CAPTION | WS_THICKFRAME | WS_MAXIMIZEBOX
+                     | WS_MINIMIZEBOX | WS_SYSMENU)
+    if bare != style:
+        _SetStyle(hwnd, GWL_STYLE, bare)
+    round_ = wintypes.DWORD(DWMWCP_ROUND)
+    _DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                           ctypes.byref(round_), ctypes.sizeof(round_))
+    work = _primary_work()
+    k = _units()
+    w, h = int(round(width * k)), int(round(height * k))
+    if work is not None:
+        x = work.left + (work.right - work.left - w) // 2
+        y = work.top + int(round(gap * k))
+    else:
+        x, y = 0, 0
+    _SetWindowPos(hwnd, wintypes.HWND(HWND_TOPMOST), x, y, w, h,
+                  SWP_NOACTIVATE | SWP_FRAMECHANGED)
+    return True
+
+
+def set_alpha(hwnd, alpha):
+    """The overlay's opacity, 0-255, changed while it shows."""
+    if not alive(hwnd):
+        return False
+    return bool(_SetLayeredWindowAttributes(
+        hwnd, 0, max(64, min(255, int(alpha))), LWA_ALPHA))
+
+
+def show_quietly(hwnd, show=True):
+    """Shown without taking the focus from whatever has it, or hidden."""
+    if not alive(hwnd):
+        return False
+    _ShowWindow(hwnd, SW_SHOWNOACTIVATE if show else SW_HIDE)
     return True

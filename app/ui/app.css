@@ -2102,14 +2102,17 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   transition: opacity 220ms var(--ease);
 }
 
-#prefSplit[data-off='1'] .split { opacity: 0.45; }
+/* Under Off the user's own list waits, dimmed - but not the Iran switch,
+   which works in Off too (Iran direct). */
+#prefSplit .split > * { transition: opacity 220ms var(--ease); }
+#prefSplit[data-off='1'] .split > :not(.split__iran) { opacity: 0.45; }
 
-#prefSplit[data-off='1'] .split:focus-within { opacity: 0.8; }
+#prefSplit[data-off='1'] .split:focus-within > :not(.split__iran) { opacity: 0.8; }
 
 /* A popover is glass laid over the rows under it, and glass at 80% lets
    them read through. */
 
-#prefSplit[data-off='1'] .split:has(.runpop:not([hidden])) { opacity: 1; }
+#prefSplit[data-off='1'] .split:has(.runpop:not([hidden])) > * { opacity: 1; }
 
 /* The preset: a name, what it holds, and a switch. The whole label is the
    switch's, so the target is the line and not the 32px knob at its end. */
@@ -6887,3 +6890,48 @@ button.gh.is-cursor { background: color-mix(in srgb, var(--surface), var(--text)
 .intro__dots i.is-here { background: var(--text); }
 
 .steps__bar i { background: var(--good); }
+
+/* Speed on screen: its switch, and the opacity under it on a line of its own. */
+.setrow--speed { flex-wrap: wrap; }
+.speedalpha {
+  display: flex; align-items: center; gap: 12px;
+  flex: 1 0 100%; padding-left: 40px;
+}
+.speedalpha__cap { font-size: 12.5px; color: var(--text-2); }
+.speedalpha__in { flex: 1; min-width: 0; accent-color: #e0303f; height: 18px; }
+.speedalpha__val { width: 4ch; text-align: right; font-size: 12px; color: var(--text-2); }
+.setrow--speed:has(.toggle[aria-checked='false']) .speedalpha { opacity: 0.4; }
+
+/* The header's speed button: like its neighbours while the speed shows on
+   screen, faded while it is off. */
+.speedtoggle[aria-pressed='false'] { opacity: 0.4; }
+
+/* Iran direct, under the home's state. Laid over the map rather than in
+   the column: the foot below is fitted to the window's height, and a row
+   added here would push the place card onto Connect in a short window. */
+.irandirect {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  cursor: pointer; z-index: 2;
+}
+.head .irandirect {
+  position: absolute; left: 0; right: 0; top: 100%; margin-top: 6px;
+}
+.irandirect[hidden] { display: none; }
+.irandirect__text { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.irandirect__text b { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.irandirect__text i { font-size: 11.5px; font-style: normal; color: var(--text-3); }
+.irandirect:has(.toggle:disabled) { opacity: 0.45; cursor: default; }
+@media (max-width: 420px) { .irandirect__text i { display: none; } }
+
+
+/* A narrow window: the header's tools close up a little, so minimise and
+   close stay inside it with the speed button there too. */
+@media (max-width: 440px) {
+  .bar__tools { gap: 2px; }
+  .bar__tools > .icon { width: 30px; }
+  .bar__win { gap: 0; margin-left: 0; padding-left: 4px; }
+  .bar__win .icon { width: 30px; }
+}
+@media (max-width: 390px) {
+  .bar__tools > .icon, .bar__win .icon { width: 28px; }
+}

@@ -1,0 +1,162 @@
+/* ===================================================================
+   Locations: the server picker, as the user's drawing has it.
+   The title and its totals on the left, one taller search field, the
+   pools as tabs with counts and one sort button, a caption for the order,
+   Fastest available first, then one card a country: a quiet flag fading
+   to the right, the name, the provider marks and counts under it, the
+   test and a + on the right. Opened, its cities, and a city's servers,
+   inside the card. Mirage's red where the drawing had teal.
+
+   Loaded after midnight.css, scoped to #picker, so the rest of the app is
+   untouched. Motion is transform and opacity only.
+   =================================================================== */
+
+#picker .loc__top { justify-content: flex-start; gap: 8px; }
+.loc__head { display: flex; align-items: baseline; gap: 10px; margin-right: auto; min-width: 0; }
+.loc__title { font-size: 21px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
+.loc__totals { font-size: 12px; color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+#picker .find {
+  height: 46px; border-radius: 12px; background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+#picker .find:focus-within { box-shadow: inset 0 0 0 1.5px var(--accent-mid); }
+#picker .find__lens { color: #e0303f; }
+
+.loc__bar {
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 6px;
+  margin: 10px 16px 0; position: relative;
+  border-bottom: 1px solid var(--stroke);
+}
+.loc__tabs { display: flex; align-items: stretch; gap: 12px; margin-right: auto; min-width: 0; overflow: hidden; }
+.loc__tab {
+  position: relative; display: inline-flex; align-items: center; gap: 7px;
+  height: 38px; padding: 0 1px; font-size: 13.5px; font-weight: 600; color: var(--text-2);
+  white-space: nowrap;
+}
+.loc__tab:hover { color: var(--text); }
+.loc__tab[aria-selected='true'] { color: var(--text); }
+.loc__tab[aria-selected='true']::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+  border-radius: 2px; background: #e0303f;
+}
+.loc__n {
+  min-width: 20px; padding: 1px 6px; border-radius: 999px; text-align: center;
+  font-size: 11px; font-weight: 600; color: var(--text-3); background: rgb(var(--wash) / 0.07);
+  font-variant-numeric: tabular-nums;
+}
+.loc__tab[aria-selected='true'] .loc__n { color: #ff8a95; background: rgba(224, 48, 63, 0.16); }
+.loc__more, .loc__sort {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px;
+  margin-bottom: 4px; border-radius: 9px; font-size: 12.5px; font-weight: 600;
+  color: var(--text); box-shadow: inset 0 0 0 1px var(--stroke); white-space: nowrap;
+}
+.loc__more[hidden] { display: none; }
+.loc__more { color: var(--text-2); padding: 0 9px; font-size: 15px; letter-spacing: 0.04em; }
+.loc__more[data-narrow='1'] { color: #ff8a95; box-shadow: inset 0 0 0 1px rgba(224, 48, 63, 0.5); }
+.loc__sort .ico { width: 14px; height: 14px; color: #e0303f; }
+.loc__more:hover, .loc__sort:hover { background: rgb(var(--wash) / 0.06); }
+
+#picker .reach__line { margin: 6px 16px 0; }
+#picker .reach__said { font-size: 12px; color: #ff8a95; }
+#picker .reach__said:empty { display: none; }
+
+.loc__cap {
+  margin: 12px 4px 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-3);
+}
+
+/* the cards */
+#picker .grp__in { display: grid; gap: 6px; }
+#picker .grp__in > .group, #picker .group {
+  border: 0; border-radius: 14px; overflow: hidden; background: var(--surface);
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.05);
+}
+#picker .group--fast { margin-bottom: 2px; }
+#picker .group.is-open, #picker .group.is-in {
+  box-shadow: inset 0 0 0 1px rgba(224, 48, 63, 0.55);
+}
+#picker .row.is-picked::before,
+#picker .group.is-in:not(.is-open) > .row::before { display: none; }
+
+/* a country: the flag a strip down the left, fading into the card */
+#picker .row:not(.row--city):not(.row--fast) {
+  grid-template-columns: 74px minmax(0, 1fr) auto auto;
+  min-height: 60px; padding: 0 6px 0 0; column-gap: 12px; border-radius: 0;
+}
+#picker .row:not(.row--city):not(.row--fast) .flag {
+  align-self: stretch; width: 74px; height: auto; border-radius: 0;
+  background-image: var(--flag); background-size: cover; background-position: center;
+  box-shadow: none; opacity: 0.9;
+  -webkit-mask-image: linear-gradient(90deg, #000 30%, transparent);
+  mask-image: linear-gradient(90deg, #000 30%, transparent);
+}
+#picker .row .flag::after { display: none; }
+#picker .row__name { font-size: 14.5px; font-weight: 600; }
+#picker .row__meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
+#picker .row__count[data-blocked='1'] { color: var(--fail); }
+#picker .row__count[data-blocked='1']::before, #picker .row__count[data-testing='1']::before {
+  content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px;
+  border-radius: 50%; background: currentColor; vertical-align: 1px;
+}
+#picker .row__count[data-testing='1'] { color: #ff8a95; }
+#picker .row:hover, #picker .row.is-cursor { background: rgb(var(--wash) / 0.035); }
+
+/* the test is always there, as in the drawing */
+#picker .row:not(:hover):not(.is-cursor) .rowtest { display: inline-grid; }
+#picker .rail { background: none; box-shadow: none; gap: 2px; }
+
+/* + that folds into - */
+.expand__h, .expand__v {
+  fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round;
+  transform-box: fill-box; transform-origin: center;
+  transition: transform 200ms ease-out;
+}
+.expand[data-on='true'] .expand__v { transform: scaleY(0); }
+#picker .expand[data-on='true'] { color: #ff8a95; }
+@media (prefers-reduced-motion: reduce) { .expand__h, .expand__v { transition: none; } }
+
+/* Fastest available */
+#picker .group--fast {
+  box-shadow: inset 0 0 0 1px rgba(224, 48, 63, 0.5);
+  background: linear-gradient(100deg, rgba(224, 48, 63, 0.16), rgba(224, 48, 63, 0.03) 60%), var(--surface);
+}
+#picker .row--fast {
+  grid-template-columns: 36px minmax(0, 1fr); min-height: 60px; padding: 0 14px;
+  column-gap: 14px;
+}
+.fast__mark {
+  display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px;
+  color: #ff8a95; background: rgba(224, 48, 63, 0.16);
+}
+.fast__mark .ico { width: 17px; height: 17px; }
+
+/* inside a card: its cities, then a city's servers */
+#picker .group__in {
+  margin: 0; border-left: 0; border-top: 1px solid var(--stroke);
+  padding: 2px 0 6px; background: none;
+}
+#picker .row--city { background: none; border-radius: 0; box-shadow: none; }
+#picker .row--city .mark { display: none; }
+#picker .row--city {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  min-height: 52px; padding: 4px 6px 4px 36px; position: relative;
+}
+#picker .row--city::after {
+  content: ''; position: absolute; left: 18px; top: 50%; width: 6px; height: 6px;
+  margin-top: -3px; border-radius: 50%; background: var(--text-3);
+}
+#picker .row--city .row__ping { font-weight: 600; }
+#picker .exits { display: grid; gap: 4px; padding: 2px 8px 8px 30px; }
+#picker .exit { border-radius: 9px; background: rgb(var(--wash) / 0.04); min-height: 36px; }
+#picker .exit .exit__meta { display: none; }
+#picker .exit[data-state='blocked'] { opacity: 0.55; }
+#picker .exit .star { margin-left: 2px; }
+
+/* #reach sets its own wrap; one line here. */
+#picker #reach.loc__bar { flex-wrap: nowrap; padding: 0; }
+@media (max-width: 400px) {
+  .loc__tabs { gap: 10px; }
+  .loc__tab { font-size: 13px; gap: 6px; }
+  .loc__more, .loc__sort { padding: 0 8px; }
+}

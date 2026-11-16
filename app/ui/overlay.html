@@ -1,0 +1,115 @@
+<!doctype html>
+<!-- The speed over the top of the screen: a window of its own, shown by
+     main.py only while something is connected and Settings > Window >
+     Speed on screen is on. Clicks go through it, and it never takes the
+     focus. Fed once a second by window.onTraffic, the same reading the
+     home's meter gets. Nothing here asks the Python side for anything. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mirage speed</title>
+<style>
+@font-face {
+  font-family: 'Geist Mono Mirage';
+  src: url('fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+}
+:root {
+  --ink: #ececee;
+  --dim: #85858c;
+  --red: #e0303f;
+  --bg: #0b0b0d;
+  --rule: #26262b;
+}
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font: 500 12.5px/1 'Geist Mono Mirage', ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+  flex: none;
+  opacity: 0.45;
+  transition: opacity 0.25s;
+}
+body[data-busy="1"] .dot { opacity: 1; }
+.pair { display: inline-flex; align-items: center; gap: 4px; }
+.pair svg { width: 10px; height: 10px; flex: none; }
+.pair--down svg { color: var(--ink); }
+.pair--up svg { color: var(--red); }
+.rate { min-width: 7.2ch; text-align: right; }
+.rate i { font-style: normal; color: var(--dim); margin-left: 0.35ch; }
+.rule { width: 1px; height: 14px; background: var(--rule); flex: none; }
+.sum { color: var(--dim); display: inline-flex; gap: 8px; }
+.sum b { color: var(--ink); font-weight: 500; }
+.tot { display: inline-flex; align-items: center; gap: 3px; }
+.tot svg { width: 9px; height: 9px; color: var(--dim); }
+</style>
+</head>
+<body data-busy="0">
+  <span class="dot" aria-hidden="true"></span>
+  <span class="pair pair--down" title="Download">
+    <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1v7M2 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span class="rate" id="down">0<i>B/s</i></span>
+  </span>
+  <span class="pair pair--up" title="Upload">
+    <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 9V2M2 5l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span class="rate" id="up">0<i>B/s</i></span>
+  </span>
+  <span class="rule" aria-hidden="true"></span>
+  <span class="sum" title="Since connecting">
+    <span class="tot"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1v7M2 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><b id="downSum">0</b> <span id="downSumU">B</span></span>
+    <span class="tot"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 9V2M2 5l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><b id="upSum">0</b> <span id="upSumU">B</span></span>
+  </span>
+<script>
+(function () {
+  'use strict';
+  var UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+  function split(n) {
+    var v = Math.max(0, n || 0);
+    var u = 0;
+    while (v >= 1024 && u < UNITS.length - 1) { v /= 1024; u += 1; }
+    var d = u === 0 ? 0 : (v >= 100 ? 0 : (v >= 10 ? 1 : 2));
+    return [v.toFixed(d), UNITS[u]];
+  }
+  function rate(id, bps) {
+    var el = document.getElementById(id);
+    var p = split(bps);
+    el.firstChild.nodeValue = p[0];
+    el.lastChild.textContent = p[1] + '/s';
+  }
+  function sum(id, n) {
+    var p = split(n);
+    document.getElementById(id).textContent = p[0];
+    document.getElementById(id + 'U').textContent = p[1];
+  }
+  window.onTraffic = function (t) {
+    if (!t || !t.live) return;
+    rate('down', t.downRate);
+    rate('up', t.upRate);
+    sum('downSum', t.down);
+    sum('upSum', t.up);
+    document.body.dataset.busy = (t.downRate || 0) + (t.upRate || 0) > 512 ? '1' : '0';
+  };
+}());
+</script>
+</body>
+</html>

@@ -38,7 +38,7 @@ import paths
 import split
 import tun as tunmod
 
-from . import links, procs, singbox, store, xray
+from . import links, procs, singbox, store, where, xray
 from . import prefs as _prefs
 
 PREFERRED_PORT = 10808
@@ -134,6 +134,7 @@ class Runner:
         self.box = None
         self.xray = None
         self.group = []
+        self.country = ''   # the country connected as a whole, or ''
         self.auto = False
         self.current = None
         self.info = None
@@ -243,16 +244,24 @@ class Runner:
             return PREFERRED_PORT
         return procs.free_ports(1)[0]
 
-    def connect(self, cid, progress, auto=False):
+    def connect(self, cid, progress, auto=False, country=''):
         """Up through config `cid` (its whole group loaded), or with auto,
-        through whichever of the group answers fastest."""
+        through whichever of the group answers fastest. With `country`, the
+        group is every config filed under that country instead - the
+        country picked as a whole, as Mirage's own list picks one - and the
+        fastest of them carries it."""
         with self.lock:
             self.prefs_changed()
             state = store.load()
             cfg = store.find(cid, state) if cid else None
             if cfg is None:
                 raise RuntimeError('config-missing: that config is not there any more')
-            group = store.group_of(cid, state)
+            country = (country or '').lower()
+            group = (store.in_country(country, state) if country
+                     else store.group_of(cid, state))
+            if country and not any(c['id'] == cid for c in group):
+                raise RuntimeError('config-missing: that config is no longer '
+                                   'filed under that country')
             sb = paths.singbox_exe()
             if not sb:
                 raise RuntimeError('engine-missing: sing-box.exe was not found')
@@ -304,7 +313,8 @@ class Runner:
                     group, port=port, clash_port=clash_port,
                     clash_secret=secret, selected=cid, auto=auto, mode=mode,
                     split_rules=split_rules,
-                    line_resolver=tunmod.line_dns() if split_rules else None,
+                    line_resolver=(tunmod.line_dns_checked() if split_rules
+                                   else None),
                     xray=hops, fragment=fragment, own=[sys.executable],
                     carriers=[xbin, sb], opts=opts)
                 self.clash = procs.Clash(clash_port, secret)
@@ -355,6 +365,7 @@ class Runner:
             self.owns_hold = False
             self.group = group
             self.auto = bool(auto)
+            self.country = country
             self.current = 'auto' if auto else cid
             self.since = time.time()
             self.info = self._info(cfg)
@@ -362,13 +373,19 @@ class Runner:
             self._remember()
             self._start_polling()
             store.set_option('selected', cid)
-            store.set_option('auto', bool(auto))
+            store.set_option('country', country)
+            if not country:
+                store.set_option('auto', bool(auto))
             return self.status()
 
     def _info(self, cfg):
         last = cfg.get('last') or {}
-        return {'ip': cfg['host'], 'host': ('Auto · ' if self.auto else '')
-                + cfg['name'], 'country': last.get('country') or '',
+        if self.country:
+            label = 'Fastest in ' + where.name(self.country)
+        else:
+            label = ('Auto · ' if self.auto else '') + cfg['name']
+        return {'ip': cfg['host'], 'host': label,
+                'country': self.country or last.get('country') or where.of(cfg)[0],
                 'city': '', 'provider': 'configs', 'answered': 0.0,
                 'config': {'id': cfg['id'], 'name': cfg['name'],
                            'label': links.label(cfg)}}
