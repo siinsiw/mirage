@@ -72,6 +72,23 @@ func TestAnswerInIran(t *testing.T) {
 			t.Errorf("%s: answerInIran = %v, want %v", c.what, got, c.want)
 		}
 	}
+
+	// A listed name asked of the line is thrown back to the exit only when
+	// every IPv4 address in the answer is a reserved one.
+	for _, c := range []struct {
+		what   string
+		answer []byte
+		want   bool
+	}{
+		{"the filtering sinkhole", answerWith(sinkhole, sinkhole), true},
+		{"the sinkhole beside a real address", answerWith(sinkhole, iranian), false},
+		{"a real answer", exampleAnswer(), false},
+		{"no addresses", nil, false},
+	} {
+		if got := answerForged(c.answer); got != c.want {
+			t.Errorf("%s: answerForged = %v, want %v", c.what, got, c.want)
+		}
+	}
 }
 
 func TestLearnsNamesFromAnswers(t *testing.T) {

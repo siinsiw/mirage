@@ -179,7 +179,9 @@ func (h *handler) askDNSFor(query []byte) ([]byte, error) {
 		return h.askDNS(query)
 	}
 	if s.DirectDNS(questionName(query)) {
-		if answer, err := askStraight(resolver, query); err == nil && len(answer) > 0 {
+		// A forged answer is not kept: a filtered .ir site comes back from
+		// the line as 10.10.34.x, and from the exit as where it really is.
+		if answer, err := askStraight(resolver, query); err == nil && len(answer) > 0 && !answerForged(answer) {
 			return answer, nil
 		}
 		return h.askDNS(query)

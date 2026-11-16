@@ -132,7 +132,7 @@ const val IRAN_DIRECT = "Iran direct"
 fun iranDirectSaid(s: SplitPlan, pending: Boolean, short: Boolean): String {
     val what = when {
         s.mode == SplitMode.ONLY -> "Not used while Split tunnel is on Only these."
-        short && s.iran -> "Iranian sites and apps skip the tunnel."
+        short && s.iran -> "Iranian sites and apps skip the tunnel. Your network's DNS sees the names."
         short -> "Iranian sites go through Mirage too."
         s.iran -> "Iranian sites, servers and apps go straight out over your own connection. " +
             "Your network's DNS is asked which names are Iranian, so your provider sees them."

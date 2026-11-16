@@ -143,6 +143,25 @@ func answerAddrs(msg []byte) (string, []netip.Addr) {
 	return name, addrs
 }
 
+// answerForged is whether a DNS answer has IPv4 addresses and none of them is
+// public - what Iran's filtering answers for a name it blocks (10.10.34.x).
+// An answer with no IPv4 address at all (AAAA, a name that does not exist)
+// is not forged by this test, and is kept as it is.
+func answerForged(msg []byte) bool {
+	_, addrs := answerAddrs(msg)
+	seen := false
+	for _, ip := range addrs {
+		if !ip.Is4() {
+			continue
+		}
+		if IsPublic(ip) {
+			return false
+		}
+		seen = true
+	}
+	return seen
+}
+
 // answerInIran is whether a DNS answer puts its name on an Iranian public
 // IPv4 address - the test the line's own answer has to pass to be kept
 // (askDNSFor). Iran's filtering answers with 10.10.34.x, which is private
