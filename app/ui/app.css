@@ -6923,3 +6923,15 @@ button.gh.is-cursor { background: color-mix(in srgb, var(--surface), var(--text)
 .irandirect:has(.toggle:disabled) { opacity: 0.45; cursor: default; }
 @media (max-width: 420px) { .irandirect__text i { display: none; } }
 
+
+/* A narrow window: the header's tools close up a little, so minimise and
+   close stay inside it with the speed button there too. */
+@media (max-width: 440px) {
+  .bar__tools { gap: 2px; }
+  .bar__tools > .icon { width: 30px; }
+  .bar__win { gap: 0; margin-left: 0; padding-left: 4px; }
+  .bar__win .icon { width: 30px; }
+}
+@media (max-width: 390px) {
+  .bar__tools > .icon, .bar__win .icon { width: 28px; }
+}
