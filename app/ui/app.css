@@ -2104,6 +2104,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 /* Under Off the user's own list waits, dimmed - but not the Iran switch,
    which works in Off too (Iran direct). */
+#prefSplit .split > * { transition: opacity 220ms var(--ease); }
 #prefSplit[data-off='1'] .split > :not(.split__iran) { opacity: 0.45; }
 
 #prefSplit[data-off='1'] .split:focus-within > :not(.split__iran) { opacity: 0.8; }

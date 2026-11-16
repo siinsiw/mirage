@@ -313,7 +313,8 @@ class Runner:
                     group, port=port, clash_port=clash_port,
                     clash_secret=secret, selected=cid, auto=auto, mode=mode,
                     split_rules=split_rules,
-                    line_resolver=tunmod.line_dns() if split_rules else None,
+                    line_resolver=(tunmod.line_dns_checked() if split_rules
+                                   else None),
                     xray=hops, fragment=fragment, own=[sys.executable],
                     carriers=[xbin, sb], opts=opts)
                 self.clash = procs.Clash(clash_port, secret)

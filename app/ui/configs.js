@@ -940,10 +940,10 @@
       if (!now.ok) { say(now.error, true); return; }
       const r = await call('setSplit', { ...now.split, iran: on });
       if (!r.ok) { say(r.error, true); return; }
-      say(r.applied === 'reconnect'
-        ? (on ? 'Iran direct is on - connecting again with it…' : 'Iran direct is off - connecting again…')
-        : (on ? 'Iran direct is on: Iranian sites and apps go straight out.'
-          : 'Iran direct is off: everything goes through the config.'));
+      const what = on ? 'Iran direct is on' : 'Iran direct is off';
+      say(r.applied === 'reconnect' ? `${what} - connecting again with it…`
+        : r.applied === 'now' ? `${what}.`
+          : `${what} from the next time a config connects.`);
     } finally {
       b.dataset.busy = '';
       refresh();

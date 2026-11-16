@@ -141,7 +141,7 @@ def test_adapter_bypass():
     c = tun.build_config(9090, ['5.5.5.5'], ['C:/x/python.exe'], ['C:/x/gost.exe'],
                          split_rules=r, line_resolver='192.168.1.1')
     rules = c['route']['rules']
-    assert rules[0] == {'action': 'sniff'}, 'names need sniffing, first'
+    assert rules[0] == {'port': [80, 443], 'action': 'sniff'}, 'names need sniffing, first'
     assert rules[1]['action'] == 'hijack-dns'
     apps = rule_with(rules, 'process_name')[0]
     assert apps['process_name'] == ['telegram.exe'] and apps['outbound'] == 'direct'

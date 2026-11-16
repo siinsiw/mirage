@@ -4578,7 +4578,7 @@ const splitPane = (() => {
       ? 'Iranian domains and Iranian address ranges'
       : (l.domains || l.ranges)
         ? `${n(l.domains)} domains and ${n(l.ranges)} address ranges, plus any site your line's own DNS places in Iran (so your provider sees the names of sites you open)`
-        : "The lists are missing from this copy, so only your line's DNS can tell";
+        : 'The lists are missing from this copy, so Iran direct has nothing to go by';
   }
 
   /* Programs are only told apart by the tunnel. Through the proxy setting
@@ -5099,7 +5099,15 @@ const splitPane = (() => {
     paint();
   }
 
-  return { take, paint, note, hide, mount };
+  /* The home's Iran switch moved what is in force: an unapplied draft
+     here follows it, so a later Apply does not quietly put it back. */
+  function syncIran(on) {
+    if (side !== 'main' || !draft) return;
+    draft.iran = !!on;
+    paint();
+  }
+
+  return { take, paint, note, hide, mount, syncIran };
 })();
 
 /* Iran direct on the home: the split pane's Iran switch, as Mirage's own
@@ -5112,11 +5120,16 @@ function paintIranDirect() {
   const s = state.split;
   if (!row || !s) { if (row) row.hidden = true; return; }
   row.hidden = false;
-  const only = s.mode === 'only';
+  // No lists in this copy: nothing to tell Iran by, so the switch is off.
+  const lists = state.splitLists;
+  const none = !!lists && !lists.ranges;
+  const only = s.mode === 'only' || none;
   const b = $('iranDirect');
   b.setAttribute('aria-checked', String(!!s.iran && !only));
   b.disabled = only || row.dataset.busy === '1';
-  row.title = only
+  row.title = none
+    ? 'The Iran lists are missing from this copy.'
+    : only
     ? 'Split tunnelling is on "Only these": only what is listed goes through Mirage.'
     : 'Iranian sites, servers and apps go straight out; everything else through Mirage. '
       + "Names are also asked of your line's DNS, which sees them.";
@@ -5132,7 +5145,10 @@ $('iranDirect').addEventListener('click', async () => {
   let r = null;
   try { r = await window.pywebview.api.setSplit(want); } catch (e) { r = null; }
   row.dataset.busy = '';
-  if (r && r.split) splitPane.take({ split: r.split });
+  if (r && r.split) {
+    splitPane.take({ split: r.split });
+    if (r.ok !== false) splitPane.syncIran(r.split.iran);
+  }
   if (!r || r.ok === false) setHint((r && r.error) || 'Iran direct could not be changed.');
   paintIranDirect();
 });

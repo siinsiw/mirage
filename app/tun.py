@@ -164,6 +164,44 @@ def line_dns():
         return None
 
 
+# Kept in step with split.DNS_PROXIES; tun does not import split.
+DNS_PROXIES = frozenset((
+    '178.22.122.100', '185.51.200.2', '185.51.200.1',
+    '10.202.10.202', '10.202.10.102', '10.202.10.10', '10.202.10.11',
+    '185.55.226.26', '185.55.225.25', '185.55.225.26',
+    '78.157.42.100', '78.157.42.101',
+))
+
+
+def line_answers(resolver, timeout=1.5):
+    """Whether this resolver answers at all, by one plain query. sing-box
+    gives a server that never answers ten seconds per name before it moves
+    on, so a silent line resolver is better not asked."""
+    import random
+    import socket
+    import struct
+    if not resolver:
+        return False
+    qid = random.randrange(1 << 16)
+    name = b''.join(bytes([len(p)]) + p for p in (b'www', b'aparat', b'com'))
+    query = struct.pack('>HHHHHH', qid, 0x0100, 1, 0, 0, 0) + name + b'\0' \
+        + struct.pack('>HH', 1, 1)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
+            s.sendto(query, (str(resolver), 53))
+            data = s.recv(512)
+        return len(data) >= 12 and struct.unpack('>H', data[:2])[0] == qid
+    except OSError:
+        return False
+
+
+def line_dns_checked():
+    """line_dns(), when it answers; None otherwise."""
+    resolver = line_dns()
+    return resolver if resolver and line_answers(resolver) else None
+
+
 def smart_dns(r, line_resolver):
     """With the Iran switch on: every other name is asked of this line's
     resolver first, and that answer is kept only when it is an Iranian
@@ -173,6 +211,8 @@ def smart_dns(r, line_resolver):
     Iran's filtering address (10.10.34.x) is not in the ranges, so a
     filtered name always falls through to the exit."""
     if not (r and r.get('smart') and r.get('iranNets') and line_resolver):
+        return []
+    if line_resolver in DNS_PROXIES:
         return []
     return [{'ip_cidr': list(r['iranNets']), 'action': 'route',
              'server': 'dns-line'}]
@@ -253,7 +293,9 @@ def build_config(port, keep=(), own=(), carriers=(), log_path=None,
         # A name is only known if it is read off the connection: the TLS
         # ClientHello, the HTTP Host, QUIC's Initial. Only when names are
         # listed, because sniffing holds every new connection for a moment.
-        rules.append({'action': 'sniff'})
+        # Only where a name can be read (TLS, HTTP, QUIC on 80/443): a
+        # server that speaks first would otherwise wait out the timeout.
+        rules.append({'port': [80, 443], 'action': 'sniff'})
     rules.append({'port': 53, 'action': 'hijack-dns'})
     if straight:
         rules.append({'process_path_regex': straight,
@@ -837,7 +879,7 @@ class Tun:
             built = build_config(port, keep, own, carriers,
                                  self._path('sing-box.log'),
                                  split_rules=split_rules,
-                                 line_resolver=line_dns()
+                                 line_resolver=line_dns_checked()
                                  if split_rules else None)
             fingerprint = self.fingerprint(port, own=own, carriers=carriers,
                                            split_rules=split_rules)

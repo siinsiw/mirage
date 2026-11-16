@@ -301,7 +301,10 @@ def build(configs, *, port, clash_port, clash_secret, selected=None,
 
     rules = []
     if split_rules and split_rules.get('names'):
-        rules.append({'action': 'sniff'})
+        # Only where a name can be read: a TLS hello, an HTTP Host, QUIC.
+        # Elsewhere - SSH, mail, a database, a server that speaks first -
+        # sniffing would only hold every connection for its timeout.
+        rules.append({'port': [80, 443], 'action': 'sniff'})
     if tun:
         rules.append({'port': 53, 'action': 'hijack-dns'})
         straight = [_path_rx(p) for p in list(own or ()) + list(carriers or ())
@@ -309,13 +312,11 @@ def build(configs, *, port, clash_port, clash_secret, selected=None,
         if straight:
             rules.append({'process_path_regex': straight, 'action': 'route',
                           'outbound': DIRECT})
-    if not tun and any('ip_cidr' in d for d in split_dns):
-        # Through the proxy port a connection arrives as a name, which no
-        # address rule can judge. With the Iran switch on it is resolved
-        # first - by the DNS rules, so the line's own answer is the one kept
-        # when it is Iranian - and routed by the address it comes to. Over
-        # the adapter the program has already looked the name up itself.
-        rules.append({'action': 'resolve'})
+    # Through the proxy port a connection arrives as a name, and only the
+    # lists judge it: resolving every name first so the line's answer could
+    # decide would hand the config addresses instead of names for all of it,
+    # and make every connection wait on the DoH through the config. Over the
+    # adapter the program looks the name up itself, through the rules above.
     rules.append({'ip_is_private': True, 'action': 'route',
                   'outbound': DIRECT})
     rules.extend(split_route)

@@ -1692,7 +1692,8 @@ class Engine:
         """
         if adapter is None:
             adapter = self.set_system_proxy and self.route_with == 'tun'
-        split.write_worker_file(None if adapter else self.split)
+        split.write_worker_file(None if adapter else self.split,
+                                resolver=None if adapter else tun.line_dns())
 
     def release(self):
         """Take Windows off the worker, whichever way it was put on - and
