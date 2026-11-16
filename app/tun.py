@@ -532,11 +532,21 @@ Remove-Item -LiteralPath $done -Force -ErrorAction SilentlyContinue
 # any other sing-box - the Configs section's own in proxy mode, somebody
 # else's - is left alone. Then a moment for Windows to take the adapter
 # away, which it does after the process is gone, not with it.
+$killedOld = 0
 try {{
     Get-CimInstance Win32_Process -Filter "Name='sing-box.exe'" -ErrorAction Stop |
         Where-Object {{ $_.CommandLine -like '*mirage-sing-box-*' }} |
-        ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+        ForEach-Object {{
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            $killedOld++
+        }}
 }} catch {{ }}
+if ($killedOld -gt 0) {{
+    # Its log is the one this run writes too, and what it said last is not
+    # why this one fails, if it does.
+    Start-Sleep -Milliseconds 300
+    Remove-Item -LiteralPath (Join-Path (Split-Path -Parent $pidf) 'sing-box.log') -Force -ErrorAction SilentlyContinue
+}}
 if (Get-Command Get-NetAdapter -ErrorAction SilentlyContinue) {{
     $until = (Get-Date).AddSeconds(8)
     while ((Get-NetAdapter -Name $nic -IncludeHidden -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $until)) {{
@@ -577,6 +587,23 @@ try {{
     # log.output), which is what the window reads live.
     $outTask = $box.StandardOutput.ReadToEndAsync()
     $errTask = $box.StandardError.ReadToEndAsync()
+    if ($killedOld -gt 0) {{
+        # Just after a leftover was ended, Windows can still be taking its
+        # adapter away and this one stops at once ("already exists"). It is
+        # given one more go here, inside this script, so nobody is asked
+        # for approval twice. Only then: a config that is simply wrong
+        # fails the same way twice and is said once.
+        $t0 = Get-Date
+        while (-not $box.HasExited -and ((Get-Date) - $t0).TotalSeconds -lt 3) {{
+            Start-Sleep -Milliseconds 200
+        }}
+        if ($box.HasExited) {{
+            Start-Sleep -Seconds 3
+            $box = [System.Diagnostics.Process]::Start($psi)
+            $outTask = $box.StandardOutput.ReadToEndAsync()
+            $errTask = $box.StandardError.ReadToEndAsync()
+        }}
+    }}
 }} catch {{
     if ($cfg) {{ Remove-Item -LiteralPath $cfg -Force -ErrorAction SilentlyContinue }}
     Set-Content -LiteralPath $failed -Value "sing-box would not start: $_" -Encoding utf8

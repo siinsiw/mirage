@@ -6906,10 +6906,15 @@ button.gh.is-cursor { background: color-mix(in srgb, var(--surface), var(--text)
    screen, faded while it is off. */
 .speedtoggle[aria-pressed='false'] { opacity: 0.4; }
 
-/* Iran direct, under the home's Connect: small, beside the button's weight. */
+/* Iran direct, under the home's state. Laid over the map rather than in
+   the column: the foot below is fitted to the window's height, and a row
+   added here would push the place card onto Connect in a short window. */
 .irandirect {
   display: flex; align-items: center; justify-content: center; gap: 10px;
-  margin-top: 10px; cursor: pointer;
+  cursor: pointer; z-index: 2;
+}
+.head .irandirect {
+  position: absolute; left: 0; right: 0; top: 100%; margin-top: 6px;
 }
 .irandirect[hidden] { display: none; }
 .irandirect__text { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }

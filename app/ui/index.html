@@ -242,6 +242,17 @@
       <p class="status__host mono" id="statusHost">&nbsp;</p>
       <p class="status__where" id="statusWhere">&nbsp;</p>
       <p class="clock mono" id="statusClock"></p>
+      <!-- Iran direct: Iranian sites, servers and apps go straight out, the
+           rest through Mirage. The split pane's Iran switch, here under the
+           state because it is the one people reach for, and because the
+           foot below is laid out to the pixel (app.js paintIranDirect). -->
+      <label class="irandirect" id="iranDirectRow" hidden>
+        <button class="toggle toggle--sm" id="iranDirect" type="button" role="switch"
+                aria-checked="true" aria-labelledby="iranDirectName"
+                aria-describedby="iranDirectWhy"><span></span></button>
+        <span class="irandirect__text"><b id="iranDirectName">Iran direct</b>
+          <i id="iranDirectWhy">Iranian sites and apps skip the tunnel</i></span>
+      </label>
       <button class="icon head__more" id="more" type="button" hidden
               aria-label="Connection details" aria-expanded="false">
         <svg class="ico" aria-hidden="true"><use href="#i-chev-down"/></svg>
@@ -364,16 +375,6 @@
       <span class="go__word" data-for="on">Disconnect</span>
     </button>
 
-    <!-- Iran direct: Iranian sites, servers and apps go straight out, the
-         rest through Mirage. The split pane's Iran switch, here because it
-         is the one people reach for (app.js paintIranDirect). -->
-    <label class="irandirect" id="iranDirectRow" hidden>
-      <button class="toggle toggle--sm" id="iranDirect" type="button" role="switch"
-              aria-checked="true" aria-labelledby="iranDirectName"
-              aria-describedby="iranDirectWhy"><span></span></button>
-      <span class="irandirect__text"><b id="iranDirectName">Iran direct</b>
-        <i id="iranDirectWhy">Iranian sites and apps skip the tunnel</i></span>
-    </label>
 
     <div class="progress" id="progress" aria-hidden="true"></div>
   </section>
