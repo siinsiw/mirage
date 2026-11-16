@@ -10,6 +10,7 @@
 <title>Mirage</title>
 <link rel="stylesheet" href="app.css">
 <link rel="stylesheet" href="midnight.css">
+<link rel="stylesheet" href="locations.css">
 <link rel="stylesheet" href="intro.css">
 <link rel="stylesheet" href="configs.css">
 <script>
@@ -388,10 +389,11 @@
   </div>
 </main>
 
-<dialog class="sheet" id="picker">
-  <header class="sheet__top">
-    <span class="sheet__heading">
-      <span class="sheet__title">Server</span>
+<dialog class="sheet" id="picker" aria-labelledby="pickTitle">
+  <header class="sheet__top loc__top">
+    <span class="loc__head">
+      <span class="loc__title" id="pickTitle">Locations</span>
+      <span class="loc__totals" id="pickTotals"></span>
     </span>
     <!-- The way back to "no preference", now that the list has no row for it.
          Only there while something is picked. -->
@@ -406,30 +408,17 @@
            autocomplete="off" spellcheck="false" aria-label="Search a country or city">
     <kbd class="find__key" aria-hidden="true">/</kbd>
   </div>
-  <div class="reach" id="reach">
-    <div class="pair pair--sort" id="sortBy" role="tablist">
-      <button class="pair__opt" type="button" data-sort="windscribe" role="tab"
-              aria-selected="true" aria-label="Windscribe’s order" title="Windscribe’s order">
-        <svg class="ico" aria-hidden="true"><use href="#i-globe"/></svg><span>Order</span>
-      </button>
-      <button class="pair__opt" type="button" data-sort="ping" role="tab"
-              aria-selected="false" aria-label="Fastest first" title="Fastest first">
-        <svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg><span>Ping</span>
-      </button>
-      <button class="pair__opt" type="button" data-sort="load" role="tab"
-              aria-selected="false" aria-label="Emptiest first" title="Emptiest first">
-        <svg class="ico" aria-hidden="true"><use href="#i-layers"/></svg><span>Load</span>
-      </button>
-      <button class="pair__opt" type="button" data-sort="name" role="tab"
-              aria-selected="false" aria-label="By name" title="By name">
-        <svg class="ico" aria-hidden="true"><use href="#i-az"/></svg><span>A–Z</span>
-      </button>
-      <i class="pair__slide" aria-hidden="true"></i>
-    </div>
-    <button class="listhead listhead--pick" id="sourcePick" type="button"
-            aria-haspopup="dialog">
-      <span id="sourceName">All locations</span>
-      <svg class="listhead__chev ico ico--sm" aria-hidden="true"><use href="#i-chev-down"/></svg>
+  <!-- What to show (the pools: all, pinned, starred - the rest behind
+       More), and one button for the order, which steps Windscribe's ->
+       A-Z -> least busy. -->
+  <div class="reach loc__bar" id="reach">
+    <div class="loc__tabs" id="pickTabs" role="tablist" aria-label="What to show"></div>
+    <button class="loc__more" id="sourcePick" type="button" aria-haspopup="dialog"
+            title="Other sets of exits" hidden>
+      <span id="sourceName">&#x22EF;</span>
+    </button>
+    <button class="loc__sort" id="sortBy" type="button" title="Change the order">
+      <svg class="ico" aria-hidden="true"><use href="#i-az"/></svg><span id="sortWord">Order</span>
     </button>
 
     <i class="reach__bar" id="reachBar" aria-hidden="true"></i>

@@ -464,12 +464,13 @@ function drawList(query) {
   const wasAt = list.scrollTop;
   list.replaceChildren();
 
-  const total = document.createElement('p');
-  total.className = 'listtotal';
-  const tally = document.createElement('b');
+  const tally = document.createElement('b');     // kept for whoever reads it
   tally.id = 'listCount';
-  total.append(tally, ' locations');
-  list.append(total);
+  const all = state.countries || [];
+  const servers = all.reduce((n, c) => n + (c.count || 0), 0);
+  $('pickTotals').textContent = all.length
+    ? `${all.length} countr${all.length === 1 ? 'y' : 'ies'} · ${servers} server${servers === 1 ? '' : 's'}`
+    : '';
 
   const found = sortCountries(
     q ? state.fuse.search(q).map((r) => r.item) : state.countries);
@@ -494,27 +495,21 @@ function drawList(query) {
      on the row somebody presses, so there is no "fastest now" to show.
      A search is one list of results. Every section is open; an empty one is
      not drawn. */
+  /* One list, under a caption that says the order in force: starred places
+     first, the ones whose every exit turned the last test away last (sorted
+     there by sortCountries), and before them all, Fastest available. A
+     search is one list of matches. */
   const groups = [];
   const deadHere = (c) => !!(c.tested && !c.ok && c.tested >= c.count);
   if (q) {
     groups.push(['Results', found, found.length === 1 ? '1 match' : `${found.length} matches`]);
   } else {
-    const starred = found.filter(starredIn);
-    if (starred.length) groups.push(['Starred', starred, 'Your short list']);
-    const others = found.filter((c) => !starredIn(c));
-    const rest = others.filter((c) => !deadHere(c));
-    const said = ({
-      windscribe: 'In Windscribe’s order', ping: 'Quickest first',
-      load: 'Least busy first', name: 'A to Z',
-    })[state.sortBy || 'windscribe'] || '';
-    if (rest.length) groups.push([starred.length ? 'All locations' : 'Locations', rest, said]);
-    const dead = others.filter(deadHere).sort((a, b) => a.name.localeCompare(b.name));
-    if (dead.length) groups.push(['Not answering', dead, 'Their exits turned the last test away']);
-    // Nothing left that answers: the list itself offers the way out.
-    if (!starred.length && !rest.length && dead.length) {
+    groups.push(['Locations', found, SORT_SAID[state.sortBy || 'windscribe'] || '']);
+    if (found.every(deadHere)) {
       list.append(setupAgainNote('None of these answered the last test. '
         + 'Setting the servers up again fetches fresh ones.'));
     }
+    list.append(fastestCard());
   }
 
   // Fastest first is only honest about the countries that were timed; within
@@ -528,23 +523,11 @@ function drawList(query) {
     sec.className = 'grp';
     sec.dataset.group = name;
     // A heading, not a control: the title, how many, and why these are together.
+    // A caption, not a heading: the order the list is in, or how many
+    // matched.
     const head = document.createElement('p');
-    head.className = 'gh';
-    head.setAttribute('role', 'heading');
-    head.setAttribute('aria-level', '3');
-    const hn = document.createElement('span');
-    hn.className = 'gh__name';
-    hn.textContent = name;
-    const hc = document.createElement('span');
-    hc.className = 'gh__n';
-    hc.textContent = String(items.length);
-    head.append(hn, hc);
-    if (note) {
-      const hw = document.createElement('span');
-      hw.className = 'gh__note';
-      hw.textContent = note;
-      head.append(hw);
-    }
+    head.className = 'loc__cap';
+    head.textContent = note || name;
     const body = document.createElement('div');
     body.className = 'grp__in';
     sec.append(head, body);
@@ -610,6 +593,33 @@ function drawList(query) {
     if (at < rest.length) later(more);
   };
   later(more);
+}
+
+/* Fastest available, first: no place chosen, the fastest that answers
+   (what "Any country" was). A row like the others, so the arrow keys and
+   Enter reach it and a click picks it. */
+function fastestCard() {
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'row row--fast' + (!state.picked || state.picked === 'auto' ? ' is-picked' : '');
+  row.dataset.code = 'auto';
+  const mark = document.createElement('span');
+  mark.className = 'fast__mark';
+  mark.append(icon('#i-bolt', 'ico'));
+  const copy = document.createElement('span');
+  copy.className = 'row__copy';
+  const name = document.createElement('span');
+  name.className = 'row__name';
+  name.textContent = 'Fastest available';
+  const meta = document.createElement('span');
+  meta.className = 'row__meta';
+  meta.textContent = 'races every location, takes the first to answer';
+  copy.append(name, meta);
+  row.append(mark, copy);
+  const box = document.createElement('div');
+  box.className = 'group group--fast';
+  box.append(row);
+  return box;
 }
 
 /* A country: its row, and when it is open its cities underneath, in place.
@@ -679,19 +689,17 @@ function buildCountry(c) {
     badges.append(providerTag(k, by[k], (c.byTested || {})[k] || 0,
                               (c.byOk || {})[k] || 0, (c.byPing || {})[k]));
   }
-  for (const [has, word, why, kind] of [
-    [cities.some((x) => x.gbps === 10), '10G', '10 Gbps link', 'fast'],
-    [cities.some((x) => x.p2p), 'P2P', 'P2P allowed', 'p2p'],
-  ]) {
-    if (!has) continue;
-    const m = document.createElement('span');
-    m.className = 'mark';
-    m.dataset.kind = kind;
-    m.textContent = word;
-    m.title = why;
-    badges.append(m);
+  // The provider marks lead the line, then what is there - or, where every
+  // exit asked turned away, that it is blocked here.
+  const blockedHere = c.tested && !c.ok && c.tested >= c.count;
+  if (blockedHere) {
+    count.textContent = 'Blocked here';
+    count.dataset.blocked = '1';
+  } else if (state.testing === c.code) {
+    count.textContent = 'testing…';
+    count.dataset.testing = '1';
   }
-  if (badges.childNodes.length) meta.append(badges);
+  meta.replaceChildren(...badges.childNodes, count);
   copy.append(name, meta);
 
   // The time, in mono at the trailing edge - and "Blocked" only where every
@@ -701,22 +709,10 @@ function buildCountry(c) {
   marks.className = 'row__marks';
   const ping = document.createElement('span');
   ping.className = 'row__ping';
-  if (c.tested && !c.ok && c.tested >= c.count) {
-    ping.textContent = 'Blocked';
-    ping.dataset.blocked = '1';
-  } else if (c.tested && c.ok && c.ping !== null && c.ping !== undefined) {
+  if (c.tested && c.ok && c.ping !== null && c.ping !== undefined) {
     ping.textContent = msSaid(c.ping);
   }
   marks.append(ping);
-  // The reference's small pill at the row's end: the same choice the row
-  // makes, said out loud. The picked row carries the accent instead.
-  const go = document.createElement('span');
-  go.className = 'row__go';
-  go.setAttribute('aria-hidden', 'true');
-  const picked = state.picked === c.code;
-  go.textContent = picked ? (state.mode === 'on' ? 'Connected' : 'Selected') : 'Connect';
-  if (picked) go.dataset.on = '1';
-  marks.append(go);
   row.append(copy, marks);
 
   // A country with cities opens into them; one without opens straight into
@@ -724,9 +720,11 @@ function buildCountry(c) {
   // chevron in the same place.
   const many = cities.length > 1;
   const opens = many || c.count > 1;
+  // Stars live on cities and servers; the country's own rail is the test
+  // and the + that opens it.
   row.append(railFor(c.code, opens ? (many ? 'expand' : 'exits') : null,
                      many ? state.openCities.has(c.code)
-                          : state.openExits === c.code));
+                          : state.openExits === c.code, { star: false }));
   return row;
 }
 
@@ -7908,7 +7906,8 @@ async function toggleExits(code, after) {
 
     // Its own bolt: one server is the smallest thing worth asking about,
     // and with no test-all left, the only way to time just this one.
-    row.append(sign, name, meta, said_, testMark(`file:${x.file}`));
+    row.append(sign, name, meta, said_, testMark(`file:${x.file}`),
+               starFor(`file:${x.file}`));
     box.append(row);
   }
   after.insertAdjacentElement('afterend', box);
@@ -8100,11 +8099,14 @@ function expander(kind, code, on) {
   svg.setAttribute('class', 'ico expand__ico');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('aria-hidden', 'true');
-  // A chevron that turns over when the row is open, as on the phone.
-  const path = document.createElementNS(NS, 'path');
-  path.setAttribute('class', 'expand__chev');
-  path.setAttribute('d', 'M6 9l6 6 6-6');
-  svg.append(path);
+  // A plus whose upright folds away when the row is open: + opens, - closes.
+  const across = document.createElementNS(NS, 'path');
+  across.setAttribute('class', 'expand__h');
+  across.setAttribute('d', 'M6 12h12');
+  const upright = document.createElementNS(NS, 'path');
+  upright.setAttribute('class', 'expand__v');
+  upright.setAttribute('d', 'M12 6v12');
+  svg.append(across, upright);
   el.append(svg);
   return el;
 }
@@ -8118,11 +8120,12 @@ function expander(kind, code, on) {
    mouse. The track groups them, the provider mark stays outside it because
    it says who rather than offering to do anything, and each control gets a
    real target with its own colour under it. */
-function railFor(code, kind, on) {
+function railFor(code, kind, on, opts = {}) {
   const rail = document.createElement('span');
   rail.className = 'rail';
-  rail.append(testMark(code), starFor(code),
-              kind ? expander(kind, code, on) : slot());
+  rail.append(testMark(code));
+  if (opts.star !== false) rail.append(starFor(code));
+  rail.append(kind ? expander(kind, code, on) : slot());
   return rail;
 }
 
@@ -8215,11 +8218,17 @@ function buildCity(c, city, via) {
 
 /* -- the controls above the list --------------------------------------- */
 
+const SORTS = ['windscribe', 'name', 'load'];
+const SORT_WORD = { windscribe: 'Order', name: 'A–Z', load: 'Load', ping: 'Ping' };
+const SORT_SAID = {
+  windscribe: 'Windscribe’s order', name: 'A–Z', load: 'Least busy first',
+  ping: 'Quickest first',
+};
+
 function paintSort() {
-  for (const b of $('sortBy').querySelectorAll('.pair__opt')) {
-    b.setAttribute('aria-selected', String(b.dataset.sort === (state.sortBy || 'windscribe')));
-  }
-  slideSort();
+  const kind = state.sortBy || 'windscribe';
+  $('sortWord').textContent = SORT_WORD[kind] || 'Order';
+  $('sortBy').title = `In ${SORT_SAID[kind] || ''} - press for the next order`;
 }
 
 /* The lit backing, under whichever icon is chosen. Without this the pill
@@ -8230,13 +8239,7 @@ function paintSort() {
    Measured rather than told, because a dialog that has never been opened has
    no layout: offsetWidth is 0 until showModal(), so this is called again on
    the way in rather than only when the choice changes. */
-function slideSort() {
-  const chosen = $('sortBy').querySelector('[aria-selected="true"]');
-  const bar = $('sortBy').querySelector('.pair__slide');
-  if (!chosen || !bar || !chosen.offsetWidth) return;
-  bar.style.width = `${chosen.offsetWidth}px`;
-  bar.style.transform = `translateX(${chosen.offsetLeft - 2}px)`;
-}
+function slideSort() { paintSort(); }
 
 /* What the chosen sort has to work with, when the answer is nothing.
 
@@ -8262,10 +8265,9 @@ function sortHasNothing(kind) {
   return '';
 }
 
-$('sortBy').addEventListener('click', async (e) => {
-  const opt = e.target.closest('.pair__opt');
-  if (!opt) return;
-  state.sortBy = opt.dataset.sort;
+$('sortBy').addEventListener('click', async () => {
+  const at = SORTS.indexOf(state.sortBy || 'windscribe');
+  state.sortBy = SORTS[(at + 1) % SORTS.length];
   paintSort();
   $('list').dataset.key = '';
   drawList($('search').value.trim());
@@ -8625,15 +8627,47 @@ $('dropFolders').addEventListener('click', (e) => {
    lines doing one each.
    ======================================================================== */
 
+/* The pools as tabs: All, Pinned, Starred, each with how many places it
+   holds. Any other set (Verified, a site's own, a folder of your own) is
+   behind More, which stays lit while one of those is in use. */
+const TABS = [['all', 'All'], ['pinned', 'Pinned'], ['starred', 'Starred']];
+
 function paintSourceHead() {
   const s = state.sources || {};
-  const row = (s.rows || []).find((r) => r.key === s.source);
-  $('sourceName').textContent = row ? row.name : 'All locations';
-  // Lit when it is anything but everything. A filter that is on and does not
-  // look on is how somebody comes to wonder where three hundred locations
-  // went.
-  $('sourcePick').dataset.narrow = (s.source && s.source !== 'all') ? '1' : '0';
+  const rows = s.rows || [];
+  const here = s.source || 'all';
+  const box = $('pickTabs');
+  box.replaceChildren();
+  for (const [key, word] of TABS) {
+    const r = rows.find((x) => x.key === key);
+    if (!r && key !== 'all') continue;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'loc__tab';
+    b.dataset.source = key;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', String(here === key));
+    const n = document.createElement('span');
+    n.className = 'loc__n';
+    n.textContent = r ? String(r.count) : String((state.countries || []).length);
+    b.append(word, n);
+    if (r && r.note) b.title = r.note;
+    box.append(b);
+  }
+  const others = rows.filter((x) => !TABS.some(([k]) => k === x.key));
+  const more = $('sourcePick');
+  more.hidden = !others.length;
+  const other = others.find((x) => x.key === here);
+  $('sourceName').textContent = other ? other.name : '⋯';
+  more.setAttribute('aria-label', other ? `Showing ${other.name} - other sets of exits` : 'Other sets of exits');
+  more.dataset.narrow = other ? '1' : '0';
 }
+
+$('pickTabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.loc__tab');
+  if (!tab || tab.getAttribute('aria-selected') === 'true') return;
+  useSource(tab.dataset.source);
+});
 
 async function openSource() {
   const r = await window.pywebview.api.sources();
