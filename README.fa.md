@@ -20,7 +20,7 @@
 
 ### ۱. دانلود
 
-1. صفحهٔ [آخرین نسخهٔ منتشرشده](https://github.com/siinsiw/ovpn-pin/releases/latest) را باز کنید.
+1. صفحهٔ [آخرین نسخهٔ منتشرشده](https://github.com/siinsiw/mirage/releases/latest) را باز کنید.
 2. از بخش **Assets**، فایل `Mirage-windows-x64-….zip` را بگیرید. اگر می‌خواهید سالم‌بودن دانلود را بررسی کنید، فایل همنام با پسوند `.zip.sha256` را هم بگیرید. گزینهٔ **Source code** اپ آمادهٔ اجرا نیست.
 3. روی فایل ZIP راست‌کلیک کنید و **Extract All** را بزنید. پوشهٔ استخراج‌شده‌ای را که `Mirage.exe` داخل آن است باز کنید. فایل‌های داخل آن را جدا نکنید.
 
@@ -38,10 +38,10 @@ Get-Content .\Mirage-windows-x64-*.zip.sha256
 
 دو مقدار طولانی نمایش‌داده‌شده باید یکسان باشند. چون برنامه امضای دیجیتال ندارد، ممکن است Windows SmartScreen هشدار بدهد. پس از بررسی نسخه و هش، برای اجرا **More info → Run anyway** را بزنید.
 
-هش فقط نشان می‌دهد فایل خراب نشده؛ چون کنار خود فایل منتشر می‌شود، ثابت نمی‌کند فایل را چه کسی ساخته. برای اینکه مطمئن شوید یک ZIP واقعاً در GitHub Actions همین مخزن ساخته شده (حتی اگر در تلگرام برایتان فرستاده‌اند)، با [GitHub CLI](https://cli.github.com/) این دستور را بزنید (بعد از عمومی‌شدن مخزن کار می‌کند):
+هش فقط نشان می‌دهد فایل خراب نشده؛ چون کنار خود فایل منتشر می‌شود، ثابت نمی‌کند فایل را چه کسی ساخته. برای اینکه مطمئن شوید یک ZIP واقعاً در GitHub Actions همین مخزن ساخته شده (حتی اگر در تلگرام برایتان فرستاده‌اند)، با [GitHub CLI](https://cli.github.com/) این دستور را بزنید:
 
 ```powershell
-gh attestation verify .\Mirage-windows-x64-*.zip --repo siinsiw/ovpn-pin
+gh attestation verify .\Mirage-windows-x64-*.zip --repo siinsiw/mirage
 ```
 
 </details>
@@ -115,7 +115,7 @@ Remove-Item 'HKLM:\SOFTWARE\Relay\KillSwitch' -Recurse -ErrorAction SilentlyCont
 
 ## نصب در اندروید
 
-1. روی گوشی، [صفحهٔ نسخه‌ها](https://github.com/siinsiw/ovpn-pin/releases) را باز کنید و جدیدترین نسخه‌ای را پیدا کنید که نامش با `android-v` شروع می‌شود. از بخش **Assets**، فایل `mirage-android-v….apk` را دانلود کنید.
+1. روی گوشی، [صفحهٔ نسخه‌ها](https://github.com/siinsiw/mirage/releases) را باز کنید و جدیدترین نسخه‌ای را پیدا کنید که نامش با `android-v` شروع می‌شود. از بخش **Assets**، فایل `mirage-android-v….apk` را دانلود کنید.
 2. فایل دانلودشده را باز کنید. اندروید می‌پرسد اجازهٔ نصب برنامه از مرورگر یا مدیر فایل را می‌دهید یا نه؛ برای همین نصب اجازه بدهید.
 3. اپ را باز کنید، حساب Surfshark یا Windscribe را اضافه کنید و صبر کنید تا سرورها آماده شوند. بعد **Connect** را بزنید و درخواست VPN را تأیید کنید.
 
@@ -139,11 +139,11 @@ sudo apt install git curl openvpn iproute2 nano
 **با Git:**
 
 ```bash
-git clone https://github.com/siinsiw/ovpn-pin.git
-cd ovpn-pin
+git clone https://github.com/siinsiw/mirage.git
+cd mirage
 ```
 
-**بدون Git:** صفحهٔ [مخزن](https://github.com/siinsiw/ovpn-pin) را باز کنید، **Code → Download ZIP** را بزنید و فایل را استخراج کنید. در فایل‌منیجر وارد پوشهٔ `ovpn-pin-main` شوید، روی فضای خالی راست‌کلیک کنید و **Open in Terminal** را بزنید. باقی دستورها باید از همین پوشه اجرا شوند. این پوشه را بعد از نصب حذف نکنید؛ دستور نصب‌شده به فایل‌های همین‌جا اشاره می‌کند.
+**بدون Git:** صفحهٔ [مخزن](https://github.com/siinsiw/mirage) را باز کنید، **Code → Download ZIP** را بزنید و فایل را استخراج کنید. در فایل‌منیجر وارد پوشهٔ `mirage-main` شوید، روی فضای خالی راست‌کلیک کنید و **Open in Terminal** را بزنید. باقی دستورها باید از همین پوشه اجرا شوند. این پوشه را بعد از نصب حذف نکنید؛ دستور نصب‌شده به فایل‌های همین‌جا اشاره می‌کند.
 
 ### ۳. واردکردن اطلاعات حساب
 

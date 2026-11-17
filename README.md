@@ -20,7 +20,7 @@ You need an account with a supported VPN provider. The download does not include
 
 ### 1. Download the app
 
-1. Open the [latest GitHub release](https://github.com/siinsiw/ovpn-pin/releases/latest).
+1. Open the [latest GitHub release](https://github.com/siinsiw/mirage/releases/latest).
 2. Under **Assets**, download the file named `Mirage-windows-x64-….zip`. Download the matching `.zip.sha256` file if you want to check the download. Do not choose **Source code**: that is the repository, not the ready-to-run app.
 3. In File Explorer, right-click the ZIP and choose **Extract All**. Open the extracted folder that contains `Mirage.exe`. Keep its contents together.
 
@@ -38,10 +38,10 @@ Get-Content .\Mirage-windows-x64-*.zip.sha256
 
 The two long hashes should match. Windows may show a SmartScreen warning because the app is not code-signed; check the release and checksum before choosing **More info → Run anyway**.
 
-A checksum only shows the file was not damaged; it is published in the same place as the file. To check that a ZIP was really built by this repository's GitHub Actions, even when someone sent it to you on Telegram, use the [GitHub CLI](https://cli.github.com/) (this works once the repository is public):
+A checksum only shows the file was not damaged; it is published in the same place as the file. To check that a ZIP was really built by this repository's GitHub Actions, even when someone sent it to you on Telegram, use the [GitHub CLI](https://cli.github.com/):
 
 ```powershell
-gh attestation verify .\Mirage-windows-x64-*.zip --repo siinsiw/ovpn-pin
+gh attestation verify .\Mirage-windows-x64-*.zip --repo siinsiw/mirage
 ```
 
 </details>
@@ -115,7 +115,7 @@ For the Windows PowerShell tools, see [windows/README.md](windows/README.md). Fo
 
 ## Android
 
-1. On your phone, open the [releases page](https://github.com/siinsiw/ovpn-pin/releases) and find the newest release whose name starts with `android-v`. Under **Assets**, download `mirage-android-v….apk`.
+1. On your phone, open the [releases page](https://github.com/siinsiw/mirage/releases) and find the newest release whose name starts with `android-v`. Under **Assets**, download `mirage-android-v….apk`.
 2. Open the downloaded file. Android asks you to allow installing apps from your browser or file manager; allow it for this install.
 3. Open the app, add your Surfshark or Windscribe account, and wait while it gets your servers ready. Then tap **Connect** and allow the VPN request.
 
@@ -139,11 +139,11 @@ sudo apt install git curl openvpn iproute2 nano
 **With Git:**
 
 ```bash
-git clone https://github.com/siinsiw/ovpn-pin.git
-cd ovpn-pin
+git clone https://github.com/siinsiw/mirage.git
+cd mirage
 ```
 
-**Without Git:** open the [repository page](https://github.com/siinsiw/ovpn-pin), click **Code → Download ZIP**, and extract it. In your file manager, open the extracted `ovpn-pin-main` folder, right-click an empty area, and choose **Open in Terminal**. All remaining commands assume the terminal is in that folder. Keep the folder after setup: the installed command points back to it.
+**Without Git:** open the [repository page](https://github.com/siinsiw/mirage), click **Code → Download ZIP**, and extract it. In your file manager, open the extracted `mirage-main` folder, right-click an empty area, and choose **Open in Terminal**. All remaining commands assume the terminal is in that folder. Keep the folder after setup: the installed command points back to it.
 
 ### 3. Add your VPN credentials
 

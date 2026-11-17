@@ -32,13 +32,13 @@ object Updates {
      * release may well be one of those, a number this app has nothing to
      * compare with. Only android-v* tags are read ([newestAndroidTag]).
      */
-    const val RELEASES = "https://api.github.com/repos/siinsiw/ovpn-pin/releases?per_page=30"
+    const val RELEASES = "https://api.github.com/repos/siinsiw/mirage/releases?per_page=30"
 
     /** How this app's own release tags begin. */
     const val TAG_PREFIX = "android-v"
 
     /** Where a person goes to get it. */
-    const val PAGE = "https://github.com/siinsiw/ovpn-pin/releases"
+    const val PAGE = "https://github.com/siinsiw/mirage/releases"
 
     /** What one check found. */
     data class Found(val current: String, val latest: String, val newer: Boolean) {
