@@ -280,3 +280,7 @@ jobs:
           name: mirage-apk
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
+          # A week, then gone: every push keeps an APK set of ~250 MB, and
+          # a full store stops every build at this step. Releases keep
+          # their own copies, which this does not touch.
+          retention-days: 7

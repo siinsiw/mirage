@@ -210,6 +210,9 @@ jobs:
             Mirage-windows-x64-*.zip
             Mirage-windows-x64-*.zip.sha256
           if-no-files-found: error
+          # A week, then gone: a full artifact store stops every build at
+          # this step. Releases keep their own copies.
+          retention-days: 7
 
   # Says, in a form GitHub signs and anybody can check, that this ZIP was
   # built by this workflow from this commit:
