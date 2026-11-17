@@ -198,21 +198,41 @@ jobs:
             $label = "build-$env:GITHUB_RUN_NUMBER"
           }
           $name = "Mirage-windows-x64-$label.zip"
-          Compress-Archive -Path "$root/*" -DestinationPath $name -CompressionLevel Optimal
-          $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $name" | Set-Content -Encoding ascii "$name.sha256"
+          New-Item -ItemType Directory -Force release-out | Out-Null
+          Compress-Archive -Path "$root/*" -DestinationPath "release-out/$name" -CompressionLevel Optimal
+          $hash = (Get-FileHash "release-out/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Set-Content -Encoding ascii "release-out/$name.sha256"
 
-      - name: Upload release artifact
+      # A build that is not a release keeps its ZIP as an artifact, to try
+      # out. The artifact store has a monthly allowance; once it is used up,
+      # this step fails for the rest of the month, and that must not turn a
+      # passing build red.
+      - name: Upload build artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/desktop-v') }}
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mirage-windows-x64
           path: |
-            Mirage-windows-x64-*.zip
-            Mirage-windows-x64-*.zip.sha256
+            release-out/Mirage-windows-x64-*.zip
+            release-out/Mirage-windows-x64-*.zip.sha256
           if-no-files-found: error
-          # A week, then gone: a full artifact store stops every build at
-          # this step. Releases keep their own copies.
+          # A week, then gone. Releases keep their own copies.
           retention-days: 7
+
+      # A release hands its ZIP to the two jobs below through the Actions
+      # cache instead: the cache has an allowance of its own (10 GB a
+      # repository), so a full artifact store cannot hold a release up. The
+      # key is this run's id, only this step writes it, and a tag's cache is
+      # seen only by runs of that tag. The two jobs on Linux read what this
+      # job wrote on Windows, hence enableCrossOsArchive on both sides.
+      - name: Keep the release for the publish job
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: release-out
+          key: mirage-windows-x64-${{ github.run_id }}
+          enableCrossOsArchive: true
 
   # Says, in a form GitHub signs and anybody can check, that this ZIP was
   # built by this workflow from this commit:
@@ -229,14 +249,16 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: mirage-windows-x64
-          path: dist
+          path: release-out
+          key: mirage-windows-x64-${{ github.run_id }}
+          enableCrossOsArchive: true
+          fail-on-cache-miss: true
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/Mirage-windows-x64-*.zip
+          subject-path: release-out/Mirage-windows-x64-*.zip
 
   # The only job that can write to the repository. It runs on tags, after the
   # build passed, and runs nothing from the tree: it picks up the two files
@@ -251,10 +273,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: mirage-windows-x64
-          path: dist
+          path: release-out
+          key: mirage-windows-x64-${{ github.run_id }}
+          enableCrossOsArchive: true
+          fail-on-cache-miss: true
 
       - name: Publish GitHub Release
         env:
@@ -270,11 +294,11 @@ jobs:
             so Windows may show a SmartScreen warning. Verify the accompanying SHA-256 file before
             running it.
         run: |
-          zip="dist/Mirage-windows-x64-${GITHUB_REF_NAME}.zip"
+          zip="release-out/Mirage-windows-x64-${GITHUB_REF_NAME}.zip"
           test -f "$zip" && test -f "$zip.sha256"
-          # The artifact that arrived is the one the build hashed. The file was
+          # The ZIP that arrived is the one the build hashed. The file was
           # written on Windows, so its line ends in a carriage return.
-          ( cd dist && tr -d '\r' < "$(basename "$zip").sha256" | sha256sum -c - )
+          ( cd release-out && tr -d '\r' < "$(basename "$zip").sha256" | sha256sum -c - )
           gh release create "$GITHUB_REF_NAME" "$zip" "$zip.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
