@@ -2587,7 +2587,7 @@ class Api:
         trusted to name what this machine opens."""
         import updates
         url = str(url or '')
-        if not url.startswith('https://github.com/siinsiw/ovpn-pin/'):
+        if not url.startswith(updates.REPO + '/'):
             url = updates.PAGE
         try:
             os.startfile(url)

@@ -17,8 +17,9 @@ import json
 import re
 import urllib.request
 
-RELEASES = 'https://api.github.com/repos/siinsiw/ovpn-pin/releases?per_page=30'
-PAGE = 'https://github.com/siinsiw/ovpn-pin/releases'
+REPO = 'https://github.com/siinsiw/mirage'
+RELEASES = 'https://api.github.com/repos/siinsiw/mirage/releases?per_page=30'
+PAGE = REPO + '/releases'
 UA = 'Mirage-update-check'
 TIMEOUT = 15
 

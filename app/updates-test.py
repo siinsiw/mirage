@@ -27,7 +27,7 @@ LIST = [
     {'tag_name': 'desktop-v1.10.0', 'draft': True},
     {'tag_name': 'desktop-v1.9.2', 'prerelease': True},
     {'tag_name': 'desktop-v1.4.0',
-     'html_url': 'https://github.com/siinsiw/ovpn-pin/releases/tag/desktop-v1.4.0'},
+     'html_url': 'https://github.com/siinsiw/mirage/releases/tag/desktop-v1.4.0'},
     {'tag_name': 'desktop-v1.3.12', 'html_url': 'https://evil.example/x'},
 ]
 
