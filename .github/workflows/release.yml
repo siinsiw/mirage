@@ -86,14 +86,17 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      # The build left the APKs in the cache under this run's id
+      # (android.yml, "keep the release for the publish job").
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: mirage-apk
-          path: apk
+          path: release-out
+          key: mirage-apk-${{ github.run_id }}
+          fail-on-cache-miss: true
 
       - name: name them after the tag
         run: |
-          for f in apk/*.apk; do
+          for f in release-out/*.apk; do
             abi=$(basename "$f" .apk | sed -e 's/^app-//' -e 's/-release$//')
             mv "$f" "mirage-${GITHUB_REF_NAME}-${abi}.apk"
           done
@@ -114,12 +117,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      # A called workflow's artifacts belong to this run, so they are here to
-      # be picked up rather than fetched across runs.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      # A called workflow shares this run's id, so the APKs it left in the
+      # cache are picked up here rather than fetched across runs.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: mirage-apk
-          path: apk
+          path: release-out
+          key: mirage-apk-${{ github.run_id }}
+          fail-on-cache-miss: true
 
       # Named for the tag and the architecture. Four downloads deep in a
       # phone's folder, three files called app-debug.apk are three files
@@ -127,7 +131,7 @@ jobs:
       # universal one runs everywhere and is the largest.
       - name: name them after the tag
         run: |
-          for f in apk/*.apk; do
+          for f in release-out/*.apk; do
             abi=$(basename "$f" .apk | sed -e 's/^app-//' -e 's/-release$//')
             mv "$f" "mirage-${GITHUB_REF_NAME}-${abi}.apk"
           done

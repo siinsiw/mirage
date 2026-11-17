@@ -257,7 +257,7 @@ jobs:
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
 
       # The key has done its job; it does not need to sit on the runner
-      # while the artifact is uploaded.
+      # while the APKs are handed on.
       - name: remove the signing key
         if: always() && inputs.release
         run: rm -f "$RUNNER_TEMP/mirage-release.p12"
@@ -275,12 +275,37 @@ jobs:
           fi
           ls -l android/app/build/outputs/apk/*/*.apk
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      # A build that is not a release keeps its APKs as an artifact, to try
+      # out. The artifact store has a monthly allowance; once it is used up,
+      # this step fails for the rest of the month, and that must not turn a
+      # passing build red.
+      - name: keep it to try out
+        if: ${{ !startsWith(github.ref, 'refs/tags/android-v') }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mirage-apk
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
-          # A week, then gone: every push keeps an APK set of ~250 MB, and
-          # a full store stops every build at this step. Releases keep
-          # their own copies, which this does not touch.
+          # A week, then gone: every push keeps an APK set of ~250 MB.
+          # Releases keep their own copies, which this does not touch.
           retention-days: 7
+
+      # A release (release.yml, on an android-v* tag) hands its APKs to the
+      # attest and publish jobs through the Actions cache instead: the cache
+      # has an allowance of its own (10 GB a repository), so a full artifact
+      # store cannot hold a release up. A called workflow shares its
+      # caller's run id, so the key names this release run; only this step
+      # writes it, and a tag's cache is seen only by runs of that tag.
+      - name: gather the release
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        run: |
+          mkdir -p release-out
+          cp ${{ steps.apk.outputs.path }} release-out/
+          ls -l release-out
+      - name: keep the release for the publish job
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: release-out
+          key: mirage-apk-${{ github.run_id }}
