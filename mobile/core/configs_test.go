@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -237,9 +238,13 @@ func TestConfigsProbe(t *testing.T) {
 	text := fmt.Sprintf("vless://%s@127.0.0.1:%d?security=none#ok\nvless://%s@127.0.0.1:9?security=none#dead\n"+
 		"vless://%s@x.example.com:443?security=tls&type=xhttp#xh", testUUID, port, testUUID, testUUID)
 	set, _, _ := ParseLinks(text, 10)
+	// progress is called from the probing goroutines, several at once.
+	var seenMu sync.Mutex
 	var seen []ProbeResult
 	results, err := ProbeConfigs(set, false, 4, 5*time.Second, nil, func(d, total int, r ProbeResult) {
+		seenMu.Lock()
 		seen = append(seen, r)
+		seenMu.Unlock()
 	})
 	if err != nil || len(results) != 3 || len(seen) != 3 {
 		t.Fatalf("%v %v", results, err)
