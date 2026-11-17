@@ -1,0 +1,68 @@
+/* ===================================================================
+   The home's foot, minimal: no box over the globe. The place is one
+   line (a small flag, the name, a chevron that opens Locations), and
+   under it two quiet lines: the address before and after, and the speed
+   with what has moved since connecting. Loaded after midnight.css.
+   =================================================================== */
+
+.hero__foot { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+
+.hero__foot .where {
+  width: auto;
+  min-height: 0;
+  max-width: 100%;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  backdrop-filter: none;
+  box-shadow: none;
+  justify-content: center;
+}
+.hero__foot .where:hover:not(:disabled) { background: rgb(var(--wash) / 0.06); }
+
+/* the flag: a small rectangle beside the name, not a bead */
+.hero__foot .where__flag {
+  width: 20px;
+  height: 14px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgb(var(--wash) / 0.14);
+}
+.hero__foot .where__flag::after { display: none; }
+.hero__foot .where__globe { width: 14px; height: 14px; }
+
+.hero__foot .where__text { flex: 0 1 auto; }
+.hero__foot .where__label { font-size: 16px; line-height: 22px; font-weight: 600; }
+/* its address moved to the line below */
+.hero__foot .where__sub { display: none; }
+.hero__foot .where__chev { width: 15px; height: 15px; color: var(--text-3); }
+
+.homeline {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  max-width: 100%;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.homeline[hidden] { display: none; }
+.homeline:empty { display: none; }
+.homeline__now { color: var(--text); }
+.homeline__was { color: var(--text-3); }
+.homeline__to {
+  width: 12px; height: 12px; flex: none;
+  fill: none; stroke: #e0303f; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+.homeline b { font-weight: 500; color: var(--text); }
+.homeline--flux { font-size: 12px; }
+.homeline__rule { width: 1px; height: 10px; background: rgb(var(--wash) / 0.16); }
+
+/* Read over the globe's glow: a soft dark halo under the text, not a box. */
+.hero__foot .where__label, .homeline { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 12px rgba(0, 0, 0, 0.75); }
