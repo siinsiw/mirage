@@ -1647,13 +1647,37 @@ function setFlow(v) {
 
 const slowMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
+/* The speed line under the place: down and up now, then what has moved
+   since connecting, as one figure. Hidden while nothing is up. */
+function paintHomeFlux(t) {
+  const box = $('homeFlux');
+  if (!box) return;
+  if (!t) { box.hidden = true; return; }
+  const part = (arrow, n, unit) => {
+    const s = document.createElement('span');
+    const b = document.createElement('b');
+    const [v, u] = splitBytes(n);
+    b.textContent = v;
+    s.append(`${arrow} `, b, ` ${u}${unit}`);
+    return s;
+  };
+  const rule = document.createElement('i');
+  rule.className = 'homeline__rule';
+  const used = part('', (t.up || 0) + (t.down || 0), '');
+  used.append(' used');
+  box.replaceChildren(part('↓', t.downRate, '/s'), part('↑', t.upRate, '/s'), rule, used);
+  box.hidden = false;
+}
+
 window.onTraffic = (t) => {
   if (!t || !t.live || state.mode !== 'on') {
     flux.stop();
+    paintHomeFlux(null);
     $('logOpen').dataset.live = 'false';
     return;
   }
   flux.take(t);
+  paintHomeFlux(t);
   // The dot on the header icon, so the log announces itself as somewhere
   // worth looking without anything being opened to find that out.
   $('logOpen').dataset.live =
@@ -1976,14 +2000,16 @@ const WAY_NEEDS_TUNNEL = 'Set the domain and passwords under Settings → '
   + 'Your own tunnel first.';
 
 /* Which ways out can work right now. A provider needs an account and its
-   servers, your server needs the tunnel set up, and server + exit needs
-   both - so in practice the strip is either all three or nothing to choose. */
+   servers, and server + exit needs that and the tunnel set up - so the
+   strip is either both or nothing to choose. */
 function waysOpen() {
   const provider = !!state.hasCredentials && (state.serverCount || 0) > 0;
   const tunnel = !!state.tunnelReady
     || !!(state.tunnel && state.tunnel.domain && state.tunnel.hasPassword);
-  return ['surfshark', 'single', 'multi'].filter((w) =>
-    w === 'surfshark' ? provider : w === 'single' ? tunnel : tunnel && provider);
+  // "Your server" (single) is no longer offered on the home: it comes out
+  // at the server itself, in Iran, which is the line you already have.
+  return ['surfshark', 'multi'].filter((w) =>
+    w === 'surfshark' ? provider : tunnel && provider);
 }
 
 function paintWay() {
@@ -2000,7 +2026,8 @@ function paintWay() {
     // One way left is nothing to choose, so the menu is not drawn at all.
     $('wayWrap').querySelector('.way__row').hidden = open.length < 2;
     if (open.length && !open.includes(way)) {
-      chooseWay(open[0]);
+      // A saved "Your server" moves to its nearest kin, server + exit.
+      chooseWay(way === 'single' && open.includes('multi') ? 'multi' : open[0]);
       return;
     }
   }

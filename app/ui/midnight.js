@@ -163,6 +163,38 @@
     else line = has(text('realIp')) ? `Your address ${text('realIp')}` : 'Checking your address…';
     $('pickSub').textContent = line;
     $('pick').dataset.flag = $('pickFlag').style.backgroundImage ? '1' : '0';
+    paintIps(c);
+  }
+
+  /* The address line under the place: connected, the one you had and the one
+     sites see now; otherwise the one you have. Built as text, never HTML. */
+  function paintIps(c) {
+    const box = $('homeIps');
+    if (!box) return;
+    const real = has(text('realIp')) ? text('realIp') : '';
+    const span = (cls, value) => {
+      const s = document.createElement('span');
+      s.className = cls;
+      s.textContent = value;
+      return s;
+    };
+    if (c === 'on') {
+      const now = has(text('exitIp')) ? text('exitIp') : 'checking…';
+      const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      arrow.setAttribute('class', 'homeline__to');
+      arrow.setAttribute('viewBox', '0 0 24 24');
+      arrow.setAttribute('role', 'img');
+      arrow.setAttribute('aria-label', 'now');
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p.setAttribute('d', 'M5 12h14M13 6l6 6-6 6');
+      arrow.append(p);
+      box.replaceChildren(span('homeline__was', real || '—'), arrow, span('homeline__now', now));
+    } else {
+      const place = text('realPlace');
+      const bits = [span('', 'Your IP '), span('homeline__now', real || 'checking…')];
+      if (real && place && place !== 'could not check') bits.push(span('', ` · ${place}`));
+      box.replaceChildren(...bits);
+    }
   }
 
   /* ------------------------------------------------------------- wiring */
@@ -184,7 +216,7 @@
   const watch = new MutationObserver(paint);
   watch.observe(root, { attributes: true, attributeFilter: ['data-conn', 'data-theme'] });
   watch.observe(act, { attributes: true, attributeFilter: ['disabled'] });
-  for (const id of ['statusClock', 'exitIp', 'realIp', 'pickLabel', 'statusWhere', 'fluxUpRate', 'fluxDownRate']) {
+  for (const id of ['statusClock', 'exitIp', 'realIp', 'realPlace', 'pickLabel', 'statusWhere', 'fluxUpRate', 'fluxDownRate']) {
     const el = $(id);
     if (el) watch.observe(el, { childList: true, characterData: true, subtree: true });
   }

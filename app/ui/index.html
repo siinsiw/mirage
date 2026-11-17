@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="app.css">
 <link rel="stylesheet" href="midnight.css">
 <link rel="stylesheet" href="locations.css">
+<link rel="stylesheet" href="home.css">
 <link rel="stylesheet" href="intro.css">
 <link rel="stylesheet" href="configs.css">
 <script>
@@ -302,6 +303,11 @@
         </span>
         <svg class="ico where__chev" aria-hidden="true"><use href="#i-chev-right"/></svg>
       </button>
+      <!-- Under the place, two quiet lines and no box, so the globe stays in
+           view: the address before and after (or yours, while nothing is up),
+           and the speed with what has moved since connecting. -->
+      <p class="homeline mono" id="homeIps"></p>
+      <p class="homeline homeline--flux mono" id="homeFlux" hidden></p>
       <div class="details" id="details" hidden>
         <dl class="details__grid">
           <dt>In</dt><dd class="mono" id="detIn">—</dd>
@@ -345,12 +351,6 @@
                   aria-selected="true" tabindex="-1">
                 <span class="dd__name">Provider</span>
                 <span class="dd__hint">Straight to the provider’s exit</span>
-                <svg class="ico dd__check" aria-hidden="true"><use href="#i-check"/></svg>
-              </li>
-              <li class="dd__opt" role="option" data-way="single"
-                  aria-selected="false" tabindex="-1">
-                <span class="dd__name">Your server</span>
-                <span class="dd__hint">Comes out at your own server</span>
                 <svg class="ico dd__check" aria-hidden="true"><use href="#i-check"/></svg>
               </li>
               <li class="dd__opt" role="option" data-way="multi"
